@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.data/
+data/
+.env
+*.js.map
+*.d.ts.map
+*.zip

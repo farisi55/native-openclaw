@@ -1,0 +1,67 @@
+version: "3.9"
+
+# ─── native-openclaw docker-compose ───────────────────────────────────────────
+#
+# Usage:
+#   cp .env.example .env        # fill in your API keys
+#   docker compose up --build   # build and launch
+#   docker compose run openclaw # one-shot interactive session
+#
+# Volumes:
+#   ./data    → /data    (session JSON, settings)
+#   ./skills  → /skills  (.md skill files)
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Main CLI ─────────────────────────────────────────────────────────────────
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: native-openclaw:latest
+    container_name: openclaw
+
+    # Interactive TTY — required for the readline REPL
+    stdin_open: true
+    tty: true
+
+    # Persistent storage and user-supplied skills
+    volumes:
+      - ./data:/data
+      - ./skills:/skills
+
+    # Load all env vars from .env file
+    env_file:
+      - .env
+
+    # Override specific env vars here (takes precedence over .env)
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: info
+      APP_DATA_DIR: /data
+      SKILLS_DIR: /skills
+      STORAGE_BACKEND: file
+
+    # Restart on non-zero exit (e.g. config errors), but not on Ctrl-C (exit 0)
+    restart: on-failure:3
+
+  # ── Ollama sidecar (optional local model server) ───────────────────────────
+  #
+  # Uncomment to run Ollama alongside openclaw.
+  # Pull a model first:
+  #   docker compose exec ollama ollama pull llama3.3
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: openclaw-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   restart: unless-stopped
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+# volumes:
+#   ollama-data:

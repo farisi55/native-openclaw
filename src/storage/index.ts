@@ -1,0 +1,10 @@
+/**
+ * storage/index.ts
+ * Barrel — re-exports the storage layer.
+ */
+
+export { JsonStore, KVStore } from './json-store';
+export type { StoreRecord, JsonStoreOptions, KVStoreOptions } from './json-store';
+
+export { SessionManager } from './session-manager';
+export type { Session, CreateSessionOptions, AppendMessageOptions } from './session-manager';

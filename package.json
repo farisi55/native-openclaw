@@ -1,0 +1,45 @@
+{
+  "name": "native-openclaw",
+  "version": "1.0.0",
+  "description": "Multi-provider AI agent CLI — native TypeScript, zero framework lock-in.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "npx ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "npx eslint \"src/**/*.ts\"",
+    "lint:fix": "npx eslint \"src/**/*.ts\" --fix",
+    "type-check": "npx tsc --noEmit",
+    "clean": "npx rimraf dist",
+    "package": "bash package.sh"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "openai",
+    "anthropic",
+    "multi-provider",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "eslint": "^8.57.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "rimraf": "^5.0.5"
+  },
+  "bin": {
+    "openclaw": "./dist/index.js"
+  }
+}
