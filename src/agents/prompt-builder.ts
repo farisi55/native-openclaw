@@ -1,47 +1,21 @@
 /**
  * agents/prompt-builder.ts
- * Assemble the final system prompt from a base string plus
- * any active skill blocks.
- *
- * Rendered format:
- * ─────────────────────────────────────────────────
- * <base system prompt>
- *
- * ## Active Skills
- *
- * ### <Skill Name>
- * _<description>_
- *
- * <skill markdown body>
- *
- * ---
- * ### <Next Skill>
- * …
- * ─────────────────────────────────────────────────
+ * Assemble the final system prompt from:
+ *   1. SYSTEM CONTEXT block (provider, model, skills awareness)
+ *   2. Base system prompt
+ *   3. Active skill blocks
  */
 
 import type { Skill } from '../skills/loader';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { getSystemContext, type SystemContextInput } from './system-context';
 
 export interface PromptBuilderOptions {
-  /** Base system prompt (from config or caller override). */
   basePrompt: string;
-
-  /**
-   * Skills to inject. Pass an empty array to skip injection.
-   * Skills should already be sorted by priority.
-   */
   skills: Skill[];
-
-  /**
-   * Max character length per skill body before truncation.
-   * 0 = no limit.  Default: 4000.
-   */
   maxSkillBodyLength?: number;
+  /** When provided, prepends a SYSTEM CONTEXT block so the AI knows its state. */
+  systemContext?: SystemContextInput;
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function truncate(text: string, maxLen: number): string {
   if (maxLen <= 0 || text.length <= maxLen) return text;
@@ -61,34 +35,48 @@ function renderSkillBlock(skill: Skill, maxBodyLen: number): string {
   return lines.join('\n');
 }
 
-// ─── PromptBuilder ────────────────────────────────────────────────────────────
-
 export class PromptBuilder {
-  private readonly opts: Required<PromptBuilderOptions>;
+  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext'>> & {
+    systemContext?: SystemContextInput;
+  };
 
   constructor(opts: PromptBuilderOptions) {
     this.opts = { maxSkillBodyLength: 4000, ...opts };
   }
 
   build(): string {
-    const { basePrompt, skills, maxSkillBodyLength } = this.opts;
-    if (skills.length === 0) return basePrompt.trim();
+    const { basePrompt, skills, maxSkillBodyLength, systemContext } = this.opts;
 
-    const blocks = skills.map((s) => renderSkillBlock(s, maxSkillBodyLength));
-    const skillSection = ['## Active Skills', '', blocks.join('\n\n---\n\n')].join('\n');
-    return [basePrompt.trim(), '', skillSection].join('\n');
+    const parts: string[] = [];
+
+    // 1. System context block (AI self-awareness)
+    if (systemContext) {
+      parts.push(getSystemContext(systemContext));
+    }
+
+    // 2. Base prompt
+    parts.push(basePrompt.trim());
+
+    // 3. Active skill blocks
+    if (skills.length > 0) {
+      const blocks = skills.map((s) => renderSkillBlock(s, maxSkillBodyLength));
+      const skillSection = ['## Active Skills', '', blocks.join('\n\n---\n\n')].join('\n');
+      parts.push(skillSection);
+    }
+
+    return parts.join('\n\n');
   }
 
-  summary(): { baseLength: number; skillCount: number; skillIds: string[] } {
+  summary(): { baseLength: number; skillCount: number; skillIds: string[]; hasContext: boolean } {
     return {
       baseLength: this.opts.basePrompt.length,
       skillCount: this.opts.skills.length,
       skillIds: this.opts.skills.map((s) => s.id),
+      hasContext: Boolean(this.opts.systemContext),
     };
   }
 }
 
-/** Functional convenience wrapper. */
 export function buildSystemPrompt(opts: PromptBuilderOptions): string {
   return new PromptBuilder(opts).build();
 }

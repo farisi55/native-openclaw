@@ -11,3 +11,9 @@ export type { AssembleOptions, AssembledMessages } from './message-assembler';
 
 export { Orchestrator } from './orchestrator';
 export type { OrchestratorOptions, TurnInput, TurnResult } from './orchestrator';
+
+export { getSystemContext } from './system-context';
+export type { SystemContextInput } from './system-context';
+
+export { handleAction } from './action-handler';
+export type { ActionContext, ActionResult } from './action-handler';

@@ -1,18 +1,10 @@
 /**
  * agents/orchestrator.ts
- * Main agent loop — one call per user turn.
+ * Main agent loop.
  *
- *   user input
- *     → session loaded (or created)
- *     → active skills resolved
- *     → system prompt built
- *     → messages assembled (sliding window)
- *     → provider.chat() called
- *     → assistant message persisted
- *     → TurnResult returned to caller
- *
- * The orchestrator is stateless between calls; all state lives in
- * SessionManager (disk) and SkillRegistry (memory).
+ * Flow per turn:
+ *   input → action-handler → if action: return immediately
+ *                           → else: build prompt → call LLM → persist → return
  */
 
 import type { IProvider, ChatResponse } from '../types/provider';
@@ -22,54 +14,40 @@ import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
+import { handleAction, type ActionContext } from './action-handler';
+import type { SystemContextInput } from './system-context';
 import { createLogger } from '../utils/logger';
+import { getOptionalEnv } from '../config/env';
 
 const logger = createLogger('agent:orchestrator');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface OrchestratorOptions {
-  /** Base system prompt (defaults to a generic helpful assistant). */
   baseSystemPrompt?: string;
-  /** Max conversation turns before refusing. Default: 20. */
   maxTurns?: number;
-  /** Max messages in the sliding window. Default: 40. */
   maxMessages?: number;
-  /** Default temperature. Default: 0.7. */
   temperature?: number;
-  /** Default maxTokens. Default: 4096. */
   maxTokens?: number;
 }
 
 export interface TurnInput {
-  /** The user's message text. */
   userInput: string;
-  /** Provider to use for this turn. */
   provider: IProvider;
-  /** Model identifier (e.g. "llama-3.3-70b-versatile"). */
   model: string;
-  /**
-   * Session ID. Omit to create a new session automatically.
-   * Pass the returned session.id on subsequent turns.
-   */
   sessionId?: string;
-  /**
-   * Skill IDs to activate for this turn.
-   * Overrides the registry's current active set.
-   * Omit to use the registry's current active set unchanged.
-   */
   skillIds?: string[];
-  /** AbortSignal for cancellation. */
   signal?: AbortSignal;
 }
 
 export interface TurnResult {
-  chatResponse: ChatResponse;
-  /** Plain text of the assistant's reply. */
+  chatResponse?: ChatResponse;
+  /** Plain text reply — set for both LLM and action results. */
   assistantText: string;
-  /** Session state after this turn is persisted. */
   session: Session;
   newSession: boolean;
+  /** true when the turn was handled by the action-handler (no LLM call). */
+  wasAction: boolean;
 }
 
 // ─── Orchestrator ─────────────────────────────────────────────────────────────
@@ -78,6 +56,9 @@ export class Orchestrator {
   private readonly sessions: SessionManager;
   private readonly skills: SkillRegistry;
   private readonly opts: Required<OrchestratorOptions>;
+
+  /** Mutable active-session ref shared with the action-handler. */
+  private _activeSessionId: string | null = null;
 
   constructor(
     sessions: SessionManager,
@@ -88,17 +69,17 @@ export class Orchestrator {
     this.skills = skills;
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
-      maxTurns: opts.maxTurns ?? 20,
-      maxMessages: opts.maxMessages ?? 40,
-      temperature: opts.temperature ?? 0.7,
-      maxTokens: opts.maxTokens ?? 4096,
+      maxTurns:         opts.maxTurns ?? 20,
+      maxMessages:      opts.maxMessages ?? 40,
+      temperature:      opts.temperature ?? 0.7,
+      maxTokens:        opts.maxTokens ?? 4096,
     };
   }
 
   // ── Single turn ────────────────────────────────────────────────────────────
 
   async turn(input: TurnInput): Promise<TurnResult> {
-    // 1. Resolve or create session.
+    // ── 1. Resolve or create session ─────────────────────────────────────────
     let session: Session;
     let newSession = false;
 
@@ -125,31 +106,71 @@ export class Orchestrator {
       newSession = true;
     }
 
-    // 2. Resolve active skills.
+    this._activeSessionId = session.id;
+
+    // ── 2. Resolve active skills ──────────────────────────────────────────────
     if (input.skillIds !== undefined) {
       this.skills.setActive(input.skillIds);
     }
+
+    // ── 3. Action-handler (intercept before LLM) ──────────────────────────────
+    const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
+    const actionCtx: ActionContext = {
+      skillRegistry:    this.skills,
+      sessions:         this.sessions,
+      skillsDir,
+      activeSessionId:  this._activeSessionId,
+      onSessionCleared: () => { this._activeSessionId = null; },
+    };
+
+    const actionResult = await handleAction(input.userInput, actionCtx);
+
+    if (actionResult.handled) {
+      // Persist the user message + action response as an assistant message
+      const userMsg = createMessage({ role: 'user',      content: input.userInput });
+      const asstMsg = createMessage({ role: 'assistant', content: actionResult.response ?? '' });
+
+      const a1 = await this.sessions.appendMessage({ sessionId: session.id, message: userMsg });
+      if (!a1.ok) throw a1.error;
+      const a2 = await this.sessions.appendMessage({ sessionId: a1.value.id, message: asstMsg });
+      if (!a2.ok) throw a2.error;
+      session = a2.value;
+
+      // If session was cleared by the action (delete self), reset id
+      if (!this._activeSessionId) {
+        newSession = true;
+      } else {
+        this._activeSessionId = session.id;
+      }
+
+      logger.info('action handled', { action: input.userInput.slice(0, 40) });
+
+      return {
+        assistantText: actionResult.response ?? '',
+        session,
+        newSession,
+        wasAction: true,
+      };
+    }
+
+    // ── 4. Build system prompt with context ───────────────────────────────────
     const activeSkills = this.skills.activeSkills();
 
-    logger.debug('turn started', {
-      sessionId: session.id,
-      provider: input.provider.id,
-      model: input.model,
-      activeSkills: activeSkills.map((s) => s.id),
-    });
+    const sysCtx: SystemContextInput = {
+      provider:      input.provider,
+      model:         input.model,
+      skillRegistry: this.skills,
+      sessionId:     session.id,
+    };
 
-    // 3. Build system prompt.
     const systemPrompt = buildSystemPrompt({
-      basePrompt: this.opts.baseSystemPrompt,
-      skills: activeSkills,
+      basePrompt:    this.opts.baseSystemPrompt,
+      skills:        activeSkills,
+      systemContext: sysCtx,
     });
 
-    // 4. Persist the user message.
-    const userMessage: Message = createMessage({
-      role: 'user',
-      content: input.userInput,
-    });
-
+    // ── 5. Persist user message ───────────────────────────────────────────────
+    const userMessage: Message = createMessage({ role: 'user', content: input.userInput });
     const appendUser = await this.sessions.appendMessage({
       sessionId: session.id,
       message: userMessage,
@@ -157,15 +178,14 @@ export class Orchestrator {
     if (!appendUser.ok) throw appendUser.error;
     session = appendUser.value;
 
-    // 5. Assemble messages for the provider.
+    // ── 6. Assemble sliding window ────────────────────────────────────────────
     const { messages: assembled, dropped } = assembleMessages({
       messages: session.messages,
       maxMessages: this.opts.maxMessages,
     });
-
     if (dropped > 0) logger.debug('messages dropped for context window', { dropped });
 
-    // 6. Call the provider.
+    // ── 7. Call LLM ───────────────────────────────────────────────────────────
     logger.debug('calling provider', {
       provider: input.provider.id,
       model: input.model,
@@ -184,16 +204,16 @@ export class Orchestrator {
     logger.debug('provider responded', {
       model: chatResponse.model,
       latencyMs: chatResponse.latencyMs,
-      usage: chatResponse.usage,
     });
 
-    // 7. Persist the assistant message.
+    // ── 8. Persist assistant message ──────────────────────────────────────────
     const appendAssistant = await this.sessions.appendMessage({
       sessionId: session.id,
       message: chatResponse.message,
     });
     if (!appendAssistant.ok) throw appendAssistant.error;
     session = appendAssistant.value;
+    this._activeSessionId = session.id;
 
     const assistantText = extractText(chatResponse.message.content);
 
@@ -203,15 +223,9 @@ export class Orchestrator {
       messages: session.messages.length,
     });
 
-    return { chatResponse, assistantText, session, newSession };
+    return { chatResponse, assistantText, session, newSession, wasAction: false };
   }
 
-  // ── Multi-turn helper ──────────────────────────────────────────────────────
-
-  /**
-   * Run multiple turns sequentially in the same session.
-   * The sessionId is threaded automatically after the first turn.
-   */
   async runSequence(
     inputs: TurnInput[],
     baseOpts: Partial<Omit<TurnInput, 'userInput'>> = {}

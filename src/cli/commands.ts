@@ -6,8 +6,7 @@
 import type { IProvider, ProviderRegistry } from '../types/provider';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
-
-// ─── ANSI helpers ─────────────────────────────────────────────────────────────
+import type { SettingsManager } from '../storage/settings-manager';
 
 const C = {
   reset:   '\x1b[0m',
@@ -36,6 +35,7 @@ export interface CLIContext {
   providers: ProviderRegistry;
   skillRegistry: SkillRegistry;
   sessions: SessionManager;
+  settings: SettingsManager;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -52,28 +52,33 @@ export function cmdHelp(): void {
     c('bold', c('cyan', '  native-openclaw — Command Reference')),
     c('dim', `  ${hr()}`),
     '',
-    `  ${c('yellow', '/help')}                    Show this help message`,
-    `  ${c('yellow', '/models')}                  List available models for all providers`,
-    `  ${c('yellow', '/models <provider>')}       List models for a specific provider`,
-    `  ${c('yellow', '/model <model-id>')}        Switch to a specific model (same provider)`,
-    `  ${c('yellow', '/skills')}                  List registered skills and their status`,
-    `  ${c('yellow', '/skills on <id>')}          Activate a skill by id`,
-    `  ${c('yellow', '/skills off <id>')}         Deactivate a skill by id`,
-    `  ${c('yellow', '/session')}                 Show current session info`,
-    `  ${c('yellow', '/session new')}             Start a new session (clears history)`,
-    `  ${c('yellow', '/session list')}            List all saved sessions`,
-    `  ${c('yellow', '/session <id>')}            Resume a session by id`,
-    `  ${c('yellow', '/provider')}                Show current provider and model`,
-    `  ${c('yellow', '/provider <id>')}           Switch to a different provider`,
-    `  ${c('yellow', '/exit')}                    Quit the application`,
+    `  ${c('yellow', '/help')}                         Show this help message`,
+    `  ${c('yellow', '/models')}                       List models for all providers`,
+    `  ${c('yellow', '/models <provider>')}            List models for one provider`,
+    `  ${c('yellow', '/model')}                        Show current model`,
+    `  ${c('yellow', '/model <model-id>')}             Switch to a different model`,
+    `  ${c('yellow', '/provider')}                     Show current provider`,
+    `  ${c('yellow', '/provider <id>')}                Switch to a different provider`,
+    `  ${c('yellow', '/skills')}                       List registered skills`,
+    `  ${c('yellow', '/skills on <id>')}               Activate a skill`,
+    `  ${c('yellow', '/skills off <id>')}              Deactivate a skill`,
+    `  ${c('yellow', '/session')}                      Show current session info`,
+    `  ${c('yellow', '/session new')}                  Start a new session`,
+    `  ${c('yellow', '/session list')}                 List all saved sessions`,
+    `  ${c('yellow', '/session <id>')}                 Resume a session by id`,
+    `  ${c('yellow', '/session delete <id>')}          Delete a session by id`,
+    `  ${c('yellow', '/settings')}                     Show persistent settings`,
+    `  ${c('yellow', '/settings default-model <id>')}  Set default model`,
+    `  ${c('yellow', '/settings default-provider <id>')} Set default provider`,
+    `  ${c('yellow', '/exit')}                         Quit the application`,
     '',
     c('dim', `  ${hr()}`),
-    c('dim', '  Any other input is sent to the AI as a chat message.'),
-    '',
-    c('dim', '  Examples:'),
-    c('dim', `    /model deepseek-r1:8b           switch model (Ollama)`),
-    c('dim', `    /model llama-3.3-70b-versatile  switch model (Groq)`),
-    c('dim', `    /provider groq                  switch provider`),
+    c('dim', '  Natural language actions (no slash needed):'),
+    c('dim', '    list skills'),
+    c('dim', '    use skill <id>'),
+    c('dim', '    install skill <id>'),
+    c('dim', '    disable skill <id>'),
+    c('dim', '    delete session <id>'),
     '',
   ];
   process.stdout.write(lines.join('\n') + '\n');
@@ -114,7 +119,7 @@ export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> 
         for (const m of models.slice(0, 20)) {
           const active = provider.id === ctx.activeProvider.id && m.id === ctx.activeModel;
           const marker = active ? c('green', ' ✓') : '  ';
-          const ctx_win = m.contextWindow >= 1000
+          const ctxWin = m.contextWindow >= 1000
             ? `${Math.round(m.contextWindow / 1000)}k`
             : String(m.contextWindow);
           const flags = [
@@ -122,7 +127,7 @@ export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> 
             m.supportsVision ? c('blue', 'vision') : '',
           ].filter(Boolean).join(' ');
           process.stdout.write(
-            `${marker} ${c('white', m.id.padEnd(45))} ${c('dim', ctx_win.padStart(5))} ${flags}\n`
+            `${marker} ${c('white', m.id.padEnd(45))} ${c('dim', ctxWin.padStart(5))} ${flags}\n`
           );
         }
         if (models.length > 20) {
@@ -135,53 +140,43 @@ export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> 
     }
     process.stdout.write('\n');
   }
-
-  // Hint to user
-  process.stdout.write(c('dim', `  Tip: use /model <model-id> to switch model\n\n`));
+  process.stdout.write(c('dim', `  Tip: /model <id> to switch model\n\n`));
 }
 
 // ─── /model ───────────────────────────────────────────────────────────────────
 
 export async function cmdModel(ctx: CLIContext, args: string[]): Promise<void> {
-  const modelId = args.join(' ').trim();   // support model ids with spaces
+  const modelId = args.join(' ').trim();
 
-  // Show current model if called with no args
   if (!modelId) {
     process.stdout.write('\n');
     process.stdout.write(`  ${c('bold', 'Active Model')}\n`);
     process.stdout.write(c('dim', `  ${hr('─', 50)}\n`));
-    process.stdout.write(`  ${c('dim', 'Provider')}  ${c('magenta', ctx.activeProvider.displayName)} (${ctx.activeProvider.id})\n`);
+    process.stdout.write(`  ${c('dim', 'Provider')}  ${c('magenta', ctx.activeProvider.displayName)}\n`);
     process.stdout.write(`  ${c('dim', 'Model   ')}  ${c('cyan', ctx.activeModel)}\n`);
-    process.stdout.write('\n');
-    process.stdout.write(c('dim', `  Use /models to see available models, then /model <id> to switch.\n\n`));
+    process.stdout.write(c('dim', '\n  /model <id> to switch.  /models to list available.\n\n'));
     return;
   }
 
-  // Validate: check if model exists in the current provider
   let modelExists = false;
   try {
     const models = await ctx.activeProvider.listModels();
     modelExists = models.some((m) => m.id === modelId);
   } catch {
-    // If listModels fails (e.g. network), allow the switch anyway —
-    // the error will surface naturally on the next chat turn.
     modelExists = true;
   }
 
   if (!modelExists) {
-    process.stdout.write(c('red', `\n  Model "${modelId}" not found in ${ctx.activeProvider.displayName}.\n\n`));
-    process.stdout.write(c('dim', `  Run /models to see available models for this provider.\n`));
-    process.stdout.write(c('dim', `  To switch provider first, use /provider <id>.\n\n`));
+    process.stdout.write(c('red', `\n  Model "${modelId}" not found in ${ctx.activeProvider.displayName}.\n`));
+    process.stdout.write(c('dim', '  Run /models to see available models.\n\n'));
     return;
   }
 
   const previous = ctx.activeModel;
   ctx.setModel(modelId);
-
   process.stdout.write(
-    c('green', `\n  Model switched: ${c('dim', previous)} → ${c('cyan', modelId)}\n`)
+    c('green', `\n  Model switched: ${c('dim', previous)} → ${c('cyan', modelId)}\n\n`)
   );
-  process.stdout.write(c('dim', `  Provider: ${ctx.activeProvider.displayName}\n\n`));
 }
 
 // ─── /skills ──────────────────────────────────────────────────────────────────
@@ -209,7 +204,7 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
   const activeIds = new Set(ctx.skillRegistry.activeIds);
 
   if (all.length === 0) {
-    process.stdout.write(c('dim', '\n  No skills loaded. Add .md files to the /skills directory.\n\n'));
+    process.stdout.write(c('dim', '\n  No skills loaded. Add .md files to the skills/ directory.\n\n'));
     return;
   }
 
@@ -231,74 +226,83 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
       process.stdout.write(`           ${c('dim', skill.description)}\n`);
     }
   }
-  process.stdout.write(c('dim', '\n  Toggle with /skills on <id> or /skills off <id>\n'));
+  process.stdout.write(c('dim', '\n  /skills on <id> | /skills off <id>\n'));
   process.stdout.write('\n');
 }
 
 // ─── /session ─────────────────────────────────────────────────────────────────
 
 export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void> {
-  const [action] = args;
+  const [action, subArg] = args;
 
+  // new
   if (action === 'new') {
     ctx.setSession(null);
-    process.stdout.write(c('green', '\n  New session started. Previous history cleared.\n\n'));
+    process.stdout.write(c('green', '\n  New session started.\n\n'));
     return;
   }
 
+  // list
   if (action === 'list') {
     const result = await ctx.sessions.list();
-    if (!result.ok) {
-      process.stdout.write(c('red', `  Error: ${result.error.message}\n\n`));
-      return;
-    }
+    if (!result.ok) { process.stdout.write(c('red', `  Error: ${result.error.message}\n\n`)); return; }
     const list = result.value;
-    if (list.length === 0) {
-      process.stdout.write(c('dim', '\n  No saved sessions found.\n\n'));
-      return;
-    }
+    if (list.length === 0) { process.stdout.write(c('dim', '\n  No saved sessions.\n\n')); return; }
 
     process.stdout.write('\n');
     process.stdout.write(`  ${c('bold', 'Saved Sessions')}\n`);
     process.stdout.write(c('dim', `  ${hr('─', 60)}\n`));
-
     for (const s of list.slice(0, 15)) {
       const active = s.id === ctx.activeSessionId;
       const marker = active ? c('green', '▶') : ' ';
       const turns = s.messages.filter((m) => m.role === 'user').length;
-      const date = new Date(s.updatedAt).toLocaleString();
       process.stdout.write(
         `  ${marker} ${c('cyan', s.id.slice(0, 8))}…  ` +
         `${c('white', s.model.padEnd(30))} ` +
-        `${c('dim', `${turns} turn(s)  ${date}`)}\n`
+        `${c('dim', `${turns} turn(s)  ${new Date(s.updatedAt).toLocaleString()}`)}\n`
       );
     }
-    if (list.length > 15) {
-      process.stdout.write(c('dim', `  … and ${list.length - 15} more.\n`));
-    }
+    if (list.length > 15) process.stdout.write(c('dim', `  … and ${list.length - 15} more.\n`));
+    process.stdout.write(c('dim', '\n  /session delete <id> to remove\n'));
     process.stdout.write('\n');
     return;
   }
 
-  if (action && action !== 'new' && action !== 'list') {
-    const result = await ctx.sessions.list();
+  // delete <id>
+  if (action === 'delete' && subArg) {
+    const result = await ctx.sessions.deleteSession(subArg);
     if (!result.ok) {
-      process.stdout.write(c('red', `  Error: ${result.error.message}\n\n`));
+      process.stdout.write(c('red', `\n  Error: ${result.error.message}\n\n`));
       return;
     }
-    const match = result.value.find((s) => s.id.startsWith(action));
-    if (!match) {
-      process.stdout.write(c('red', `  Session "${action}" not found.\n\n`));
+    if (!result.value) {
+      process.stdout.write(c('red', `\n  No session found matching "${subArg}".\n\n`));
       return;
     }
-    ctx.setSession(match.id);
-    const turns = match.messages.filter((m) => m.role === 'user').length;
-    process.stdout.write(
-      c('green', `\n  Session ${match.id.slice(0, 8)}… resumed (${turns} turn(s)).\n\n`)
-    );
+    const deletedId = result.value;
+    // If deleted the active session → clear it
+    if (ctx.activeSessionId && deletedId === ctx.activeSessionId) {
+      ctx.setSession(null);
+      process.stdout.write(c('yellow', `\n  Session ${deletedId.slice(0, 8)}… deleted (was active). New session started.\n\n`));
+    } else {
+      process.stdout.write(c('green', `\n  Session ${deletedId.slice(0, 8)}… deleted.\n\n`));
+    }
     return;
   }
 
+  // resume by partial id
+  if (action && !['new', 'list', 'delete'].includes(action)) {
+    const result = await ctx.sessions.list();
+    if (!result.ok) { process.stdout.write(c('red', `  Error: ${result.error.message}\n\n`)); return; }
+    const match = result.value.find((s) => s.id.startsWith(action));
+    if (!match) { process.stdout.write(c('red', `  Session "${action}" not found.\n\n`)); return; }
+    ctx.setSession(match.id);
+    const turns = match.messages.filter((m) => m.role === 'user').length;
+    process.stdout.write(c('green', `\n  Session ${match.id.slice(0, 8)}… resumed (${turns} turn(s)).\n\n`));
+    return;
+  }
+
+  // show current
   if (!ctx.activeSessionId) {
     process.stdout.write(c('dim', '\n  No active session. Send a message to start one.\n\n'));
     return;
@@ -309,10 +313,8 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
     process.stdout.write(c('red', '\n  Could not load current session.\n\n'));
     return;
   }
-
   const s: Session = result.value;
   const turns = s.messages.filter((m) => m.role === 'user').length;
-
   process.stdout.write('\n');
   process.stdout.write(`  ${c('bold', 'Current Session')}\n`);
   process.stdout.write(c('dim', `  ${hr('─', 50)}\n`));
@@ -323,9 +325,7 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
   process.stdout.write(`  ${c('dim', 'Messages ')} ${s.messages.length}\n`);
   process.stdout.write(`  ${c('dim', 'Started  ')} ${new Date(s.createdAt).toLocaleString()}\n`);
   process.stdout.write(`  ${c('dim', 'Updated  ')} ${new Date(s.updatedAt).toLocaleString()}\n`);
-  if (s.activeSkills.length > 0) {
-    process.stdout.write(`  ${c('dim', 'Skills   ')} ${s.activeSkills.join(', ')}\n`);
-  }
+  if (s.activeSkills.length > 0) process.stdout.write(`  ${c('dim', 'Skills   ')} ${s.activeSkills.join(', ')}\n`);
   process.stdout.write('\n');
 }
 
@@ -341,22 +341,20 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
     process.stdout.write(`  ${c('dim', 'Provider')}  ${c('magenta', ctx.activeProvider.displayName)} ${c('dim', `(${ctx.activeProvider.id})`)}\n`);
     process.stdout.write(`  ${c('dim', 'Model   ')}  ${c('cyan', ctx.activeModel)}\n`);
     process.stdout.write('\n');
-
     process.stdout.write(`  ${c('bold', 'All Providers')}\n`);
     for (const [id, p] of ctx.providers) {
       const active = id === ctx.activeProvider.id;
       const marker = active ? c('green', '▶') : ' ';
       process.stdout.write(`  ${marker} ${c('white', id.padEnd(15))} ${c('dim', p.displayName)}\n`);
     }
-    process.stdout.write(c('dim', '\n  Switch provider: /provider <id>\n'));
-    process.stdout.write(c('dim', '  Switch model:    /model <model-id>\n'));
+    process.stdout.write(c('dim', '\n  /provider <id>  |  /model <id>\n'));
     process.stdout.write('\n');
     return;
   }
 
   const provider = ctx.providers.get(targetId);
   if (!provider) {
-    process.stdout.write(c('red', `\n  Provider "${targetId}" not found.\n\n`));
+    process.stdout.write(c('red', `\n  Provider "${targetId}" not found.\n`));
     process.stdout.write(c('dim', `  Available: ${[...ctx.providers.keys()].join(', ')}\n\n`));
     return;
   }
@@ -364,22 +362,60 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
   let model: string;
   try {
     const models = await provider.listModels();
-    if (models.length === 0) throw new Error('No models available');
-    const firstModel = models[0];
-    if (!firstModel) throw new Error('No models available');
-    model = firstModel.id;
+    if (models.length === 0) throw new Error('no models');
+    const first = models[0];
+    if (!first) throw new Error('no models');
+    model = first.id;
   } catch {
-    const envModel = process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`];
-    if (!envModel) {
-      process.stdout.write(c('red', `\n  Could not fetch models for "${targetId}".\n\n`));
-      return;
-    }
-    model = envModel;
+    model = process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown';
+  }
+
+  // Check if a default model is saved for this provider
+  const defaultModel = await ctx.settings.getDefaultModel();
+  const defaultProvider = await ctx.settings.getDefaultProvider();
+  if (defaultProvider === targetId && defaultModel) {
+    model = defaultModel;
   }
 
   ctx.setProvider(provider, model);
-  process.stdout.write(
-    c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n`)
-  );
-  process.stdout.write(c('dim', `  Use /model <id> to change model within this provider.\n\n`));
+  process.stdout.write(c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n\n`));
+}
+
+// ─── /settings ────────────────────────────────────────────────────────────────
+
+export async function cmdSettings(ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, ...rest] = args;
+
+  if (action === 'default-model' && rest.length > 0) {
+    const model = rest.join(' ').trim();
+    await ctx.settings.setDefaultModel(model);
+    await ctx.settings.setDefaultProvider(ctx.activeProvider.id);
+    process.stdout.write(c('green', `\n  Default model set to: ${model} (provider: ${ctx.activeProvider.id})\n`));
+    process.stdout.write(c('dim', '  This will be used on next startup.\n\n'));
+    return;
+  }
+
+  if (action === 'default-provider' && rest.length > 0) {
+    const providerId = rest[0]!.trim();
+    if (!ctx.providers.has(providerId)) {
+      process.stdout.write(c('red', `\n  Provider "${providerId}" not found.\n\n`));
+      return;
+    }
+    await ctx.settings.setDefaultProvider(providerId);
+    process.stdout.write(c('green', `\n  Default provider set to: ${providerId}\n\n`));
+    return;
+  }
+
+  // Show all settings
+  const all = await ctx.settings.all();
+  process.stdout.write('\n');
+  process.stdout.write(`  ${c('bold', 'Persistent Settings')}  ${c('dim', '(saved in settings.json)')}\n`);
+  process.stdout.write(c('dim', `  ${'─'.repeat(50)}\n`));
+  process.stdout.write(`  ${c('dim', 'defaultProvider')}  ${all.defaultProvider ?? c('dim', '(not set)')}\n`);
+  process.stdout.write(`  ${c('dim', 'defaultModel   ')}  ${all.defaultModel ?? c('dim', '(not set)')}\n`);
+  process.stdout.write('\n');
+  process.stdout.write(c('dim', '  Commands:\n'));
+  process.stdout.write(c('dim', '    /settings default-model <model-id>\n'));
+  process.stdout.write(c('dim', '    /settings default-provider <provider-id>\n'));
+  process.stdout.write('\n');
 }
