@@ -1,10 +1,6 @@
 /**
  * cli/index.ts
  * Interactive chat REPL.
- *
- * Bootstraps all services, picks the first available provider,
- * then enters a readline loop that routes input to either a
- * slash-command handler or the Orchestrator.
  */
 
 import * as readline from 'readline/promises';
@@ -16,6 +12,7 @@ import type { Orchestrator } from '../agents/orchestrator';
 import {
   cmdHelp,
   cmdModels,
+  cmdModel,
   cmdSkills,
   cmdSession,
   cmdProvider,
@@ -46,7 +43,7 @@ function printBanner(providerName: string, model: string, skillCount: number): v
   const lines = [
     '',
     c('bold', c('cyan', '  ╔═══════════════════════════════════════╗')),
-    c('bold', c('cyan', '  ║        native-openclaw  v0.1.0        ║')),
+    c('bold', c('cyan', '  ║        native-openclaw  v1.0.0        ║')),
     c('bold', c('cyan', '  ║   Multi-Provider AI Agent Terminal    ║')),
     c('bold', c('cyan', '  ╚═══════════════════════════════════════╝')),
     '',
@@ -62,8 +59,10 @@ function printBanner(providerName: string, model: string, skillCount: number): v
 
 // ─── Prompt string ────────────────────────────────────────────────────────────
 
-function prompt(providerName: string): string {
-  return `${C.bold}${C.green}you${C.reset} ${C.dim}(${providerName})${C.reset} › `;
+function buildPrompt(providerId: string, modelId: string): string {
+  // Show a short model name so user always knows what model is active
+  const shortModel = modelId.length > 20 ? modelId.slice(0, 18) + '…' : modelId;
+  return `${C.bold}${C.green}you${C.reset} ${C.dim}(${providerId}/${shortModel})${C.reset} › `;
 }
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
@@ -81,7 +80,7 @@ function startSpinner(label: string): NodeJS.Timeout {
 
 function stopSpinner(timer: NodeJS.Timeout): void {
   clearInterval(timer);
-  process.stdout.write('\r\x1b[2K'); // clear line
+  process.stdout.write('\r\x1b[2K');
 }
 
 // ─── Format assistant reply ───────────────────────────────────────────────────
@@ -95,21 +94,14 @@ function printAssistantReply(
   const tokens = usage ? c('dim', ` · ${usage.totalTokens} tok`) : '';
   const lat = c('dim', ` · ${latencyMs}ms`);
   const header = `\n  ${c('bold', c('blue', 'assistant'))} ${c('dim', model)}${lat}${tokens}\n`;
-
   output.write(header);
-
-  // Indent the text block.
-  const indented = text
-    .split('\n')
-    .map((line) => `  ${line}`)
-    .join('\n');
-
+  const indented = text.split('\n').map((line) => `  ${line}`).join('\n');
   output.write(indented + '\n\n');
 }
 
 // ─── Command dispatcher ───────────────────────────────────────────────────────
 
-async function dispatchCommand(raw: string, ctx: CLIContext): Promise<boolean> {
+async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
   const parts = raw.trim().slice(1).split(/\s+/);
   const cmd = parts[0]?.toLowerCase() ?? '';
   const args = parts.slice(1);
@@ -118,38 +110,42 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<boolean> {
     case 'help':
     case 'h':
       cmdHelp();
-      return true;
+      break;
 
     case 'models':
     case 'm':
       await cmdModels(ctx, args);
-      return true;
+      break;
+
+    // NEW: /model <model-id>  — switch model within current provider
+    case 'model':
+      await cmdModel(ctx, args);
+      break;
 
     case 'skills':
     case 'sk':
       cmdSkills(ctx, args);
-      return true;
+      break;
 
     case 'session':
     case 's':
       await cmdSession(ctx, args);
-      return true;
+      break;
 
     case 'provider':
     case 'p':
       await cmdProvider(ctx, args);
-      return true;
+      break;
 
     case 'exit':
     case 'quit':
     case 'q':
       output.write(c('dim', '\n  Goodbye.\n\n'));
       exit(0);
-      return true; // unreachable, but satisfies TS
+      break;
 
     default:
       output.write(c('yellow', `\n  Unknown command: /${cmd}. Type /help for a list.\n\n`));
-      return true;
   }
 }
 
@@ -165,13 +161,12 @@ export interface CLIRunnerOptions {
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
   const { providers, skillRegistry, sessions, orchestrator } = opts;
 
-  // ── Select default provider + model ────────────────────────────────────────
   if (providers.size === 0) {
     output.write(c('red', '\n  No providers available. Check your .env configuration.\n\n'));
     exit(1);
   }
 
-  // Pick priority: groq > openrouter > mistral > ollama (first available).
+  // Pick priority: groq > openrouter > mistral > ollama
   const priority = ['groq', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'ollama'];
   let activeProvider: IProvider | undefined;
   for (const id of priority) {
@@ -180,7 +175,6 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
   }
   if (!activeProvider) activeProvider = [...providers.values()][0];
 
-  // Resolve default model for the active provider.
   let activeModel = 'unknown';
   try {
     const models = await activeProvider!.listModels();
@@ -198,10 +192,14 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     skillRegistry,
     sessions,
     get activeProvider() { return activeProvider!; },
-    get activeModel() { return activeModel; },
-    get activeSessionId() { return activeSessionId; },
+    get activeModel()    { return activeModel; },
+    get activeSessionId(){ return activeSessionId; },
     setProvider(p: IProvider, m: string) {
       activeProvider = p;
+      activeModel = m;
+    },
+    // NEW: change only the model, keep the same provider
+    setModel(m: string) {
       activeModel = m;
     },
     setSession(id: string | null) {
@@ -209,25 +207,17 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     },
   };
 
-  // ── Banner ─────────────────────────────────────────────────────────────────
   printBanner(activeProvider!.displayName, activeModel, skillRegistry.size);
 
-  // ── Readline setup ─────────────────────────────────────────────────────────
   const rl = readline.createInterface({ input, output, terminal: true });
-
-  // Graceful Ctrl-C.
-  rl.on('close', () => {
-    output.write(c('dim', '\n  Goodbye.\n\n'));
-    exit(0);
-  });
+  rl.on('close', () => { output.write(c('dim', '\n  Goodbye.\n\n')); exit(0); });
 
   // ── REPL loop ──────────────────────────────────────────────────────────────
   while (true) {
     let userInput: string;
     try {
-      userInput = await rl.question(prompt(activeProvider!.id));
+      userInput = await rl.question(buildPrompt(activeProvider!.id, activeModel));
     } catch {
-      // EOF / Ctrl-D
       output.write(c('dim', '\n  Goodbye.\n\n'));
       exit(0);
     }
@@ -235,15 +225,12 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     userInput = userInput.trim();
     if (!userInput) continue;
 
-    // Slash command.
     if (userInput.startsWith('/')) {
       await dispatchCommand(userInput, ctx);
       continue;
     }
 
-    // Regular chat message → orchestrator.
     const spinner = startSpinner('Thinking…');
-
     try {
       const turnInput = {
         userInput,
@@ -252,10 +239,8 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
         ...(activeSessionId !== null && { sessionId: activeSessionId }),
       };
       const result = await orchestrator.turn(turnInput);
-
       stopSpinner(spinner);
 
-      // Persist session id for subsequent turns.
       if (!activeSessionId || result.newSession) {
         activeSessionId = result.session.id;
       }

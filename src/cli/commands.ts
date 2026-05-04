@@ -1,9 +1,6 @@
 /**
  * cli/commands.ts
  * Handlers for all slash-commands available inside the chat REPL.
- *
- * Each handler receives the shared CLIContext and writes directly to
- * process.stdout. Commands never throw — errors are caught and displayed.
  */
 
 import type { IProvider, ProviderRegistry } from '../types/provider';
@@ -13,16 +10,16 @@ import type { SessionManager, Session } from '../storage/session-manager';
 // ─── ANSI helpers ─────────────────────────────────────────────────────────────
 
 const C = {
-  reset:  '\x1b[0m',
-  bold:   '\x1b[1m',
-  dim:    '\x1b[2m',
-  cyan:   '\x1b[36m',
-  green:  '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue:   '\x1b[34m',
-  magenta:'\x1b[35m',
-  red:    '\x1b[31m',
-  white:  '\x1b[37m',
+  reset:   '\x1b[0m',
+  bold:    '\x1b[1m',
+  dim:     '\x1b[2m',
+  cyan:    '\x1b[36m',
+  green:   '\x1b[32m',
+  yellow:  '\x1b[33m',
+  blue:    '\x1b[34m',
+  magenta: '\x1b[35m',
+  red:     '\x1b[31m',
+  white:   '\x1b[37m',
 } as const;
 
 function c(color: keyof typeof C, text: string): string {
@@ -43,6 +40,7 @@ export interface CLIContext {
   activeModel: string;
   activeSessionId: string | null;
   setProvider: (provider: IProvider, model: string) => void;
+  setModel: (model: string) => void;
   setSession: (id: string | null) => void;
 }
 
@@ -54,22 +52,28 @@ export function cmdHelp(): void {
     c('bold', c('cyan', '  native-openclaw — Command Reference')),
     c('dim', `  ${hr()}`),
     '',
-    `  ${c('yellow', '/help')}              Show this help message`,
-    `  ${c('yellow', '/models')}            List available models for all providers`,
-    `  ${c('yellow', '/models <provider>')} List models for a specific provider`,
-    `  ${c('yellow', '/skills')}            List registered skills and their status`,
-    `  ${c('yellow', '/skills on <id>')}    Activate a skill by id`,
-    `  ${c('yellow', '/skills off <id>')}   Deactivate a skill by id`,
-    `  ${c('yellow', '/session')}           Show current session info`,
-    `  ${c('yellow', '/session new')}       Start a new session (clears history)`,
-    `  ${c('yellow', '/session list')}      List all saved sessions`,
-    `  ${c('yellow', '/session <id>')}      Resume a session by id`,
-    `  ${c('yellow', '/provider')}          Show current provider and model`,
-    `  ${c('yellow', '/provider <id>')}     Switch to a different provider`,
-    `  ${c('yellow', '/exit')}              Quit the application`,
+    `  ${c('yellow', '/help')}                    Show this help message`,
+    `  ${c('yellow', '/models')}                  List available models for all providers`,
+    `  ${c('yellow', '/models <provider>')}       List models for a specific provider`,
+    `  ${c('yellow', '/model <model-id>')}        Switch to a specific model (same provider)`,
+    `  ${c('yellow', '/skills')}                  List registered skills and their status`,
+    `  ${c('yellow', '/skills on <id>')}          Activate a skill by id`,
+    `  ${c('yellow', '/skills off <id>')}         Deactivate a skill by id`,
+    `  ${c('yellow', '/session')}                 Show current session info`,
+    `  ${c('yellow', '/session new')}             Start a new session (clears history)`,
+    `  ${c('yellow', '/session list')}            List all saved sessions`,
+    `  ${c('yellow', '/session <id>')}            Resume a session by id`,
+    `  ${c('yellow', '/provider')}                Show current provider and model`,
+    `  ${c('yellow', '/provider <id>')}           Switch to a different provider`,
+    `  ${c('yellow', '/exit')}                    Quit the application`,
     '',
     c('dim', `  ${hr()}`),
     c('dim', '  Any other input is sent to the AI as a chat message.'),
+    '',
+    c('dim', '  Examples:'),
+    c('dim', `    /model deepseek-r1:8b           switch model (Ollama)`),
+    c('dim', `    /model llama-3.3-70b-versatile  switch model (Groq)`),
+    c('dim', `    /provider groq                  switch provider`),
     '',
   ];
   process.stdout.write(lines.join('\n') + '\n');
@@ -84,7 +88,8 @@ export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> 
     ? (() => {
         const p = ctx.providers.get(targetId);
         if (!p) {
-          process.stdout.write(c('red', `  Provider "${targetId}" not found.\n`));
+          process.stdout.write(c('red', `  Provider "${targetId}" not found.\n\n`));
+          process.stdout.write(c('dim', `  Available: ${[...ctx.providers.keys()].join(', ')}\n\n`));
           return [];
         }
         return [p];
@@ -130,6 +135,53 @@ export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> 
     }
     process.stdout.write('\n');
   }
+
+  // Hint to user
+  process.stdout.write(c('dim', `  Tip: use /model <model-id> to switch model\n\n`));
+}
+
+// ─── /model ───────────────────────────────────────────────────────────────────
+
+export async function cmdModel(ctx: CLIContext, args: string[]): Promise<void> {
+  const modelId = args.join(' ').trim();   // support model ids with spaces
+
+  // Show current model if called with no args
+  if (!modelId) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Active Model')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 50)}\n`));
+    process.stdout.write(`  ${c('dim', 'Provider')}  ${c('magenta', ctx.activeProvider.displayName)} (${ctx.activeProvider.id})\n`);
+    process.stdout.write(`  ${c('dim', 'Model   ')}  ${c('cyan', ctx.activeModel)}\n`);
+    process.stdout.write('\n');
+    process.stdout.write(c('dim', `  Use /models to see available models, then /model <id> to switch.\n\n`));
+    return;
+  }
+
+  // Validate: check if model exists in the current provider
+  let modelExists = false;
+  try {
+    const models = await ctx.activeProvider.listModels();
+    modelExists = models.some((m) => m.id === modelId);
+  } catch {
+    // If listModels fails (e.g. network), allow the switch anyway —
+    // the error will surface naturally on the next chat turn.
+    modelExists = true;
+  }
+
+  if (!modelExists) {
+    process.stdout.write(c('red', `\n  Model "${modelId}" not found in ${ctx.activeProvider.displayName}.\n\n`));
+    process.stdout.write(c('dim', `  Run /models to see available models for this provider.\n`));
+    process.stdout.write(c('dim', `  To switch provider first, use /provider <id>.\n\n`));
+    return;
+  }
+
+  const previous = ctx.activeModel;
+  ctx.setModel(modelId);
+
+  process.stdout.write(
+    c('green', `\n  Model switched: ${c('dim', previous)} → ${c('cyan', modelId)}\n`)
+  );
+  process.stdout.write(c('dim', `  Provider: ${ctx.activeProvider.displayName}\n\n`));
 }
 
 // ─── /skills ──────────────────────────────────────────────────────────────────
@@ -153,7 +205,6 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
     return;
   }
 
-  // List all skills.
   const all = ctx.skillRegistry.all();
   const activeIds = new Set(ctx.skillRegistry.activeIds);
 
@@ -180,9 +231,7 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
       process.stdout.write(`           ${c('dim', skill.description)}\n`);
     }
   }
-  process.stdout.write(
-    c('dim', '\n  Toggle with /skills on <id> or /skills off <id>\n')
-  );
+  process.stdout.write(c('dim', '\n  Toggle with /skills on <id> or /skills off <id>\n'));
   process.stdout.write('\n');
 }
 
@@ -191,14 +240,12 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
 export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void> {
   const [action] = args;
 
-  // Start a new session.
   if (action === 'new') {
     ctx.setSession(null);
     process.stdout.write(c('green', '\n  New session started. Previous history cleared.\n\n'));
     return;
   }
 
-  // List saved sessions.
   if (action === 'list') {
     const result = await ctx.sessions.list();
     if (!result.ok) {
@@ -233,7 +280,6 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
     return;
   }
 
-  // Resume session by (partial) id.
   if (action && action !== 'new' && action !== 'list') {
     const result = await ctx.sessions.list();
     if (!result.ok) {
@@ -253,7 +299,6 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
     return;
   }
 
-  // Show current session info.
   if (!ctx.activeSessionId) {
     process.stdout.write(c('dim', '\n  No active session. Send a message to start one.\n\n'));
     return;
@@ -303,7 +348,8 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
       const marker = active ? c('green', '▶') : ' ';
       process.stdout.write(`  ${marker} ${c('white', id.padEnd(15))} ${c('dim', p.displayName)}\n`);
     }
-    process.stdout.write(c('dim', '\n  Switch with /provider <id>\n'));
+    process.stdout.write(c('dim', '\n  Switch provider: /provider <id>\n'));
+    process.stdout.write(c('dim', '  Switch model:    /model <model-id>\n'));
     process.stdout.write('\n');
     return;
   }
@@ -311,10 +357,10 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
   const provider = ctx.providers.get(targetId);
   if (!provider) {
     process.stdout.write(c('red', `\n  Provider "${targetId}" not found.\n\n`));
+    process.stdout.write(c('dim', `  Available: ${[...ctx.providers.keys()].join(', ')}\n\n`));
     return;
   }
 
-  // Pick the first available model for the new provider.
   let model: string;
   try {
     const models = await provider.listModels();
@@ -333,6 +379,7 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
 
   ctx.setProvider(provider, model);
   process.stdout.write(
-    c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n\n`)
+    c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n`)
   );
+  process.stdout.write(c('dim', `  Use /model <id> to change model within this provider.\n\n`));
 }
