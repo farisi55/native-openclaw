@@ -11,3 +11,6 @@ export type { Session, CreateSessionOptions, AppendMessageOptions } from './sess
 
 export { SettingsManager } from './settings-manager';
 export type { AppSettings } from './settings-manager';
+
+export { MemoryManager } from './memory-manager';
+export type { GlobalMemory, SessionMemory, MemoryStore, MemoryValue } from './memory-manager';

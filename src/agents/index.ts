@@ -17,3 +17,6 @@ export type { SystemContextInput } from './system-context';
 
 export { handleAction } from './action-handler';
 export type { ActionContext, ActionResult } from './action-handler';
+
+export { extractMemory } from './memory-extractor';
+export type { MemoryUpdate, MemoryScope } from './memory-extractor';

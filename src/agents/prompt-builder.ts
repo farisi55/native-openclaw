@@ -1,9 +1,10 @@
 /**
  * agents/prompt-builder.ts
  * Assemble the final system prompt from:
- *   1. SYSTEM CONTEXT block (provider, model, skills awareness)
- *   2. Base system prompt
- *   3. Active skill blocks
+ *   1. MEMORY block  (persistent facts — highest priority)
+ *   2. SYSTEM CONTEXT block (provider, model, skills awareness)
+ *   3. Base system prompt
+ *   4. Active skill blocks
  */
 
 import type { Skill } from '../skills/loader';
@@ -13,8 +14,14 @@ export interface PromptBuilderOptions {
   basePrompt: string;
   skills: Skill[];
   maxSkillBodyLength?: number;
-  /** When provided, prepends a SYSTEM CONTEXT block so the AI knows its state. */
+  /** Auto-generated system context (provider, model, skills list). */
   systemContext?: SystemContextInput;
+  /**
+   * Pre-rendered MEMORY block string from MemoryManager.buildMemoryBlock().
+   * When provided, it is injected FIRST in the system prompt so the LLM
+   * always honours stored facts (like agent name) over its defaults.
+   */
+  memoryBlock?: string | null;
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -36,8 +43,9 @@ function renderSkillBlock(skill: Skill, maxBodyLen: number): string {
 }
 
 export class PromptBuilder {
-  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext'>> & {
+  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock'>> & {
     systemContext?: SystemContextInput;
+    memoryBlock?: string | null;
   };
 
   constructor(opts: PromptBuilderOptions) {
@@ -45,19 +53,24 @@ export class PromptBuilder {
   }
 
   build(): string {
-    const { basePrompt, skills, maxSkillBodyLength, systemContext } = this.opts;
+    const { basePrompt, skills, maxSkillBodyLength, systemContext, memoryBlock } = this.opts;
 
     const parts: string[] = [];
 
-    // 1. System context block (AI self-awareness)
+    // 1. MEMORY — injected FIRST so facts always override LLM defaults
+    if (memoryBlock) {
+      parts.push(memoryBlock.trim());
+    }
+
+    // 2. System context (self-awareness: provider, model, skills)
     if (systemContext) {
       parts.push(getSystemContext(systemContext));
     }
 
-    // 2. Base prompt
+    // 3. Base system prompt
     parts.push(basePrompt.trim());
 
-    // 3. Active skill blocks
+    // 4. Active skill blocks
     if (skills.length > 0) {
       const blocks = skills.map((s) => renderSkillBlock(s, maxSkillBodyLength));
       const skillSection = ['## Active Skills', '', blocks.join('\n\n---\n\n')].join('\n');
@@ -67,12 +80,19 @@ export class PromptBuilder {
     return parts.join('\n\n');
   }
 
-  summary(): { baseLength: number; skillCount: number; skillIds: string[]; hasContext: boolean } {
+  summary(): {
+    baseLength: number;
+    skillCount: number;
+    skillIds: string[];
+    hasContext: boolean;
+    hasMemory: boolean;
+  } {
     return {
       baseLength: this.opts.basePrompt.length,
       skillCount: this.opts.skills.length,
       skillIds: this.opts.skills.map((s) => s.id),
       hasContext: Boolean(this.opts.systemContext),
+      hasMemory: Boolean(this.opts.memoryBlock),
     };
   }
 }

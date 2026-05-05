@@ -3,8 +3,11 @@
  * Main agent loop.
  *
  * Flow per turn:
- *   input → action-handler → if action: return immediately
- *                           → else: build prompt → call LLM → persist → return
+ *   input →
+ *     memory-extractor → persist new facts to memory.json
+ *     action-handler  → if action: return immediately (no LLM)
+ *     build prompt    → inject memory + system-context + skills
+ *     call LLM        → persist messages → return
  */
 
 import type { IProvider, ChatResponse } from '../types/provider';
@@ -12,9 +15,11 @@ import type { Message } from '../types/message';
 import { createMessage, extractText } from '../types/message';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
+import type { MemoryManager } from '../storage/memory-manager';
 import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
+import { extractMemory } from './memory-extractor';
 import type { SystemContextInput } from './system-context';
 import { createLogger } from '../utils/logger';
 import { getOptionalEnv } from '../config/env';
@@ -42,11 +47,9 @@ export interface TurnInput {
 
 export interface TurnResult {
   chatResponse?: ChatResponse;
-  /** Plain text reply — set for both LLM and action results. */
   assistantText: string;
   session: Session;
   newSession: boolean;
-  /** true when the turn was handled by the action-handler (no LLM call). */
   wasAction: boolean;
 }
 
@@ -55,18 +58,20 @@ export interface TurnResult {
 export class Orchestrator {
   private readonly sessions: SessionManager;
   private readonly skills: SkillRegistry;
+  private readonly memory: MemoryManager;
   private readonly opts: Required<OrchestratorOptions>;
 
-  /** Mutable active-session ref shared with the action-handler. */
   private _activeSessionId: string | null = null;
 
   constructor(
     sessions: SessionManager,
     skills: SkillRegistry,
+    memory: MemoryManager,
     opts: OrchestratorOptions = {}
   ) {
     this.sessions = sessions;
     this.skills = skills;
+    this.memory = memory;
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
       maxTurns:         opts.maxTurns ?? 20,
@@ -91,9 +96,7 @@ export class Orchestrator {
 
       const turns = session.messages.filter((m) => m.role === 'user').length;
       if (turns >= this.opts.maxTurns) {
-        throw new Error(
-          `Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`
-        );
+        throw new Error(`Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`);
       }
     } else {
       const r = await this.sessions.create({
@@ -113,7 +116,17 @@ export class Orchestrator {
       this.skills.setActive(input.skillIds);
     }
 
-    // ── 3. Action-handler (intercept before LLM) ──────────────────────────────
+    // ── 3. Memory extraction — learn facts BEFORE anything else ──────────────
+    const memUpdates = extractMemory(input.userInput);
+    for (const upd of memUpdates) {
+      if (upd.scope === 'global') {
+        await this.memory.setGlobalMemory(upd.key, upd.value);
+      } else {
+        await this.memory.setSessionMemory(session.id, upd.key, upd.value);
+      }
+    }
+
+    // ── 4. Action-handler (intercept before LLM) ──────────────────────────────
     const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
     const actionCtx: ActionContext = {
       skillRegistry:    this.skills,
@@ -126,7 +139,6 @@ export class Orchestrator {
     const actionResult = await handleAction(input.userInput, actionCtx);
 
     if (actionResult.handled) {
-      // Persist the user message + action response as an assistant message
       const userMsg = createMessage({ role: 'user',      content: input.userInput });
       const asstMsg = createMessage({ role: 'assistant', content: actionResult.response ?? '' });
 
@@ -136,7 +148,6 @@ export class Orchestrator {
       if (!a2.ok) throw a2.error;
       session = a2.value;
 
-      // If session was cleared by the action (delete self), reset id
       if (!this._activeSessionId) {
         newSession = true;
       } else {
@@ -144,17 +155,13 @@ export class Orchestrator {
       }
 
       logger.info('action handled', { action: input.userInput.slice(0, 40) });
-
-      return {
-        assistantText: actionResult.response ?? '',
-        session,
-        newSession,
-        wasAction: true,
-      };
+      return { assistantText: actionResult.response ?? '', session, newSession, wasAction: true };
     }
 
-    // ── 4. Build system prompt with context ───────────────────────────────────
+    // ── 5. Build system prompt: memory + context + base + skills ─────────────
     const activeSkills = this.skills.activeSkills();
+
+    const memoryBlock = await this.memory.buildMemoryBlock(session.id);
 
     const sysCtx: SystemContextInput = {
       provider:      input.provider,
@@ -167,9 +174,10 @@ export class Orchestrator {
       basePrompt:    this.opts.baseSystemPrompt,
       skills:        activeSkills,
       systemContext: sysCtx,
+      memoryBlock,
     });
 
-    // ── 5. Persist user message ───────────────────────────────────────────────
+    // ── 6. Persist user message ───────────────────────────────────────────────
     const userMessage: Message = createMessage({ role: 'user', content: input.userInput });
     const appendUser = await this.sessions.appendMessage({
       sessionId: session.id,
@@ -178,18 +186,19 @@ export class Orchestrator {
     if (!appendUser.ok) throw appendUser.error;
     session = appendUser.value;
 
-    // ── 6. Assemble sliding window ────────────────────────────────────────────
+    // ── 7. Assemble sliding window ────────────────────────────────────────────
     const { messages: assembled, dropped } = assembleMessages({
       messages: session.messages,
       maxMessages: this.opts.maxMessages,
     });
     if (dropped > 0) logger.debug('messages dropped for context window', { dropped });
 
-    // ── 7. Call LLM ───────────────────────────────────────────────────────────
+    // ── 8. Call LLM ───────────────────────────────────────────────────────────
     logger.debug('calling provider', {
       provider: input.provider.id,
       model: input.model,
       messageCount: assembled.length,
+      hasMemory: Boolean(memoryBlock),
     });
 
     const chatResponse = await input.provider.chat({
@@ -206,7 +215,7 @@ export class Orchestrator {
       latencyMs: chatResponse.latencyMs,
     });
 
-    // ── 8. Persist assistant message ──────────────────────────────────────────
+    // ── 9. Persist assistant message ──────────────────────────────────────────
     const appendAssistant = await this.sessions.appendMessage({
       sessionId: session.id,
       message: chatResponse.message,

@@ -7,7 +7,7 @@ import { loadConfig } from './config';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
 import { SkillRegistry } from './skills';
-import { SessionManager, SettingsManager } from './storage';
+import { SessionManager, SettingsManager, MemoryManager } from './storage';
 import { Orchestrator } from './agents';
 import { startCLI } from './cli';
 
@@ -36,9 +36,16 @@ async function bootstrap(): Promise<void> {
   // Storage
   const sessions = new SessionManager(config.storage.dataDir);
   const settings = new SettingsManager(config.storage.dataDir);
+  const memory   = new MemoryManager(config.storage.dataDir);
 
-  // Orchestrator
-  const orchestrator = new Orchestrator(sessions, skillRegistry, {
+  // Log if agent has a stored name
+  const agentName = await memory.getGlobalValue('agentName');
+  if (agentName) {
+    logger.info(`Agent identity restored from memory: "${String(agentName)}"`);
+  }
+
+  // Orchestrator — now takes memory as third argument
+  const orchestrator = new Orchestrator(sessions, skillRegistry, memory, {
     baseSystemPrompt: config.agent.systemPrompt,
     maxTurns:         config.agent.maxTurns,
     temperature:      config.agent.temperature,
