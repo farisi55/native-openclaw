@@ -68,17 +68,19 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/session <id>')}                 Resume a session by id`,
     `  ${c('yellow', '/session delete <id>')}          Delete a session by id`,
     `  ${c('yellow', '/settings')}                     Show persistent settings`,
-    `  ${c('yellow', '/settings default-model <id>')}  Set default model`,
-    `  ${c('yellow', '/settings default-provider <id>')} Set default provider`,
-    `  ${c('yellow', '/exit')}                         Quit the application`,
+    `  ${c('yellow', '/settings default-model <id>')}   Set default model for current provider`,
+    `  ${c('yellow', '/settings default-provider <id>')}  Set default provider`,
+    `  ${c('yellow', '/exit')}                          Quit the application`,
     '',
     c('dim', `  ${hr()}`),
     c('dim', '  Natural language actions (no slash needed):'),
-    c('dim', '    list skills'),
-    c('dim', '    use skill <id>'),
-    c('dim', '    install skill <id>'),
-    c('dim', '    disable skill <id>'),
+    c('dim', '    list skills  |  use skill <id>  |  install skill <id>  |  disable skill <id>'),
     c('dim', '    delete session <id>'),
+    '',
+    c('dim', '  Tool actions (no slash, handled instantly):'),
+    c('dim', '    what time is it?    |  what is the date?'),
+    c('dim', '    what is the news?   |  fetch url <url>'),
+    c('dim', '    get data from API /path'),
     '',
   ];
   process.stdout.write(lines.join('\n') + '\n');
@@ -359,26 +361,32 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
     return;
   }
 
+  // Resolution order:
+  // 1. settings.json defaultModels[providerId]  (per-provider saved default)
+  // 2. BUILTIN_DEFAULTS[providerId]              (from SettingsManager)
+  // 3. listModels()[0]                           (first available)
+  // 4. ENV var <PROVIDER>_DEFAULT_MODEL          (last resort)
   let model: string;
-  try {
-    const models = await provider.listModels();
-    if (models.length === 0) throw new Error('no models');
-    const first = models[0];
-    if (!first) throw new Error('no models');
-    model = first.id;
-  } catch {
-    model = process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown';
-  }
 
-  // Check if a default model is saved for this provider
-  const defaultModel = await ctx.settings.getDefaultModel();
-  const defaultProvider = await ctx.settings.getDefaultProvider();
-  if (defaultProvider === targetId && defaultModel) {
-    model = defaultModel;
+  // Step 1+2: check per-provider default (includes built-ins)
+  const savedDefault = await ctx.settings.getDefaultModelForProvider(targetId);
+  if (savedDefault) {
+    model = savedDefault;
+  } else {
+    // Step 3: try listModels
+    try {
+      const models = await provider.listModels();
+      const first = models[0];
+      model = first ? first.id : (process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown');
+    } catch {
+      // Step 4: env var fallback
+      model = process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown';
+    }
   }
 
   ctx.setProvider(provider, model);
-  process.stdout.write(c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n\n`));
+  process.stdout.write(c('green', `\n  Switched to ${provider.displayName} — model: ${model}\n`));
+  process.stdout.write(c('dim', `  Use /model <id> to change model, /settings default-model <id> to save.\n\n`));
 }
 
 // ─── /settings ────────────────────────────────────────────────────────────────
@@ -388,10 +396,10 @@ export async function cmdSettings(ctx: CLIContext, args: string[]): Promise<void
 
   if (action === 'default-model' && rest.length > 0) {
     const model = rest.join(' ').trim();
-    await ctx.settings.setDefaultModel(model);
-    await ctx.settings.setDefaultProvider(ctx.activeProvider.id);
-    process.stdout.write(c('green', `\n  Default model set to: ${model} (provider: ${ctx.activeProvider.id})\n`));
-    process.stdout.write(c('dim', '  This will be used on next startup.\n\n'));
+    // Save per-provider AND legacy flat key
+    await ctx.settings.setDefaultModelForProvider(ctx.activeProvider.id, model);
+    process.stdout.write(c('green', `\n  Default model for ${ctx.activeProvider.id} set to: ${model}\n`));
+    process.stdout.write(c('dim', '  This will be used next time you switch to this provider.\n\n'));
     return;
   }
 
@@ -408,14 +416,22 @@ export async function cmdSettings(ctx: CLIContext, args: string[]): Promise<void
 
   // Show all settings
   const all = await ctx.settings.all();
+  const perProviderMap = (all.defaultModels ?? {}) as Record<string, string>;
   process.stdout.write('\n');
   process.stdout.write(`  ${c('bold', 'Persistent Settings')}  ${c('dim', '(saved in settings.json)')}\n`);
-  process.stdout.write(c('dim', `  ${'─'.repeat(50)}\n`));
-  process.stdout.write(`  ${c('dim', 'defaultProvider')}  ${all.defaultProvider ?? c('dim', '(not set)')}\n`);
-  process.stdout.write(`  ${c('dim', 'defaultModel   ')}  ${all.defaultModel ?? c('dim', '(not set)')}\n`);
+  process.stdout.write(c('dim', `  ${'─'.repeat(56)}\n`));
+  process.stdout.write(`  ${c('dim', 'defaultProvider       ')}  ${all.defaultProvider ?? c('dim', '(not set)')}\n`);
+  process.stdout.write(`  ${c('dim', 'defaultModel (legacy) ')}  ${all.defaultModel ?? c('dim', '(not set)')}\n`);
+  if (Object.keys(perProviderMap).length > 0) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Per-provider default models:')}\n`);
+    for (const [pid, m] of Object.entries(perProviderMap)) {
+      process.stdout.write(`    ${c('dim', pid.padEnd(14))}  ${c('cyan', m)}\n`);
+    }
+  }
   process.stdout.write('\n');
   process.stdout.write(c('dim', '  Commands:\n'));
-  process.stdout.write(c('dim', '    /settings default-model <model-id>\n'));
+  process.stdout.write(c('dim', '    /settings default-model <model-id>       ← saves for current provider\n'));
   process.stdout.write(c('dim', '    /settings default-provider <provider-id>\n'));
   process.stdout.write('\n');
 }

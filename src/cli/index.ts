@@ -68,11 +68,16 @@ function printAssistantReply(
   model: string,
   latencyMs: number,
   usage: { totalTokens: number } | undefined,
-  wasAction: boolean
+  wasAction: boolean,
+  toolName?: string
 ): void {
   const tokens = usage ? c('dim', ` · ${usage.totalTokens} tok`) : '';
   const lat = wasAction ? '' : c('dim', ` · ${latencyMs}ms`);
-  const label = wasAction ? c('dim', 'action') : c('dim', model);
+  const label = toolName
+    ? c('dim', `tool:${toolName}`)
+    : wasAction
+    ? c('dim', 'action')
+    : c('dim', model);
   output.write(`\n  ${c('bold', c('blue', 'assistant'))} ${label}${lat}${tokens}\n`);
   const indented = text.split('\n').map((l) => `  ${l}`).join('\n');
   output.write(indented + '\n\n');
@@ -137,11 +142,14 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
   // Final fallback: first available
   if (!activeProvider) activeProvider = [...providers.values()][0];
 
-  // ── Resolve startup model (settings.json → listModels → env) ───────────────
+  // ── Resolve startup model (per-provider default → listModels → env) ──────────
   let activeModel = 'unknown';
 
-  if (savedModel && savedProvider === activeProvider!.id) {
-    // Saved default matches the active provider — use it directly
+  // Per-provider default (includes built-in fallbacks from SettingsManager)
+  const perProviderDefault = await settings.getDefaultModelForProvider(activeProvider!.id);
+  if (perProviderDefault) {
+    activeModel = perProviderDefault;
+  } else if (savedModel && savedProvider === activeProvider!.id) {
     activeModel = savedModel;
   } else {
     try {
@@ -218,6 +226,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
         result.chatResponse?.latencyMs ?? 0,
         result.chatResponse?.usage,
         result.wasAction,
+        result.toolName,
       );
     } catch (err) {
       stopSpinner(spinner);

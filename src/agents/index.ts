@@ -20,3 +20,6 @@ export type { ActionContext, ActionResult } from './action-handler';
 
 export { extractMemory } from './memory-extractor';
 export type { MemoryUpdate, MemoryScope } from './memory-extractor';
+
+export { handleTool } from './tool-handler';
+export type { ToolResult } from './tool-handler';
