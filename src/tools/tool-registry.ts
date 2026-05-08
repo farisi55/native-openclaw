@@ -1,13 +1,7 @@
 /**
  * tools/tool-registry.ts
  * Auto-discovers and manages the plugin tool system.
- *
- * Scan order:
- *   tools/installed/<tool-name>/manifest.json
- *   → manifest.entry resolves to compiled JS in dist/tools/plugins/
- *
- * Each plugin module must export:
- *   export async function run(input: unknown): Promise<string>
+ * v7: enriched manifest with examples, richer buildToolsBlock() for LLM reasoning.
  */
 
 import { readdir, readFile } from 'fs/promises';
@@ -24,10 +18,11 @@ export interface ToolManifest {
   displayName?: string;
   description: string;
   version: string;
-  /** JS entry point (relative to dist/tools/plugins/ or absolute). */
   entry: string;
   enabled: boolean;
-  /** Keywords that trigger this tool via rule-based matching. */
+  /** Usage examples injected into the LLM prompt for better tool selection. */
+  examples?: string[];
+  /** Legacy rule-based triggers (kept as fallback). */
   triggers?: string[];
   inputSchema?: {
     type: string;
@@ -52,8 +47,6 @@ export class ToolRegistry {
     const root = projectRoot ?? process.cwd();
     this.installedDir = join(root, 'tools', 'installed');
   }
-
-  // ── Load all installed tools ───────────────────────────────────────────────
 
   async loadTools(): Promise<void> {
     this.registry.clear();
@@ -93,8 +86,6 @@ export class ToolRegistry {
         continue;
       }
 
-      // Resolve plugin module: try dist/tools/plugins/<name>.plugin.js first,
-      // then the manifest entry path.
       const runFn = await this.resolveRunFunction(manifest, toolDir);
       if (!runFn) {
         errors.push(`${toolDir}: could not load run() — entry not found`);
@@ -119,12 +110,10 @@ export class ToolRegistry {
     manifest: ToolManifest,
     toolDir: string
   ): Promise<((input: unknown) => Promise<string>) | null> {
-    // Use the project root derived from installedDir (…/tools/installed → …/)
     const { join: pjoin, resolve: presolve } = await import('path');
     const cwd = pjoin(this.installedDir, '..', '..');
+    const pluginName = manifest.name;
 
-    // Strategy 1: compiled plugin file in dist/tools/plugins/
-    const pluginName = manifest.name; // e.g. "web-fetch"
     const distPlugin = pjoin(cwd, 'dist', 'tools', 'plugins', `${pluginName}.plugin.js`);
     if (existsSync(distPlugin)) {
       try {
@@ -135,7 +124,6 @@ export class ToolRegistry {
       }
     }
 
-    // Strategy 2: manifest.entry relative to tools/installed/<toolDir>/
     const entryPath = presolve(this.installedDir, toolDir, manifest.entry);
     if (existsSync(entryPath)) {
       try {
@@ -146,7 +134,6 @@ export class ToolRegistry {
       }
     }
 
-    // Strategy 3: src/tools/plugins/ (for ts-node dev mode)
     const srcPlugin = pjoin(cwd, 'src', 'tools', 'plugins', `${pluginName}.plugin.ts`);
     if (existsSync(srcPlugin)) {
       try {
@@ -186,7 +173,7 @@ export class ToolRegistry {
     return this.loaded;
   }
 
-  // ── Enable / disable (updates manifest.json on disk) ──────────────────────
+  // ── Enable / disable ───────────────────────────────────────────────────────
 
   async enableTool(name: string): Promise<void> {
     const manifestPath = join(this.installedDir, name, 'manifest.json');
@@ -196,7 +183,6 @@ export class ToolRegistry {
     manifest.enabled = true;
     const { writeFile } = await import('fs/promises');
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-    // Reload this tool
     await this.loadTools();
     logger.info('tool enabled', { name });
   }
@@ -213,12 +199,8 @@ export class ToolRegistry {
     logger.info('tool disabled', { name });
   }
 
-  // ── Trigger-based lookup ───────────────────────────────────────────────────
+  // ── Legacy rule-based trigger lookup (kept as fast-path fallback) ─────────
 
-  /**
-   * Find a tool whose triggers match the user input.
-   * Returns the first match (registry insertion order = load order).
-   */
   findByTrigger(input: string): RegisteredTool | null {
     const lower = input.toLowerCase();
     for (const tool of this.registry.values()) {
@@ -230,24 +212,82 @@ export class ToolRegistry {
     return null;
   }
 
-  // ── Prompt injection string ────────────────────────────────────────────────
+  // ── Rich LLM tool prompt block ────────────────────────────────────────────
 
+  /**
+   * Generates a detailed, structured tool description block injected into
+   * the system prompt. The LLM uses this to autonomously decide which tool
+   * to call and with what parameters.
+   *
+   * Format follows the spec in v7 requirements.
+   */
   buildToolsBlock(): string | null {
     if (this.registry.size === 0) return null;
-    const lines = [...this.registry.values()].map((t) => {
-      const schema = t.manifest.inputSchema?.properties
-        ? Object.keys(t.manifest.inputSchema.properties).join(', ')
-        : 'query';
-      return `- ${t.manifest.name}(${schema}): ${t.manifest.description}`;
-    });
-    return [
+
+    const sections: string[] = [
       '## AVAILABLE TOOLS',
-      '> You may suggest a tool call in your response using JSON:',
-      '> `{"tool":"<name>","input":{"query":"..."}}`',
-      '> The system will execute it and return the result.',
       '',
-      ...lines,
+      'You have access to the following tools. When a user request requires',
+      'real-time data, system information, or an API call, respond ONLY with',
+      'a JSON object in this EXACT format (no other text):',
       '',
-    ].join('\n');
+      '```json',
+      '{"type":"tool_call","tool":"<tool-name>","input":{"<param>":"<value>"}}',
+      '```',
+      '',
+      'If NO tool is needed, respond ONLY with:',
+      '',
+      '```json',
+      '{"type":"final_response","content":"<your answer here>"}',
+      '```',
+      '',
+      '---',
+    ];
+
+    let toolIndex = 1;
+    for (const tool of this.registry.values()) {
+      const m = tool.manifest;
+      const props = m.inputSchema?.properties ?? {};
+      const required = m.inputSchema?.required ?? [];
+
+      const inputLines: string[] = ['{'];
+      for (const [key, schema] of Object.entries(props)) {
+        const req = required.includes(key) ? ' (required)' : ' (optional)';
+        inputLines.push(`  "${key}": "${schema.type}"${req}${schema.description ? ' // ' + schema.description : ''}`);
+      }
+      if (Object.keys(props).length === 0) inputLines.push('  // no input required');
+      inputLines.push('}');
+
+      const exampleLines = (m.examples ?? []).slice(0, 3).map((ex) => `  - "${ex}"`);
+
+      sections.push('');
+      sections.push(`### ${toolIndex}. ${m.name}`);
+      sections.push(`**Description:** ${m.description}`);
+      sections.push('');
+      sections.push('**Input schema:**');
+      sections.push('```');
+      sections.push(...inputLines);
+      sections.push('```');
+      if (exampleLines.length > 0) {
+        sections.push('');
+        sections.push('**When to use (examples):**');
+        sections.push(...exampleLines);
+      }
+      sections.push('');
+      sections.push('---');
+      toolIndex++;
+    }
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Short one-line summary for system context injection (used in SYSTEM CONTEXT block).
+   */
+  buildShortToolsSummary(): string {
+    if (this.registry.size === 0) return 'No tools available.';
+    return this.listTools()
+      .map((t) => `${t.manifest.name}: ${t.manifest.description}`)
+      .join(' | ');
   }
 }

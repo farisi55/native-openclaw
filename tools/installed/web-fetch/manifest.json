@@ -1,15 +1,22 @@
 {
   "name": "web-fetch",
   "displayName": "Web Fetch",
-  "description": "Fetch news headlines or any URL from the internet",
+  "description": "Fetch real-time information from the internet: news, headlines, or any URL",
   "version": "1.0.0",
   "entry": "index.js",
   "enabled": true,
-  "triggers": ["news", "headline", "fetch url", "open url", "browse", "current events", "happening today"],
+  "examples": [
+    "What is the latest news today?",
+    "What is happening in the world right now?",
+    "Fetch the top headlines",
+    "Get current AI news",
+    "Browse https://example.com",
+    "What are the latest developments in technology?"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {
-      "query": { "type": "string", "description": "Search query or URL to fetch" }
+      "query": { "type": "string", "description": "Search query, topic, or URL to fetch" }
     },
     "required": ["query"]
   }

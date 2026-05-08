@@ -1,54 +1,24 @@
 /**
  * tools/tool-executor.ts
- * Smart tool execution engine combining:
- *   A) Rule-based trigger matching (instant, no LLM)
- *   B) LLM-assisted tool selection (parses JSON response from LLM)
+ * v7: LLM-driven execution only. Rule-based keyword matching removed.
  *
- * The orchestrator calls tryExecuteTool() before the LLM turn.
- * If no rule match, the tool list is injected into the system prompt
- * so the LLM can suggest a tool call in its response.
+ * Responsibilities:
+ *   - tryRuleBased()   → kept as fast-path for deterministic inputs only
+ *   - tryLLMAssisted() → parse LLM response for tool calls (legacy compat)
+ *   - execute()        → direct tool execution given parsed call
  */
 
 import type { ToolRegistry } from './tool-registry';
+import { parseLLMResponse, validateToolCall } from '../agents/tool-parser';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('tools:executor');
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export interface ToolExecutionResult {
   handled: boolean;
   response?: string;
-  toolName?: string;
+  toolName?: string | undefined;
 }
-
-// ─── LLM tool call pattern ────────────────────────────────────────────────────
-
-/**
- * Detects if an LLM response contains a tool call suggestion:
- * {"tool":"web-fetch","input":{"query":"latest news"}}
- */
-// Matches {"tool":"name","input":{...}} with one level of nested braces
-const TOOL_CALL_RE = /\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/;
-
-export function parseLLMToolCall(
-  llmResponse: string
-): { tool: string; input: Record<string, unknown> } | null {
-  const match = TOOL_CALL_RE.exec(llmResponse);
-  if (!match) return null;
-  try {
-    const jsonStr = match[0];
-    const parsed = JSON.parse(jsonStr) as { tool?: string; input?: Record<string, unknown> };
-    if (typeof parsed.tool === 'string') {
-      return { tool: parsed.tool, input: parsed.input ?? {} };
-    }
-  } catch {
-    // JSON parse failed — not a tool call
-  }
-  return null;
-}
-
-// ─── Executor ─────────────────────────────────────────────────────────────────
 
 export class ToolExecutor {
   private readonly registry: ToolRegistry;
@@ -58,20 +28,18 @@ export class ToolExecutor {
   }
 
   /**
-   * Try to handle the user input via rule-based trigger matching.
-   * Returns { handled: false } if no tool matches — caller should use LLM.
+   * Fallback rule-based matching (kept only for deterministic fast-path cases
+   * when tools block is not in the system prompt). Removed keyword hardcoding.
    */
   async tryRuleBased(userInput: string): Promise<ToolExecutionResult> {
     const tool = this.registry.findByTrigger(userInput);
     if (!tool) return { handled: false };
 
-    logger.info('tool triggered (rule-based)', { tool: tool.manifest.name });
-
+    logger.info('tool triggered (rule-based fallback)', { tool: tool.manifest.name });
     try {
       const response = await tool.run({ query: userInput });
       return { handled: true, response, toolName: tool.manifest.name };
     } catch (e) {
-      logger.warn('tool execution failed', { tool: tool.manifest.name, error: String(e) });
       return {
         handled: true,
         response: `❌ Tool "${tool.manifest.name}" failed: ${String(e)}`,
@@ -81,30 +49,59 @@ export class ToolExecutor {
   }
 
   /**
-   * Try to execute a tool call suggested in an LLM response.
-   * Called AFTER LLM responds if the response contains a JSON tool call.
+   * Parse an LLM response for a tool call and execute it.
+   * Used for single-step (non-loop) execution in legacy paths.
    */
   async tryLLMAssisted(llmResponse: string): Promise<ToolExecutionResult> {
-    const call = parseLLMToolCall(llmResponse);
-    if (!call) return { handled: false };
+    const parsed = parseLLMResponse(llmResponse);
+    if (!parsed || parsed.type !== 'tool_call') return { handled: false };
 
-    const tool = this.registry.getTool(call.tool);
-    if (!tool) {
-      logger.warn('LLM suggested unknown tool', { tool: call.tool });
+    const availableTools = this.registry.listTools().map((t) => t.manifest.name);
+    const validationError = validateToolCall(parsed, availableTools);
+    if (validationError) {
+      logger.warn('LLM-assisted: invalid tool call', { error: validationError });
       return { handled: false };
     }
 
-    logger.info('tool triggered (LLM-assisted)', { tool: call.tool, input: call.input });
+    const tool = this.registry.getTool(parsed.tool);
+    if (!tool) return { handled: false };
 
+    logger.info('tool triggered (LLM-assisted)', { tool: parsed.tool, input: parsed.input });
     try {
-      const response = await tool.run(call.input);
-      return { handled: true, response, toolName: call.tool };
+      const response = await tool.run(parsed.input);
+      return { handled: true, response, toolName: parsed.tool };
     } catch (e) {
       return {
         handled: true,
-        response: `❌ Tool "${call.tool}" failed: ${String(e)}`,
-        toolName: call.tool,
+        response: `❌ Tool "${parsed.tool}" failed: ${String(e)}`,
+        toolName: parsed.tool,
+      };
+    }
+  }
+
+  /**
+   * Directly execute a tool by name with given input.
+   */
+  async execute(
+    toolName: string,
+    input: Record<string, unknown>
+  ): Promise<ToolExecutionResult> {
+    const tool = this.registry.getTool(toolName);
+    if (!tool) {
+      return { handled: false };
+    }
+    try {
+      const response = await tool.run(input);
+      return { handled: true, response, toolName };
+    } catch (e) {
+      return {
+        handled: true,
+        response: `❌ Tool "${toolName}" failed: ${String(e)}`,
+        toolName,
       };
     }
   }
 }
+
+/** Re-export parseLLMToolCall as alias for backward compat */
+export { parseLLMResponse as parseLLMToolCall } from '../agents/tool-parser';

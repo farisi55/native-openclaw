@@ -2,7 +2,6 @@
  * agents/index.ts
  * Barrel — re-exports the agent layer.
  */
-
 export { PromptBuilder, buildSystemPrompt } from './prompt-builder';
 export type { PromptBuilderOptions } from './prompt-builder';
 
@@ -21,5 +20,8 @@ export type { ActionContext, ActionResult } from './action-handler';
 export { extractMemory } from './memory-extractor';
 export type { MemoryUpdate, MemoryScope } from './memory-extractor';
 
-export { parseLLMToolCall } from '../tools/tool-executor';
-export type { ToolExecutionResult } from '../tools/tool-executor';
+export { parseLLMResponse, validateToolCall } from './tool-parser';
+export type { ParsedToolCall, ParsedFinalResponse, ParsedLLMResponse } from './tool-parser';
+
+export { ToolLoop } from './tool-loop';
+export type { ToolLoopOptions, ToolLoopResult } from './tool-loop';

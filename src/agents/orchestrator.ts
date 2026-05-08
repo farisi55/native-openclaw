@@ -1,26 +1,24 @@
 /**
  * agents/orchestrator.ts
- * Main agent loop.
+ * v7: LLM-driven autonomous tool selection via ToolLoop.
  *
  * Turn flow:
  *   input →
- *     memory-extractor      → persist learned facts
- *     tool-executor (rules) → if rule match: execute, return immediately
- *     action-handler        → if CLI action: execute, return immediately
- *     build prompt          → memory + context + tools + base + skills
- *     call LLM              → persist messages
- *     tool-executor (LLM)   → if LLM suggests tool call: execute, append result
- *     return
+ *     memory-extractor       → persist learned facts
+ *     action-handler         → if CLI action: return immediately
+ *     build system prompt    → memory + context + tools(rich) + base + skills
+ *     ToolLoop.run()         → LLM reasoning → tool calls → final answer
+ *     persist messages       → return
  */
 
 import type { IProvider, ChatResponse } from '../types/provider';
 import type { Message } from '../types/message';
-import { createMessage, extractText } from '../types/message';
+import { createMessage } from '../types/message';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { MemoryManager } from '../storage/memory-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
-import { ToolExecutor } from '../tools/tool-executor';
+import { ToolLoop } from './tool-loop';
 import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
@@ -31,14 +29,14 @@ import { getOptionalEnv } from '../config/env';
 
 const logger = createLogger('agent:orchestrator');
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export interface OrchestratorOptions {
   baseSystemPrompt?: string;
   maxTurns?: number;
   maxMessages?: number;
   temperature?: number;
   maxTokens?: number;
+  /** Max tool steps per turn. Default: 3. */
+  maxToolSteps?: number;
 }
 
 export interface TurnInput {
@@ -57,16 +55,16 @@ export interface TurnResult {
   newSession: boolean;
   wasAction: boolean;
   toolName?: string | undefined;
+  toolsUsed?: string[];
+  toolSteps?: number;
 }
-
-// ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 export class Orchestrator {
   private readonly sessions: SessionManager;
   private readonly skills: SkillRegistry;
   private readonly memory: MemoryManager;
   private readonly toolRegistry: ToolRegistry;
-  private readonly toolExecutor: ToolExecutor;
+  private readonly toolLoop: ToolLoop;
   private readonly opts: Required<OrchestratorOptions>;
   private _activeSessionId: string | null = null;
 
@@ -77,18 +75,23 @@ export class Orchestrator {
     toolRegistry: ToolRegistry,
     opts: OrchestratorOptions = {}
   ) {
-    this.sessions = sessions;
-    this.skills = skills;
-    this.memory = memory;
+    this.sessions     = sessions;
+    this.skills       = skills;
+    this.memory       = memory;
     this.toolRegistry = toolRegistry;
-    this.toolExecutor = new ToolExecutor(toolRegistry);
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
-      maxTurns:         opts.maxTurns ?? 20,
-      maxMessages:      opts.maxMessages ?? 40,
-      temperature:      opts.temperature ?? 0.7,
-      maxTokens:        opts.maxTokens ?? 4096,
+      maxTurns:         opts.maxTurns         ?? 20,
+      maxMessages:      opts.maxMessages      ?? 40,
+      temperature:      opts.temperature      ?? 0.7,
+      maxTokens:        opts.maxTokens        ?? 4096,
+      maxToolSteps:     opts.maxToolSteps     ?? 3,
     };
+    this.toolLoop = new ToolLoop(toolRegistry, {
+      maxSteps:    this.opts.maxToolSteps,
+      temperature: this.opts.temperature,
+      maxTokens:   this.opts.maxTokens,
+    });
   }
 
   async turn(input: TurnInput): Promise<TurnResult> {
@@ -131,17 +134,7 @@ export class Orchestrator {
       }
     }
 
-    // ── 4. Tool executor — rule-based (before LLM, zero latency) ─────────────
-    const ruleResult = await this.toolExecutor.tryRuleBased(input.userInput);
-    if (ruleResult.handled) {
-      session = await this.persistExchange(session.id, input.userInput, ruleResult.response ?? '');
-      logger.info('tool handled (rule)', { tool: ruleResult.toolName });
-      const ret: TurnResult = { assistantText: ruleResult.response ?? '', session, newSession, wasAction: true };
-      if (ruleResult.toolName !== undefined) ret.toolName = ruleResult.toolName;
-      return ret;
-    }
-
-    // ── 5. Action handler ─────────────────────────────────────────────────────
+    // ── 4. Action handler ─────────────────────────────────────────────────────
     const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
     const actionCtx: ActionContext = {
       skillRegistry:    this.skills,
@@ -150,7 +143,6 @@ export class Orchestrator {
       activeSessionId:  this._activeSessionId,
       onSessionCleared: () => { this._activeSessionId = null; },
     };
-
     const actionResult = await handleAction(input.userInput, actionCtx);
     if (actionResult.handled) {
       session = await this.persistExchange(session.id, input.userInput, actionResult.response ?? '');
@@ -160,81 +152,77 @@ export class Orchestrator {
       return { assistantText: actionResult.response ?? '', session, newSession, wasAction: true };
     }
 
-    // ── 6. Build system prompt ────────────────────────────────────────────────
+    // ── 5. Build system prompt ────────────────────────────────────────────────
     const activeSkills = this.skills.activeSkills();
     const memoryBlock  = await this.memory.buildMemoryBlock(session.id);
-    const toolsBlock   = this.toolRegistry.buildToolsBlock();
+    const toolsBlock   = this.toolRegistry.buildToolsBlock();   // rich LLM-facing block
     const sysCtx: SystemContextInput = {
       provider: input.provider, model: input.model,
       skillRegistry: this.skills, sessionId: session.id,
     };
-
     const systemPrompt = buildSystemPrompt({
-      basePrompt:    this.opts.baseSystemPrompt,
-      skills:        activeSkills,
+      basePrompt: this.opts.baseSystemPrompt,
+      skills:     activeSkills,
       systemContext: sysCtx,
       memoryBlock,
       toolsBlock,
     });
 
-    // ── 7. Persist user message ───────────────────────────────────────────────
+    // ── 6. Persist user message ───────────────────────────────────────────────
     const userMessage: Message = createMessage({ role: 'user', content: input.userInput });
     const appendUser = await this.sessions.appendMessage({ sessionId: session.id, message: userMessage });
     if (!appendUser.ok) throw appendUser.error;
     session = appendUser.value;
 
-    // ── 8. Sliding window ─────────────────────────────────────────────────────
+    // ── 7. Assemble sliding window ────────────────────────────────────────────
     const { messages: assembled, dropped } = assembleMessages({
       messages: session.messages, maxMessages: this.opts.maxMessages,
     });
     if (dropped > 0) logger.debug('messages dropped for context window', { dropped });
 
-    // ── 9. Call LLM ───────────────────────────────────────────────────────────
-    logger.debug('calling provider', {
+    // ── 8. LLM-driven tool loop ───────────────────────────────────────────────
+    logger.debug('starting tool-loop', {
       provider: input.provider.id, model: input.model,
-      messageCount: assembled.length, hasMemory: Boolean(memoryBlock),
-      hasTools: Boolean(toolsBlock),
+      messageCount: assembled.length, hasTools: Boolean(toolsBlock),
+      hasMemory: Boolean(memoryBlock),
     });
 
-    const chatResponse = await input.provider.chat({
-      model: input.model, messages: assembled, systemPrompt,
-      temperature: this.opts.temperature, maxTokens: this.opts.maxTokens,
-      ...(input.signal !== undefined && { signal: input.signal }),
+    const loopResult = await this.toolLoop.run(
+      input.provider,
+      input.model,
+      assembled,
+      systemPrompt,
+      input.signal,
+    );
+
+    logger.info('tool-loop complete', {
+      toolSteps: loopResult.toolSteps,
+      toolsUsed: loopResult.toolsUsed,
+      sessionId: session.id,
     });
 
-    logger.debug('provider responded', { model: chatResponse.model, latencyMs: chatResponse.latencyMs });
-
-    // ── 10. LLM-assisted tool execution ──────────────────────────────────────
-    const llmText = extractText(chatResponse.message.content);
-    const llmToolResult = await this.toolExecutor.tryLLMAssisted(llmText);
-
-    let finalText = llmText;
-    let finalToolName: string | undefined;
-
-    if (llmToolResult.handled && llmToolResult.response) {
-      // Replace LLM response with actual tool output
-      finalText = llmToolResult.response;
-      finalToolName = llmToolResult.toolName;
-      logger.info('tool handled (LLM-assisted)', { tool: finalToolName });
-    }
-
-    // ── 11. Persist assistant message ─────────────────────────────────────────
-    const finalMsg = createMessage({ role: 'assistant', content: finalText });
+    // ── 9. Persist assistant response ─────────────────────────────────────────
+    const finalMsg = createMessage({ role: 'assistant', content: loopResult.finalText });
     const appendAssistant = await this.sessions.appendMessage({ sessionId: session.id, message: finalMsg });
     if (!appendAssistant.ok) throw appendAssistant.error;
     session = appendAssistant.value;
     this._activeSessionId = session.id;
 
-    logger.info('turn complete', { sessionId: session.id, latencyMs: chatResponse.latencyMs });
-
     const result: TurnResult = {
-      chatResponse, assistantText: finalText, session, newSession, wasAction: false,
+      assistantText: loopResult.finalText,
+      session,
+      newSession,
+      wasAction: false,
+      toolSteps: loopResult.toolSteps,
+      toolsUsed: loopResult.toolsUsed,
     };
-    if (finalToolName !== undefined) result.toolName = finalToolName;
+    if (loopResult.toolsUsed.length > 0) {
+      result.toolName = loopResult.toolsUsed[loopResult.toolsUsed.length - 1];
+    }
     return result;
   }
 
-  // ── Helper: persist user + assistant message pair ────────────────────────
+  // ── Helper: persist user + assistant pair ─────────────────────────────────
 
   private async persistExchange(sessionId: string, userInput: string, assistantText: string): Promise<Session> {
     const userMsg = createMessage({ role: 'user',      content: userInput });

@@ -1,15 +1,22 @@
 {
   "name": "system-time",
   "displayName": "System Time",
-  "description": "Get current time, date, uptime, and system information",
+  "description": "Get the current local server time, date, system uptime, and OS information",
   "version": "1.0.0",
   "entry": "index.js",
   "enabled": true,
-  "triggers": ["what time", "current time", "what date", "today date", "what day", "uptime", "system info", "os info"],
+  "examples": [
+    "What time is it now?",
+    "What is today's date?",
+    "What day is it?",
+    "How long has the system been running?",
+    "Tell me the current time",
+    "What is the server uptime?"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {
-      "query": { "type": "string", "description": "What to get: time | date | uptime | platform" }
+      "query": { "type": "string", "description": "What to retrieve: time | date | uptime | platform" }
     },
     "required": ["query"]
   }

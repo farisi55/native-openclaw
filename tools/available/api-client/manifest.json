@@ -1,15 +1,21 @@
 {
   "name": "api-client",
   "displayName": "API Client",
-  "description": "Make GET requests to an internal or external API endpoint",
+  "description": "Make GET requests to internal or external REST API endpoints",
   "version": "1.0.0",
   "entry": "index.js",
   "enabled": true,
-  "triggers": ["get data from api", "call api", "fetch api", "api get", "query /api/"],
+  "examples": [
+    "Get data from /api/users",
+    "Fetch /api/default/lids/123456789@lid",
+    "Call API endpoint /api/products",
+    "Query the REST API at /api/status",
+    "Get data from API /api/default/lids/123456789@lid"
+  ],
   "inputSchema": {
     "type": "object",
     "properties": {
-      "path": { "type": "string", "description": "API path or full URL, e.g. /api/users" }
+      "path": { "type": "string", "description": "API path (e.g. /api/users) or full URL" }
     },
     "required": ["path"]
   }
