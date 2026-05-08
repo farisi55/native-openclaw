@@ -8,6 +8,7 @@ import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
 import { SkillRegistry } from './skills';
 import { SessionManager, SettingsManager, MemoryManager } from './storage';
+import { ToolRegistry } from './tools/tool-registry';
 import { Orchestrator } from './agents';
 import { startCLI } from './cli';
 
@@ -38,14 +39,21 @@ async function bootstrap(): Promise<void> {
   const settings = new SettingsManager(config.storage.dataDir);
   const memory   = new MemoryManager(config.storage.dataDir);
 
-  // Log if agent has a stored name
+  // Log restored identity
   const agentName = await memory.getGlobalValue('agentName');
   if (agentName) {
-    logger.info(`Agent identity restored from memory: "${String(agentName)}"`);
+    logger.info(`Agent identity restored: "${String(agentName)}"`);
   }
 
-  // Orchestrator — now takes memory as third argument
-  const orchestrator = new Orchestrator(sessions, skillRegistry, memory, {
+  // Plugin tool registry — auto-discover from tools/installed/
+  const toolRegistry = new ToolRegistry(process.cwd());
+  await toolRegistry.loadTools();
+  logger.info(`Tools ready (${toolRegistry.size})`, {
+    tools: toolRegistry.listTools().map((t) => t.manifest.name),
+  });
+
+  // Orchestrator — now takes toolRegistry
+  const orchestrator = new Orchestrator(sessions, skillRegistry, memory, toolRegistry, {
     baseSystemPrompt: config.agent.systemPrompt,
     maxTurns:         config.agent.maxTurns,
     temperature:      config.agent.temperature,
@@ -53,7 +61,7 @@ async function bootstrap(): Promise<void> {
   });
 
   // CLI
-  await startCLI({ providers, skillRegistry, sessions, settings, orchestrator });
+  await startCLI({ providers, skillRegistry, sessions, settings, toolRegistry, orchestrator });
 }
 
 bootstrap().catch((err: unknown) => {

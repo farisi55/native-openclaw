@@ -1,10 +1,11 @@
 /**
  * agents/prompt-builder.ts
- * Assemble the final system prompt from:
- *   1. MEMORY block  (persistent facts — highest priority)
+ * Assemble the final system prompt from (in order):
+ *   1. MEMORY block         (persistent facts — highest priority)
  *   2. SYSTEM CONTEXT block (provider, model, skills awareness)
- *   3. Base system prompt
- *   4. Active skill blocks
+ *   3. TOOLS AVAILABLE block (injected when plugin registry has tools)
+ *   4. Base system prompt
+ *   5. Active skill blocks
  */
 
 import type { Skill } from '../skills/loader';
@@ -14,14 +15,10 @@ export interface PromptBuilderOptions {
   basePrompt: string;
   skills: Skill[];
   maxSkillBodyLength?: number;
-  /** Auto-generated system context (provider, model, skills list). */
   systemContext?: SystemContextInput;
-  /**
-   * Pre-rendered MEMORY block string from MemoryManager.buildMemoryBlock().
-   * When provided, it is injected FIRST in the system prompt so the LLM
-   * always honours stored facts (like agent name) over its defaults.
-   */
   memoryBlock?: string | null;
+  /** Pre-rendered tools block from ToolRegistry.buildToolsBlock(). */
+  toolsBlock?: string | null;
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -36,16 +33,15 @@ function renderSkillBlock(skill: Skill, maxBodyLen: number): string {
     lines.push(`_${skill.description}_`);
     lines.push('');
   }
-  if (skill.body) {
-    lines.push(truncate(skill.body, maxBodyLen));
-  }
+  if (skill.body) lines.push(truncate(skill.body, maxBodyLen));
   return lines.join('\n');
 }
 
 export class PromptBuilder {
-  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock'>> & {
+  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock' | 'toolsBlock'>> & {
     systemContext?: SystemContextInput;
     memoryBlock?: string | null;
+    toolsBlock?: string | null;
   };
 
   constructor(opts: PromptBuilderOptions) {
@@ -53,28 +49,25 @@ export class PromptBuilder {
   }
 
   build(): string {
-    const { basePrompt, skills, maxSkillBodyLength, systemContext, memoryBlock } = this.opts;
-
+    const { basePrompt, skills, maxSkillBodyLength, systemContext, memoryBlock, toolsBlock } = this.opts;
     const parts: string[] = [];
 
-    // 1. MEMORY — injected FIRST so facts always override LLM defaults
-    if (memoryBlock) {
-      parts.push(memoryBlock.trim());
-    }
+    // 1. MEMORY
+    if (memoryBlock) parts.push(memoryBlock.trim());
 
-    // 2. System context (self-awareness: provider, model, skills)
-    if (systemContext) {
-      parts.push(getSystemContext(systemContext));
-    }
+    // 2. System context
+    if (systemContext) parts.push(getSystemContext(systemContext));
 
-    // 3. Base system prompt
+    // 3. Tools block
+    if (toolsBlock) parts.push(toolsBlock.trim());
+
+    // 4. Base prompt
     parts.push(basePrompt.trim());
 
-    // 4. Active skill blocks
+    // 5. Skill blocks
     if (skills.length > 0) {
       const blocks = skills.map((s) => renderSkillBlock(s, maxSkillBodyLength));
-      const skillSection = ['## Active Skills', '', blocks.join('\n\n---\n\n')].join('\n');
-      parts.push(skillSection);
+      parts.push(['## Active Skills', '', blocks.join('\n\n---\n\n')].join('\n'));
     }
 
     return parts.join('\n\n');
@@ -86,6 +79,7 @@ export class PromptBuilder {
     skillIds: string[];
     hasContext: boolean;
     hasMemory: boolean;
+    hasTools: boolean;
   } {
     return {
       baseLength: this.opts.basePrompt.length,
@@ -93,6 +87,7 @@ export class PromptBuilder {
       skillIds: this.opts.skills.map((s) => s.id),
       hasContext: Boolean(this.opts.systemContext),
       hasMemory: Boolean(this.opts.memoryBlock),
+      hasTools: Boolean(this.opts.toolsBlock),
     };
   }
 }

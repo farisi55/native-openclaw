@@ -1,0 +1,16 @@
+{
+  "name": "system-time",
+  "displayName": "System Time",
+  "description": "Get current time, date, uptime, and system information",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "triggers": ["what time", "current time", "what date", "today date", "what day", "uptime", "system info", "os info"],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "What to get: time | date | uptime | platform" }
+    },
+    "required": ["query"]
+  }
+}

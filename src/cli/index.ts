@@ -8,11 +8,12 @@ import { stdin as input, stdout as output, exit } from 'process';
 import type { ProviderRegistry, IProvider } from '../types/provider';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager } from '../storage/session-manager';
+import type { ToolRegistry } from '../tools/tool-registry';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { Orchestrator } from '../agents/orchestrator';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
-  cmdSession, cmdProvider, cmdSettings,
+  cmdSession, cmdProvider, cmdSettings, cmdTools,
   type CLIContext,
 } from './commands';
 
@@ -96,6 +97,7 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'session': case 's':   await cmdSession(ctx, args); break;
     case 'provider': case 'p':  await cmdProvider(ctx, args); break;
     case 'settings':            await cmdSettings(ctx, args); break;
+    case 'tools': case 't':     await cmdTools(ctx, args); break;
     case 'exit': case 'quit': case 'q':
       output.write(c('dim', '\n  Goodbye.\n\n'));
       exit(0);
@@ -110,11 +112,12 @@ export interface CLIRunnerOptions {
   skillRegistry: SkillRegistry;
   sessions: SessionManager;
   settings: SettingsManager;
+  toolRegistry: ToolRegistry;
   orchestrator: Orchestrator;
 }
 
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
-  const { providers, skillRegistry, sessions, settings, orchestrator } = opts;
+  const { providers, skillRegistry, sessions, settings, toolRegistry, orchestrator } = opts;
 
   if (providers.size === 0) {
     output.write(c('red', '\n  No providers available. Check your .env configuration.\n\n'));
@@ -169,6 +172,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     skillRegistry,
     sessions,
     settings,
+    toolRegistry,
     get activeProvider()  { return activeProvider!; },
     get activeModel()     { return activeModel; },
     get activeSessionId() { return activeSessionId; },

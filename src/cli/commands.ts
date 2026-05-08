@@ -7,6 +7,8 @@ import type { IProvider, ProviderRegistry } from '../types/provider';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { SettingsManager } from '../storage/settings-manager';
+import type { ToolRegistry } from '../tools/tool-registry';
+import { installTool, listAvailable } from '../tools/tool-installer';
 
 const C = {
   reset:   '\x1b[0m',
@@ -36,6 +38,7 @@ export interface CLIContext {
   skillRegistry: SkillRegistry;
   sessions: SessionManager;
   settings: SettingsManager;
+  toolRegistry: ToolRegistry;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -70,6 +73,10 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/settings')}                     Show persistent settings`,
     `  ${c('yellow', '/settings default-model <id>')}   Set default model for current provider`,
     `  ${c('yellow', '/settings default-provider <id>')}  Set default provider`,
+    `  ${c('yellow', '/tools')}                         List all installed tools`,
+    `  ${c('yellow', '/tools install <name>')}          Install a tool from tools/available/`,
+    `  ${c('yellow', '/tools enable <name>')}           Enable a disabled tool`,
+    `  ${c('yellow', '/tools disable <name>')}          Disable a tool (keeps it installed)`,
     `  ${c('yellow', '/exit')}                          Quit the application`,
     '',
     c('dim', `  ${hr()}`),
@@ -433,5 +440,82 @@ export async function cmdSettings(ctx: CLIContext, args: string[]): Promise<void
   process.stdout.write(c('dim', '  Commands:\n'));
   process.stdout.write(c('dim', '    /settings default-model <model-id>       ← saves for current provider\n'));
   process.stdout.write(c('dim', '    /settings default-provider <provider-id>\n'));
+  process.stdout.write('\n');
+}
+
+// ─── /tools ───────────────────────────────────────────────────────────────────
+
+export async function cmdTools(ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, name] = args;
+
+  // /tools install <name>
+  if (action === 'install' && name) {
+    const result = await installTool(name);
+    if (!result.ok) {
+      process.stdout.write(c('red', `\n  ❌ ${result.message}\n\n`));
+      return;
+    }
+    await ctx.toolRegistry.loadTools();
+    process.stdout.write(c('green', `\n  ✅ ${result.message}\n`));
+    process.stdout.write(c('dim', `  Registry reloaded: ${ctx.toolRegistry.size} tool(s) active.\n\n`));
+    return;
+  }
+
+  // /tools enable <name>
+  if (action === 'enable' && name) {
+    try {
+      await ctx.toolRegistry.enableTool(name);
+      process.stdout.write(c('green', `\n  ✅ Tool "${name}" enabled.\n\n`));
+    } catch (e) {
+      process.stdout.write(c('red', `\n  ❌ ${String(e)}\n\n`));
+    }
+    return;
+  }
+
+  // /tools disable <name>
+  if (action === 'disable' && name) {
+    try {
+      await ctx.toolRegistry.disableTool(name);
+      process.stdout.write(c('yellow', `\n  ⬜ Tool "${name}" disabled.\n\n`));
+    } catch (e) {
+      process.stdout.write(c('red', `\n  ❌ ${String(e)}\n\n`));
+    }
+    return;
+  }
+
+  // /tools — list all
+  const tools = ctx.toolRegistry.listTools();
+  const available = listAvailable();
+
+  process.stdout.write('\n');
+  process.stdout.write(`  ${c('bold', 'Installed Tools')}\n`);
+  process.stdout.write(c('dim', `  ${'─'.repeat(56)}\n`));
+
+  if (tools.length === 0) {
+    process.stdout.write(c('dim', '  No tools loaded.\n'));
+  } else {
+    for (const tool of tools) {
+      const m = tool.manifest;
+      const status = m.enabled ? c('green', ' ● active') : c('dim', ' ○ off   ');
+      process.stdout.write(
+        `  ${status}  ${c('bold', m.name.padEnd(16))} ` +
+        `${c('dim', `v${m.version}`).padEnd(12)}  ${c('dim', m.description)}\n`
+      );
+    }
+  }
+
+  if (available.length > 0) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Available to Install')}\n`);
+    process.stdout.write(c('dim', `  ${'─'.repeat(56)}\n`));
+    for (const name_ of available) {
+      const alreadyInstalled = ctx.toolRegistry.has(name_);
+      const marker = alreadyInstalled ? c('dim', '  (installed)') : '';
+      process.stdout.write(`    ${c('dim', name_)}${marker}\n`);
+    }
+  }
+
+  process.stdout.write('\n');
+  process.stdout.write(c('dim', '  /tools install <name>  |  /tools enable <name>  |  /tools disable <name>\n'));
   process.stdout.write('\n');
 }

@@ -4,11 +4,13 @@
  *
  * Turn flow:
  *   input →
- *     memory-extractor  → persist learned facts
- *     tool-handler      → if tool match: return immediately (no LLM)
- *     action-handler    → if CLI action: return immediately (no LLM)
- *     build prompt      → memory + system-context + base + skills
- *     call LLM          → persist messages → return
+ *     memory-extractor      → persist learned facts
+ *     tool-executor (rules) → if rule match: execute, return immediately
+ *     action-handler        → if CLI action: execute, return immediately
+ *     build prompt          → memory + context + tools + base + skills
+ *     call LLM              → persist messages
+ *     tool-executor (LLM)   → if LLM suggests tool call: execute, append result
+ *     return
  */
 
 import type { IProvider, ChatResponse } from '../types/provider';
@@ -17,10 +19,11 @@ import { createMessage, extractText } from '../types/message';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { MemoryManager } from '../storage/memory-manager';
+import type { ToolRegistry } from '../tools/tool-registry';
+import { ToolExecutor } from '../tools/tool-executor';
 import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
-import { handleTool } from './tool-handler';
 import { extractMemory } from './memory-extractor';
 import type { SystemContextInput } from './system-context';
 import { createLogger } from '../utils/logger';
@@ -62,6 +65,8 @@ export class Orchestrator {
   private readonly sessions: SessionManager;
   private readonly skills: SkillRegistry;
   private readonly memory: MemoryManager;
+  private readonly toolRegistry: ToolRegistry;
+  private readonly toolExecutor: ToolExecutor;
   private readonly opts: Required<OrchestratorOptions>;
   private _activeSessionId: string | null = null;
 
@@ -69,11 +74,14 @@ export class Orchestrator {
     sessions: SessionManager,
     skills: SkillRegistry,
     memory: MemoryManager,
+    toolRegistry: ToolRegistry,
     opts: OrchestratorOptions = {}
   ) {
     this.sessions = sessions;
     this.skills = skills;
     this.memory = memory;
+    this.toolRegistry = toolRegistry;
+    this.toolExecutor = new ToolExecutor(toolRegistry);
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
       maxTurns:         opts.maxTurns ?? 20,
@@ -84,7 +92,7 @@ export class Orchestrator {
   }
 
   async turn(input: TurnInput): Promise<TurnResult> {
-    // ── 1. Resolve or create session ─────────────────────────────────────────
+    // ── 1. Session ────────────────────────────────────────────────────────────
     let session: Session;
     let newSession = false;
 
@@ -110,10 +118,8 @@ export class Orchestrator {
 
     this._activeSessionId = session.id;
 
-    // ── 2. Resolve active skills ──────────────────────────────────────────────
-    if (input.skillIds !== undefined) {
-      this.skills.setActive(input.skillIds);
-    }
+    // ── 2. Skills ─────────────────────────────────────────────────────────────
+    if (input.skillIds !== undefined) this.skills.setActive(input.skillIds);
 
     // ── 3. Memory extraction ──────────────────────────────────────────────────
     const memUpdates = extractMemory(input.userInput);
@@ -125,20 +131,14 @@ export class Orchestrator {
       }
     }
 
-    // ── 4. Tool handler (before action handler and LLM) ───────────────────────
-    const toolResult = await handleTool(input.userInput);
-    if (toolResult.handled) {
-      const userMsg = createMessage({ role: 'user',      content: input.userInput });
-      const asstMsg = createMessage({ role: 'assistant', content: toolResult.response ?? '' });
-      const a1 = await this.sessions.appendMessage({ sessionId: session.id, message: userMsg });
-      if (!a1.ok) throw a1.error;
-      const a2 = await this.sessions.appendMessage({ sessionId: a1.value.id, message: asstMsg });
-      if (!a2.ok) throw a2.error;
-      session = a2.value;
-      logger.info('tool handled', { tool: toolResult.toolName });
-      const toolReturn: TurnResult = { assistantText: toolResult.response ?? '', session, newSession, wasAction: true };
-      if (toolResult.toolName !== undefined) toolReturn.toolName = toolResult.toolName;
-      return toolReturn;
+    // ── 4. Tool executor — rule-based (before LLM, zero latency) ─────────────
+    const ruleResult = await this.toolExecutor.tryRuleBased(input.userInput);
+    if (ruleResult.handled) {
+      session = await this.persistExchange(session.id, input.userInput, ruleResult.response ?? '');
+      logger.info('tool handled (rule)', { tool: ruleResult.toolName });
+      const ret: TurnResult = { assistantText: ruleResult.response ?? '', session, newSession, wasAction: true };
+      if (ruleResult.toolName !== undefined) ret.toolName = ruleResult.toolName;
+      return ret;
     }
 
     // ── 5. Action handler ─────────────────────────────────────────────────────
@@ -153,22 +153,17 @@ export class Orchestrator {
 
     const actionResult = await handleAction(input.userInput, actionCtx);
     if (actionResult.handled) {
-      const userMsg = createMessage({ role: 'user',      content: input.userInput });
-      const asstMsg = createMessage({ role: 'assistant', content: actionResult.response ?? '' });
-      const a1 = await this.sessions.appendMessage({ sessionId: session.id, message: userMsg });
-      if (!a1.ok) throw a1.error;
-      const a2 = await this.sessions.appendMessage({ sessionId: a1.value.id, message: asstMsg });
-      if (!a2.ok) throw a2.error;
-      session = a2.value;
+      session = await this.persistExchange(session.id, input.userInput, actionResult.response ?? '');
       if (!this._activeSessionId) newSession = true;
       else this._activeSessionId = session.id;
       logger.info('action handled', { action: input.userInput.slice(0, 40) });
       return { assistantText: actionResult.response ?? '', session, newSession, wasAction: true };
     }
 
-    // ── 6. Build prompt: memory + context + base + skills ────────────────────
-    const activeSkills  = this.skills.activeSkills();
-    const memoryBlock   = await this.memory.buildMemoryBlock(session.id);
+    // ── 6. Build system prompt ────────────────────────────────────────────────
+    const activeSkills = this.skills.activeSkills();
+    const memoryBlock  = await this.memory.buildMemoryBlock(session.id);
+    const toolsBlock   = this.toolRegistry.buildToolsBlock();
     const sysCtx: SystemContextInput = {
       provider: input.provider, model: input.model,
       skillRegistry: this.skills, sessionId: session.id,
@@ -179,6 +174,7 @@ export class Orchestrator {
       skills:        activeSkills,
       systemContext: sysCtx,
       memoryBlock,
+      toolsBlock,
     });
 
     // ── 7. Persist user message ───────────────────────────────────────────────
@@ -187,7 +183,7 @@ export class Orchestrator {
     if (!appendUser.ok) throw appendUser.error;
     session = appendUser.value;
 
-    // ── 8. Assemble sliding window ────────────────────────────────────────────
+    // ── 8. Sliding window ─────────────────────────────────────────────────────
     const { messages: assembled, dropped } = assembleMessages({
       messages: session.messages, maxMessages: this.opts.maxMessages,
     });
@@ -197,6 +193,7 @@ export class Orchestrator {
     logger.debug('calling provider', {
       provider: input.provider.id, model: input.model,
       messageCount: assembled.length, hasMemory: Boolean(memoryBlock),
+      hasTools: Boolean(toolsBlock),
     });
 
     const chatResponse = await input.provider.chat({
@@ -207,18 +204,46 @@ export class Orchestrator {
 
     logger.debug('provider responded', { model: chatResponse.model, latencyMs: chatResponse.latencyMs });
 
-    // ── 10. Persist assistant message ─────────────────────────────────────────
-    const appendAssistant = await this.sessions.appendMessage({
-      sessionId: session.id, message: chatResponse.message,
-    });
+    // ── 10. LLM-assisted tool execution ──────────────────────────────────────
+    const llmText = extractText(chatResponse.message.content);
+    const llmToolResult = await this.toolExecutor.tryLLMAssisted(llmText);
+
+    let finalText = llmText;
+    let finalToolName: string | undefined;
+
+    if (llmToolResult.handled && llmToolResult.response) {
+      // Replace LLM response with actual tool output
+      finalText = llmToolResult.response;
+      finalToolName = llmToolResult.toolName;
+      logger.info('tool handled (LLM-assisted)', { tool: finalToolName });
+    }
+
+    // ── 11. Persist assistant message ─────────────────────────────────────────
+    const finalMsg = createMessage({ role: 'assistant', content: finalText });
+    const appendAssistant = await this.sessions.appendMessage({ sessionId: session.id, message: finalMsg });
     if (!appendAssistant.ok) throw appendAssistant.error;
     session = appendAssistant.value;
     this._activeSessionId = session.id;
 
-    const assistantText = extractText(chatResponse.message.content);
     logger.info('turn complete', { sessionId: session.id, latencyMs: chatResponse.latencyMs });
 
-    return { chatResponse, assistantText, session, newSession, wasAction: false };
+    const result: TurnResult = {
+      chatResponse, assistantText: finalText, session, newSession, wasAction: false,
+    };
+    if (finalToolName !== undefined) result.toolName = finalToolName;
+    return result;
+  }
+
+  // ── Helper: persist user + assistant message pair ────────────────────────
+
+  private async persistExchange(sessionId: string, userInput: string, assistantText: string): Promise<Session> {
+    const userMsg = createMessage({ role: 'user',      content: userInput });
+    const asstMsg = createMessage({ role: 'assistant', content: assistantText });
+    const a1 = await this.sessions.appendMessage({ sessionId, message: userMsg });
+    if (!a1.ok) throw a1.error;
+    const a2 = await this.sessions.appendMessage({ sessionId: a1.value.id, message: asstMsg });
+    if (!a2.ok) throw a2.error;
+    return a2.value;
   }
 
   async runSequence(

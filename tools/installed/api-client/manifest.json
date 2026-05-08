@@ -1,0 +1,27 @@
+{
+  "name": "api-client",
+  "displayName": "API Client",
+  "description": "Make GET requests to an internal or external API endpoint",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "triggers": [
+    "get data from api",
+    "call api",
+    "fetch api",
+    "api get",
+    "query /api/"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "API path or full URL, e.g. /api/users"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  }
+}

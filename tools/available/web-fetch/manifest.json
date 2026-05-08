@@ -1,0 +1,16 @@
+{
+  "name": "web-fetch",
+  "displayName": "Web Fetch",
+  "description": "Fetch news headlines or any URL from the internet",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "triggers": ["news", "headline", "fetch url", "open url", "browse", "current events", "happening today"],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search query or URL to fetch" }
+    },
+    "required": ["query"]
+  }
+}
