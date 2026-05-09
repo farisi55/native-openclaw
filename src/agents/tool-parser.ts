@@ -1,144 +1,163 @@
 /**
  * agents/tool-parser.ts
- * Parses LLM responses to extract structured tool calls or final responses.
- *
- * Supported LLM response formats:
- *
- * 1. Tool call (plain JSON):
- *    {"type":"tool_call","tool":"web-fetch","input":{"query":"AI news"}}
- *
- * 2. Final response (plain JSON):
- *    {"type":"final_response","content":"The answer is..."}
- *
- * 3. Tool call embedded in markdown fences:
- *    ```json
- *    {"type":"tool_call","tool":"system-time","input":{"query":"time"}}
- *    ```
- *
- * 4. Legacy format (backward compat from v6):
- *    {"tool":"web-fetch","input":{"query":"..."}}
+ * Robust parser for model-emitted tool calls and structured responses.
  */
 
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('agents:tool-parser');
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────────────────────────────────────
 
-export interface ParsedToolCall {
-  type: 'tool_call';
-  tool: string;
-  input: Record<string, unknown>;
+export type ParsedToolCall =
+  | {
+      type: 'tool_call';
+      tool: string;
+      input: unknown;
+    }
+  | {
+      type: 'final_response';
+      content: string;
+    };
+
+type AnyRecord = Record<string, unknown>;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
 }
 
-export interface ParsedFinalResponse {
-  type: 'final_response';
-  content: string;
+function safeParse(text: string): unknown | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
-export type ParsedLLMResponse = ParsedToolCall | ParsedFinalResponse | null;
+function isObject(v: unknown): v is AnyRecord {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
 
-// ─── Extraction helpers ───────────────────────────────────────────────────────
+function asString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim().length > 0
+    ? v.trim()
+    : null;
+}
 
-/** Extract the first JSON-looking block from text (handles markdown fences). */
-function extractJsonCandidate(text: string): string | null {
-  // 1. Markdown fence: ```json ... ``` or ``` ... ```
-  const fenceMatch = /```(?:json)?\s*\n?([\s\S]*?)\n?```/i.exec(text);
-  if (fenceMatch?.[1]) return fenceMatch[1].trim();
+// ──────────────────────────────────────────────────────────────────────────────
+// Main parser
+// ──────────────────────────────────────────────────────────────────────────────
 
-  // 2. Inline JSON block starting with { and containing "type" or "tool"
-  // Use a balanced-brace extraction
-  const start = text.indexOf('{');
-  if (start === -1) return null;
+export function parseLLMResponse(text: string): ParsedToolCall | null {
+  if (!text || !text.trim()) return null;
 
-  let depth = 0;
-  let end = -1;
-  for (let i = start; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) { end = i; break; }
+  const cleaned = stripMarkdown(text);
+
+  // Try direct parse
+  let parsed = safeParse(cleaned);
+
+  // Recovery parse
+  if (!parsed) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match?.[0]) {
+      parsed = safeParse(match[0]);
     }
   }
 
-  if (end === -1) return null;
-  return text.slice(start, end + 1).trim();
-}
-
-// ─── Main parser ──────────────────────────────────────────────────────────────
-
-/**
- * Parse an LLM response string and return a structured result.
- *
- * Returns:
- *   ParsedToolCall      — LLM wants to call a tool
- *   ParsedFinalResponse — LLM provided a direct answer
- *   null                — response is plain text (treat as final response)
- */
-export function parseLLMResponse(llmText: string): ParsedLLMResponse {
-  const trimmed = llmText.trim();
-  if (!trimmed) return null;
-
-  const candidate = extractJsonCandidate(trimmed);
-  if (!candidate) return null;
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(candidate) as Record<string, unknown>;
-  } catch {
-    logger.debug('JSON parse failed — plain text response', { snippet: candidate.slice(0, 60) });
+  if (!isObject(parsed)) {
+    logger.debug('parser: not valid json');
     return null;
   }
 
-  // New v7 format: {"type":"tool_call","tool":"...","input":{...}}
-  if (parsed['type'] === 'tool_call') {
-    const tool = parsed['tool'];
-    const input = parsed['input'];
-    if (typeof tool !== 'string' || !tool) {
-      logger.warn('tool_call missing tool name', { parsed });
-      return null;
-    }
-    return {
-      type: 'tool_call',
-      tool,
-      input: (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>,
-    };
-  }
+  // ─── FINAL RESPONSE ────────────────────────────────────────────────────────
 
-  // New v7 format: {"type":"final_response","content":"..."}
-  if (parsed['type'] === 'final_response') {
-    const content = parsed['content'];
+  if (parsed.type === 'final_response') {
     return {
       type: 'final_response',
-      content: typeof content === 'string' ? content : trimmed,
+      content:
+        asString(parsed.content) ??
+        asString(parsed.answer) ??
+        asString(parsed.response) ??
+        '',
     };
   }
 
-  // Legacy v6 format: {"tool":"...","input":{...}}
-  if (typeof parsed['tool'] === 'string') {
-    const tool = parsed['tool'] as string;
-    const input = parsed['input'];
-    logger.debug('legacy tool call format detected', { tool });
+  // ─── CANONICAL TOOL CALL ──────────────────────────────────────────────────
+
+  if (
+    parsed.type === 'tool_call' &&
+    asString(parsed.tool)
+  ) {
     return {
       type: 'tool_call',
-      tool,
-      input: (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>,
+      tool: asString(parsed.tool)!,
+      input: parsed.input ?? {},
     };
   }
 
+  // ─── LEGACY FORMAT ────────────────────────────────────────────────────────
+  // { "tool":"web-fetch", "input":{} }
+
+  if (asString(parsed.tool)) {
+    return {
+      type: 'tool_call',
+      tool: asString(parsed.tool)!,
+      input: parsed.input ?? {},
+    };
+  }
+
+  // ─── TYPE-AS-TOOL FORMAT ─────────────────────────────────────────────────
+  // { "type":"web-fetch", "input":{} }
+
+  if (
+    parsed.type &&
+    typeof parsed.type === 'string' &&
+    parsed.type !== 'final_response'
+  ) {
+    return {
+      type: 'tool_call',
+      tool: parsed.type,
+      input: parsed.input ?? {},
+    };
+  }
+
+  logger.debug('parser: unsupported json shape');
   return null;
 }
 
-/**
- * Validate a parsed tool call against basic schema.
- * Returns an error string if invalid, null if valid.
- */
+// ──────────────────────────────────────────────────────────────────────────────
+// Validation
+// ──────────────────────────────────────────────────────────────────────────────
+
 export function validateToolCall(
-  call: ParsedToolCall,
+  parsed: ParsedToolCall,
   availableTools: string[]
 ): string | null {
-  if (!availableTools.includes(call.tool)) {
-    return `Tool "${call.tool}" is not available. Available: ${availableTools.join(', ')}`;
+  if (parsed.type !== 'tool_call') return null;
+
+  if (!parsed.tool || !parsed.tool.trim()) {
+    return 'Missing tool name.';
   }
+
+  if (!availableTools.includes(parsed.tool)) {
+    return `Tool "${parsed.tool}" is not registered. Available tools: ${availableTools.join(', ')}`;
+  }
+
+  if (
+    parsed.input !== undefined &&
+    typeof parsed.input !== 'object'
+  ) {
+    return 'Tool input must be an object.';
+  }
+
   return null;
 }

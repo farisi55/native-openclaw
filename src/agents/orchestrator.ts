@@ -78,7 +78,6 @@ export class Orchestrator {
   private readonly memory: MemoryManager;
   private readonly toolRegistry: ToolRegistry;
   private readonly router: ProviderRouter;
-  private readonly toolLoop: ToolLoop;
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
@@ -94,27 +93,23 @@ export class Orchestrator {
     contextCompressor: ContextCompressor,
     opts: OrchestratorOptions = {}
   ) {
-    this.sessions          = sessions;
-    this.skills            = skills;
-    this.memory            = memory;
-    this.toolRegistry      = toolRegistry;
-    this.router            = router;
+    this.sessions = sessions;
+    this.skills = skills;
+    this.memory = memory;
+    this.toolRegistry = toolRegistry;
+    this.router = router;
     this.contextCompressor = contextCompressor;
     this.opts = {
-      baseSystemPrompt:        opts.baseSystemPrompt        ?? 'You are a helpful AI assistant.',
-      maxTurns:                opts.maxTurns                ?? 20,
-      maxMessages:             opts.maxMessages             ?? 40,
-      temperature:             opts.temperature             ?? 0.7,
-      maxTokens:               opts.maxTokens               ?? 4096,
-      maxToolSteps:            opts.maxToolSteps            ?? 3,
-      useReasoning:            opts.useReasoning            ?? true,
-      useSemanticCompression:  opts.useSemanticCompression  ?? true,
+      baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
+      maxTurns: opts.maxTurns ?? 20,
+      maxMessages: opts.maxMessages ?? 40,
+      temperature: opts.temperature ?? 0.7,
+      maxTokens: opts.maxTokens ?? 4096,
+      maxToolSteps: opts.maxToolSteps ?? 3,
+      useReasoning: opts.useReasoning ?? true,
+      useSemanticCompression: opts.useSemanticCompression ?? true,
     };
-    this.toolLoop = new ToolLoop(toolRegistry, {
-      maxSteps:    this.opts.maxToolSteps,
-      temperature: this.opts.temperature,
-      maxTokens:   this.opts.maxTokens,
-    });
+
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
   }
@@ -169,11 +164,13 @@ export class Orchestrator {
     // ── 5. Action handler ─────────────────────────────────────────────────────
     const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
     const actionCtx: ActionContext = {
-      skillRegistry:    this.skills,
-      sessions:         this.sessions,
+      skillRegistry: this.skills,
+      sessions: this.sessions,
       skillsDir,
-      activeSessionId:  this._activeSessionId,
-      onSessionCleared: () => { this._activeSessionId = null; },
+      activeSessionId: this._activeSessionId,
+      onSessionCleared: () => {
+        this._activeSessionId = null;
+      },
     };
     const actionResult = await handleAction(input.userInput, actionCtx);
     if (actionResult.handled) {
@@ -196,15 +193,17 @@ export class Orchestrator {
 
     // ── 7. Build system prompt ────────────────────────────────────────────────
     const activeSkills = this.skills.activeSkills();
-    const memoryBlock  = await this.memory.buildMemoryBlock(session.id);
-    const toolsBlock   = this.toolRegistry.buildToolsBlock();
+    const memoryBlock = await this.memory.buildMemoryBlock(session.id);
+    const toolsBlock = this.toolRegistry.buildToolsBlock();
     const sysCtx: SystemContextInput = {
-      provider: input.provider, model: input.model,
-      skillRegistry: this.skills, sessionId: session.id,
+      provider: input.provider,
+      model: input.model,
+      skillRegistry: this.skills,
+      sessionId: session.id,
     };
     const systemPrompt = buildSystemPrompt({
       basePrompt: this.opts.baseSystemPrompt,
-      skills:     activeSkills,
+      skills: activeSkills,
       systemContext: sysCtx,
       memoryBlock,
       toolsBlock,
@@ -219,10 +218,9 @@ export class Orchestrator {
     // ── 9. Context compression (semantic memory) ──────────────────────────────
     let contextMessages: Message[];
     if (this.opts.useSemanticCompression) {
-      const compressed = this.contextCompressor.compress(
-        session.messages, input.userInput, session.id,
-        { recentWindowSize: Math.min(this.opts.maxMessages, 8) }
-      );
+      const compressed = this.contextCompressor.compress(session.messages, input.userInput, session.id, {
+        recentWindowSize: Math.min(this.opts.maxMessages, 8),
+      });
       contextMessages = compressed.messages;
       if (compressed.memoriesInjected > 0) {
         logger.debug('context compressed', {
@@ -233,7 +231,8 @@ export class Orchestrator {
       }
     } else {
       const { messages, dropped } = assembleMessages({
-        messages: session.messages, maxMessages: this.opts.maxMessages,
+        messages: session.messages,
+        maxMessages: this.opts.maxMessages,
       });
       if (dropped > 0) logger.debug('messages dropped for context window', { dropped });
       contextMessages = messages;
@@ -241,23 +240,31 @@ export class Orchestrator {
 
     // ── 10. ToolLoop via Router (with auto-fallback) ──────────────────────────
     logger.debug('starting tool-loop', {
-      provider: input.provider.id, model: input.model,
+      provider: input.provider.id,
+      model: input.model,
       messageCount: contextMessages.length,
       reasoningHint,
+    });
+
+    const dynamicToolLoop = new ToolLoop(this.toolRegistry, {
+      maxSteps: this.opts.maxToolSteps,
+      temperature: this.opts.temperature,
+      maxTokens: this.opts.maxTokens,
+      preferredTool: reasoningHint,
+      enableRepair: true,
+      maxRepairAttempts: 2,
     });
 
     // Custom chat fn that routes through the provider router
     const routedProvider: IProvider = {
       ...input.provider,
       chat: async (opts: ChatOptions): Promise<ChatResponse> => {
-        const result = await this.router.chat(
-          input.provider, input.model, opts, input.userInput
-        );
+        const result = await this.router.chat(input.provider, input.model, opts, input.userInput);
         return result.response;
       },
     };
 
-    const loopResult = await this.toolLoop.run(
+    const loopResult = await dynamicToolLoop.run(
       routedProvider,
       input.model,
       contextMessages,
@@ -280,9 +287,7 @@ export class Orchestrator {
 
     // ── 12. Store in semantic memory ──────────────────────────────────────────
     if (this.opts.useSemanticCompression) {
-      this.contextCompressor.storeExchange(
-        session.id, input.userInput, loopResult.finalText
-      );
+      this.contextCompressor.storeExchange(session.id, input.userInput, loopResult.finalText);
     }
 
     const result: TurnResult = {
@@ -300,7 +305,7 @@ export class Orchestrator {
   }
 
   private async persistExchange(sessionId: string, userInput: string, assistantText: string): Promise<Session> {
-    const userMsg = createMessage({ role: 'user',      content: userInput });
+    const userMsg = createMessage({ role: 'user', content: userInput });
     const asstMsg = createMessage({ role: 'assistant', content: assistantText });
     const a1 = await this.sessions.appendMessage({ sessionId, message: userMsg });
     if (!a1.ok) throw a1.error;
