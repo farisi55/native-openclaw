@@ -1,6 +1,7 @@
 /**
  * providers/index.ts
  * Registry factory — instantiates all configured providers.
+ * v8: adds SambaNova.
  */
 
 import type { AppConfig } from '../config';
@@ -13,15 +14,13 @@ export { OpenRouterProvider } from './openrouter';
 export { GroqProvider } from './groq';
 export { MistralProvider } from './mistral';
 export { GeminiProvider } from './gemini';
+export { SambaNovaProvider } from './sambanova';
 
 const logger = createLogger('providers');
 
-export async function createProviderRegistry(
-  config: AppConfig
-): Promise<ProviderRegistry> {
+export async function createProviderRegistry(config: AppConfig): Promise<ProviderRegistry> {
   const registry: ProviderRegistry = new Map();
 
-  // Ollama — always attempted (no key required)
   await tryRegister(registry, async () => {
     const { OllamaProvider } = await import('./ollama');
     return new OllamaProvider();
@@ -48,12 +47,18 @@ export async function createProviderRegistry(
     }, 'mistral');
   }
 
-  // Gemini — registered if API key is present
   if (process.env['GEMINI_API_KEY']) {
     await tryRegister(registry, async () => {
       const { GeminiProvider } = await import('./gemini');
       return new GeminiProvider();
     }, 'gemini');
+  }
+
+  if (process.env['SAMBANOVA_API_KEY']) {
+    await tryRegister(registry, async () => {
+      const { SambaNovaProvider } = await import('./sambanova');
+      return new SambaNovaProvider();
+    }, 'sambanova');
   }
 
   if (registry.size === 0) {

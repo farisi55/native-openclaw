@@ -1,6 +1,5 @@
 /**
- * agents/index.ts
- * Barrel — re-exports the agent layer.
+ * agents/index.ts — Barrel v8
  */
 export { PromptBuilder, buildSystemPrompt } from './prompt-builder';
 export type { PromptBuilderOptions } from './prompt-builder';
@@ -25,3 +24,9 @@ export type { ParsedToolCall, ParsedFinalResponse, ParsedLLMResponse } from './t
 
 export { ToolLoop } from './tool-loop';
 export type { ToolLoopOptions, ToolLoopResult } from './tool-loop';
+
+export { ReasoningEngine } from './reasoning-engine';
+export type { ReasoningResult } from './reasoning-engine';
+
+export { CapabilityInstaller } from './capability-installer';
+export type { InstallIntent, CapabilityInstallResult } from './capability-installer';

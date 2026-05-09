@@ -1,6 +1,6 @@
 /**
  * src/index.ts
- * Bootstrap — wires all services and starts CLI.
+ * Bootstrap v8 — wires router, semantic memory, reasoning engine.
  */
 
 import { loadConfig } from './config';
@@ -9,6 +9,9 @@ import { createProviderRegistry } from './providers';
 import { SkillRegistry } from './skills';
 import { SessionManager, SettingsManager, MemoryManager } from './storage';
 import { ToolRegistry } from './tools/tool-registry';
+import { ProviderRouter } from './router/provider-router';
+import { SemanticMemory } from './memory/semantic-memory';
+import { ContextCompressor } from './memory/context-compressor';
 import { Orchestrator } from './agents';
 import { startCLI } from './cli';
 
@@ -18,7 +21,7 @@ async function bootstrap(): Promise<void> {
   const logger = createLogger('bootstrap');
 
   if (config.env !== 'production') {
-    logger.debug('native-openclaw starting', {
+    logger.debug('native-openclaw v8 starting', {
       env: config.env,
       dataDir: config.storage.dataDir,
     });
@@ -30,35 +33,61 @@ async function bootstrap(): Promise<void> {
     logger.warn('No providers available. Set at least one API key or start Ollama.');
   }
 
+  // Settings
+  const settings = new SettingsManager(config.storage.dataDir);
+
+  // Router
+  const routerEnabled  = await settings.getRouterEnabled();
+  const autoFallback   = await settings.getAutoFallback();
+  const router = new ProviderRouter(providers, {
+    enabled:      routerEnabled,
+    autoFallback: autoFallback,
+    autoSwitch:   process.env['AUTO_SWITCH'] !== 'false',
+    maxAttempts:  4,
+    dataDir:      config.storage.dataDir,
+  });
+  await router.init();
+  logger.info(`Router: ${routerEnabled ? 'enabled' : 'disabled'}, autoFallback: ${autoFallback}`);
+
   // Skills
   const skillRegistry = new SkillRegistry();
   await skillRegistry.load();
 
   // Storage
   const sessions = new SessionManager(config.storage.dataDir);
-  const settings = new SettingsManager(config.storage.dataDir);
   const memory   = new MemoryManager(config.storage.dataDir);
 
-  // Log restored identity
+  // Semantic memory + context compressor
+  const semanticMemory     = new SemanticMemory(config.storage.dataDir);
+  await semanticMemory.load();
+  const contextCompressor  = new ContextCompressor(semanticMemory);
+  logger.info(`Semantic memory: ${semanticMemory.size()} chunks loaded`);
+
+  // Restore agent identity
   const agentName = await memory.getGlobalValue('agentName');
   if (agentName) {
     logger.info(`Agent identity restored: "${String(agentName)}"`);
   }
 
-  // Plugin tool registry — auto-discover from tools/installed/
+  // Plugin tool registry
   const toolRegistry = new ToolRegistry(process.cwd());
   await toolRegistry.loadTools();
   logger.info(`Tools ready (${toolRegistry.size})`, {
     tools: toolRegistry.listTools().map((t) => t.manifest.name),
   });
 
-  // Orchestrator — now takes toolRegistry
-  const orchestrator = new Orchestrator(sessions, skillRegistry, memory, toolRegistry, {
-    baseSystemPrompt: config.agent.systemPrompt,
-    maxTurns:         config.agent.maxTurns,
-    temperature:      config.agent.temperature,
-    maxTokens:        config.agent.maxTokens,
-  });
+  // Orchestrator v8
+  const orchestrator = new Orchestrator(
+    sessions, skillRegistry, memory, toolRegistry, router, contextCompressor,
+    {
+      baseSystemPrompt:       config.agent.systemPrompt,
+      maxTurns:               config.agent.maxTurns,
+      temperature:            config.agent.temperature,
+      maxTokens:              config.agent.maxTokens,
+      useReasoning:           process.env['REASONING_ENABLED'] !== 'false',
+      useSemanticCompression: process.env['SEMANTIC_MEMORY'] !== 'false',
+    }
+  );
 
   // CLI
   await startCLI({ providers, skillRegistry, sessions, settings, toolRegistry, orchestrator });
