@@ -18,6 +18,7 @@ import { startCLI } from './cli';
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   setRootLogLevel(config.logLevel);
+
   const logger = createLogger('bootstrap');
 
   if (config.env !== 'production') {
@@ -29,6 +30,7 @@ async function bootstrap(): Promise<void> {
 
   // Providers
   const providers = await createProviderRegistry(config);
+
   if (providers.size === 0) {
     logger.warn('No providers available. Set at least one API key or start Ollama.');
   }
@@ -37,16 +39,19 @@ async function bootstrap(): Promise<void> {
   const settings = new SettingsManager(config.storage.dataDir);
 
   // Router
-  const routerEnabled  = await settings.getRouterEnabled();
-  const autoFallback   = await settings.getAutoFallback();
+  const routerEnabled = await settings.getRouterEnabled();
+  const autoFallback = await settings.getAutoFallback();
+
   const router = new ProviderRouter(providers, {
-    enabled:      routerEnabled,
-    autoFallback: autoFallback,
-    autoSwitch:   process.env['AUTO_SWITCH'] !== 'false',
-    maxAttempts:  4,
-    dataDir:      config.storage.dataDir,
+    enabled: routerEnabled,
+    autoFallback,
+    autoSwitch: process.env['AUTO_SWITCH'] !== 'false',
+    maxAttempts: 4,
+    dataDir: config.storage.dataDir,
   });
+
   await router.init();
+
   logger.info(`Router: ${routerEnabled ? 'enabled' : 'disabled'}, autoFallback: ${autoFallback}`);
 
   // Skills
@@ -55,16 +60,19 @@ async function bootstrap(): Promise<void> {
 
   // Storage
   const sessions = new SessionManager(config.storage.dataDir);
-  const memory   = new MemoryManager(config.storage.dataDir);
+  const memory = new MemoryManager(config.storage.dataDir);
 
   // Semantic memory + context compressor
-  const semanticMemory     = new SemanticMemory(config.storage.dataDir);
+  const semanticMemory = new SemanticMemory(config.storage.dataDir);
   await semanticMemory.load();
-  const contextCompressor  = new ContextCompressor(semanticMemory);
+
+  const contextCompressor = new ContextCompressor(semanticMemory);
+
   logger.info(`Semantic memory: ${semanticMemory.size()} chunks loaded`);
 
   // Restore agent identity
   const agentName = await memory.getGlobalValue('agentName');
+
   if (agentName) {
     logger.info(`Agent identity restored: "${String(agentName)}"`);
   }
@@ -72,29 +80,43 @@ async function bootstrap(): Promise<void> {
   // Plugin tool registry
   const toolRegistry = new ToolRegistry(process.cwd());
   await toolRegistry.loadTools();
+
   logger.info(`Tools ready (${toolRegistry.size})`, {
-    tools: toolRegistry.listTools().map((t) => t.manifest.name),
+    tools: toolRegistry.listTools().map((tool) => tool.manifest.name),
   });
 
-  // Orchestrator v8
+  // Orchestrator
   const orchestrator = new Orchestrator(
-    sessions, skillRegistry, memory, toolRegistry, router, contextCompressor,
+    sessions,
+    skillRegistry,
+    memory,
+    toolRegistry,
+    router,
+    contextCompressor,
     {
-      baseSystemPrompt:       config.agent.systemPrompt,
-      maxTurns:               config.agent.maxTurns,
-      temperature:            config.agent.temperature,
-      maxTokens:              config.agent.maxTokens,
-      useReasoning:           process.env['REASONING_ENABLED'] !== 'false',
+      baseSystemPrompt: config.agent.systemPrompt,
+      maxTurns: config.agent.maxTurns,
+      temperature: config.agent.temperature,
+      maxTokens: config.agent.maxTokens,
+      useReasoning: process.env['REASONING_ENABLED'] !== 'false',
       useSemanticCompression: process.env['SEMANTIC_MEMORY'] !== 'false',
     }
   );
 
   // CLI
-  await startCLI({ providers, skillRegistry, sessions, settings, toolRegistry, orchestrator });
+  await startCLI({
+    providers,
+    skillRegistry,
+    sessions,
+    settings,
+    toolRegistry,
+    orchestrator,
+  });
 }
 
 bootstrap().catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
+
   process.stderr.write(`\n[fatal] ${message}\n\n`);
   process.exit(1);
 });

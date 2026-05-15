@@ -1,12 +1,14 @@
 /**
  * Plugin entry for api-client tool.
- * Delegates to the existing api-client module.
+ * Supports full curl-equivalent requests.
  */
-import { runApiClient } from '../api-client';
+import { runApiClient, type ApiClientInput } from '../api-client';
 
-export async function run(input: { path: string } | Record<string, string>): Promise<string> {
-  const inp = input as Record<string, string>;
-  const path = typeof input === 'string' ? input : (inp['path'] ?? inp['query'] ?? '/');
-  const result = await runApiClient(path);
+export async function run(input: ApiClientInput | Record<string, unknown> | string): Promise<string> {
+  if (typeof input === 'string') {
+    const result = await runApiClient({ path: input });
+    return result.content;
+  }
+  const result = await runApiClient(input as ApiClientInput);
   return result.content;
 }

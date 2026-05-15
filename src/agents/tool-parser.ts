@@ -11,16 +11,22 @@ const logger = createLogger('agents:tool-parser');
 // Types
 // ──────────────────────────────────────────────────────────────────────────────
 
-export type ParsedToolCall =
-  | {
-      type: 'tool_call';
-      tool: string;
-      input: unknown;
-    }
-  | {
-      type: 'final_response';
-      content: string;
-    };
+export interface ParsedToolExecution {
+  type: 'tool_call';
+  tool: string;
+  input: unknown;
+}
+
+export interface ParsedFinalResponse {
+  type: 'final_response';
+  content: string;
+}
+
+export type ParsedLLMResponse =
+  | ParsedToolExecution
+  | ParsedFinalResponse;
+
+export type ParsedToolCall = ParsedLLMResponse;
 
 type AnyRecord = Record<string, unknown>;
 
@@ -57,17 +63,24 @@ function asString(v: unknown): string | null {
 // Main parser
 // ──────────────────────────────────────────────────────────────────────────────
 
-export function parseLLMResponse(text: string): ParsedToolCall | null {
-  if (!text || !text.trim()) return null;
+export function parseLLMResponse(
+  text: string
+): ParsedLLMResponse | null {
+  if (!text || !text.trim()) {
+    return null;
+  }
 
   const cleaned = stripMarkdown(text);
 
-  // Try direct parse
+  // ─── Direct parse ─────────────────────────────────────────────────────────
+
   let parsed = safeParse(cleaned);
 
-  // Recovery parse
+  // ─── Recovery parse ───────────────────────────────────────────────────────
+
   if (!parsed) {
     const match = cleaned.match(/\{[\s\S]*\}/);
+
     if (match?.[0]) {
       parsed = safeParse(match[0]);
     }
@@ -78,7 +91,9 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
     return null;
   }
 
-  // ─── FINAL RESPONSE ────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // FINAL RESPONSE
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (parsed.type === 'final_response') {
     return {
@@ -91,7 +106,10 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
     };
   }
 
-  // ─── CANONICAL TOOL CALL ──────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // CANONICAL TOOL CALL
+  // { "type":"tool_call","tool":"x","input":{} }
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (
     parsed.type === 'tool_call' &&
@@ -104,8 +122,10 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
     };
   }
 
-  // ─── LEGACY FORMAT ────────────────────────────────────────────────────────
-  // { "tool":"web-fetch", "input":{} }
+  // ──────────────────────────────────────────────────────────────────────────
+  // LEGACY FORMAT
+  // { "tool":"web-fetch","input":{} }
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (asString(parsed.tool)) {
     return {
@@ -115,8 +135,10 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
     };
   }
 
-  // ─── TYPE-AS-TOOL FORMAT ─────────────────────────────────────────────────
-  // { "type":"web-fetch", "input":{} }
+  // ──────────────────────────────────────────────────────────────────────────
+  // TYPE-AS-TOOL FORMAT
+  // { "type":"web-fetch","input":{} }
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (
     parsed.type &&
@@ -131,6 +153,7 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
   }
 
   logger.debug('parser: unsupported json shape');
+
   return null;
 }
 
@@ -139,10 +162,12 @@ export function parseLLMResponse(text: string): ParsedToolCall | null {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export function validateToolCall(
-  parsed: ParsedToolCall,
+  parsed: ParsedLLMResponse,
   availableTools: string[]
 ): string | null {
-  if (parsed.type !== 'tool_call') return null;
+  if (parsed.type !== 'tool_call') {
+    return null;
+  }
 
   if (!parsed.tool || !parsed.tool.trim()) {
     return 'Missing tool name.';

@@ -1,0 +1,28 @@
+{
+  "name": "system-execute",
+  "displayName": "System Execute",
+  "description": "Execute shell commands on the local machine and manage custom command aliases",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "restart this computer",
+    "find all jpg files",
+    "show listening ports",
+    "list files in current directory",
+    "run a shell command",
+    "save custom command as alias",
+    "list all saved commands"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "command":     { "type": "string",  "description": "Shell command to execute" },
+      "alias":       { "type": "string",  "description": "Name of a saved custom command" },
+      "saveAs":      { "type": "string",  "description": "Save command under this alias name" },
+      "description": { "type": "string",  "description": "Description for the saved command" },
+      "timeout":     { "type": "number",  "description": "Timeout in milliseconds" },
+      "cwd":         { "type": "string",  "description": "Working directory" }
+    }
+  }
+}

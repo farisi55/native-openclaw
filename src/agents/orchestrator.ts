@@ -1,6 +1,6 @@
 /**
  * agents/orchestrator.ts
- * v8: Reasoning-first, router-aware, semantic-memory-compressed orchestrator.
+ * Reasoning-first, router-aware, semantic-memory-compressed orchestrator.
  *
  * Turn flow:
  *   input →
@@ -39,14 +39,42 @@ const logger = createLogger('agent:orchestrator');
 
 export interface OrchestratorOptions {
   baseSystemPrompt?: string;
+
+  /**
+   * Maximum user turns allowed in one session.
+   */
   maxTurns?: number;
+
+  /**
+   * Maximum messages injected into the context window.
+   */
   maxMessages?: number;
+
+  /**
+   * Default model temperature.
+   */
   temperature?: number;
+
+  /**
+   * Default max output tokens.
+   */
   maxTokens?: number;
+
+  /**
+   * Maximum tool calls allowed in one loop.
+   */
   maxToolSteps?: number;
-  /** Enable reasoning-first step. Default: true. */
+
+  /**
+   * Enable reasoning-first planning stage.
+   * Default: true
+   */
   useReasoning?: boolean;
-  /** Enable semantic context compression. Default: true. */
+
+  /**
+   * Enable semantic memory compression/context retrieval.
+   * Default: true
+   */
   useSemanticCompression?: boolean;
 }
 
@@ -82,6 +110,7 @@ export class Orchestrator {
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
   private readonly opts: Required<OrchestratorOptions>;
+
   private _activeSessionId: string | null = null;
 
   constructor(
@@ -99,6 +128,7 @@ export class Orchestrator {
     this.toolRegistry = toolRegistry;
     this.router = router;
     this.contextCompressor = contextCompressor;
+
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
       maxTurns: opts.maxTurns ?? 20,
@@ -120,50 +150,80 @@ export class Orchestrator {
     let newSession = false;
 
     if (input.sessionId) {
-      const r = await this.sessions.get(input.sessionId);
-      if (!r.ok) throw r.error;
-      if (!r.value) throw new Error(`Session "${input.sessionId}" not found`);
-      session = r.value;
-      const turns = session.messages.filter((m) => m.role === 'user').length;
-      if (turns >= this.opts.maxTurns) {
-        throw new Error(`Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`);
+      const sessionResult = await this.sessions.get(input.sessionId);
+
+      if (!sessionResult.ok) {
+        throw sessionResult.error;
+      }
+
+      if (!sessionResult.value) {
+        throw new Error(`Session "${input.sessionId}" not found`);
+      }
+
+      session = sessionResult.value;
+
+      const userTurns = session.messages.filter((m) => m.role === 'user').length;
+
+      if (userTurns >= this.opts.maxTurns) {
+        throw new Error(
+          `Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`
+        );
       }
     } else {
-      const r = await this.sessions.create({
+      const createResult = await this.sessions.create({
         providerId: input.provider.id,
         model: input.model,
         activeSkills: input.skillIds ?? this.skills.activeIds,
       });
-      if (!r.ok) throw r.error;
-      session = r.value;
+
+      if (!createResult.ok) {
+        throw createResult.error;
+      }
+
+      session = createResult.value;
       newSession = true;
     }
 
     this._activeSessionId = session.id;
 
     // ── 2. Skills ─────────────────────────────────────────────────────────────
-    if (input.skillIds !== undefined) this.skills.setActive(input.skillIds);
+    if (input.skillIds !== undefined) {
+      this.skills.setActive(input.skillIds);
+    }
 
     // ── 3. Memory extraction ──────────────────────────────────────────────────
-    const memUpdates = extractMemory(input.userInput);
-    for (const upd of memUpdates) {
-      if (upd.scope === 'global') {
-        await this.memory.setGlobalMemory(upd.key, upd.value);
+    const memoryUpdates = extractMemory(input.userInput);
+
+    for (const update of memoryUpdates) {
+      if (update.scope === 'global') {
+        await this.memory.setGlobalMemory(update.key, update.value);
       } else {
-        await this.memory.setSessionMemory(session.id, upd.key, upd.value);
+        await this.memory.setSessionMemory(session.id, update.key, update.value);
       }
     }
 
     // ── 4. Natural-language capability install ────────────────────────────────
-    const capResult = await this.capabilityInstaller.handle(input.userInput);
-    if (capResult.handled) {
-      session = await this.persistExchange(session.id, input.userInput, capResult.response);
-      return { assistantText: capResult.response, session, newSession, wasAction: true };
+    const capabilityResult = await this.capabilityInstaller.handle(input.userInput);
+
+    if (capabilityResult.handled) {
+      session = await this.persistExchange(
+        session.id,
+        input.userInput,
+        capabilityResult.response
+      );
+
+      return {
+        assistantText: capabilityResult.response,
+        session,
+        newSession,
+        wasAction: true,
+      };
     }
 
     // ── 5. Action handler ─────────────────────────────────────────────────────
     const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
-    const actionCtx: ActionContext = {
+
+    const actionContext: ActionContext = {
       skillRegistry: this.skills,
       sessions: this.sessions,
       skillsDir,
@@ -172,22 +232,51 @@ export class Orchestrator {
         this._activeSessionId = null;
       },
     };
-    const actionResult = await handleAction(input.userInput, actionCtx);
+
+    const actionResult = await handleAction(input.userInput, actionContext);
+
     if (actionResult.handled) {
-      session = await this.persistExchange(session.id, input.userInput, actionResult.response ?? '');
-      if (!this._activeSessionId) newSession = true;
-      return { assistantText: actionResult.response ?? '', session, newSession, wasAction: true };
+      const responseText = actionResult.response ?? '';
+
+      session = await this.persistExchange(
+        session.id,
+        input.userInput,
+        responseText
+      );
+
+      if (!this._activeSessionId) {
+        newSession = true;
+      }
+
+      return {
+        assistantText: responseText,
+        session,
+        newSession,
+        wasAction: true,
+      };
     }
 
-    // ── 6. Reasoning step (internal, not shown to user) ───────────────────────
+    // ── 6. Reasoning step, internal only ──────────────────────────────────────
     let reasoningHint: string | null = null;
+
     if (this.opts.useReasoning && this.toolRegistry.size > 0) {
-      const reasoning = await this.reasoning.reason(input.userInput, input.provider, input.model);
-      if (reasoning.needsTool && reasoning.tool) {
-        reasoningHint = reasoning.tool;
-        logger.info('reasoning: tool hint', { tool: reasoningHint, reason: reasoning.reason });
+      const reasoningResult = await this.reasoning.reason(
+        input.userInput,
+        input.provider,
+        input.model
+      );
+
+      if (reasoningResult.needsTool && reasoningResult.tool) {
+        reasoningHint = reasoningResult.tool;
+
+        logger.info('reasoning: tool hint', {
+          tool: reasoningHint,
+          reason: reasoningResult.reason,
+        });
       } else {
-        logger.debug('reasoning: no tool needed', { reason: reasoning.reason });
+        logger.debug('reasoning: no tool needed', {
+          reason: reasoningResult.reason,
+        });
       }
     }
 
@@ -195,33 +284,54 @@ export class Orchestrator {
     const activeSkills = this.skills.activeSkills();
     const memoryBlock = await this.memory.buildMemoryBlock(session.id);
     const toolsBlock = this.toolRegistry.buildToolsBlock();
-    const sysCtx: SystemContextInput = {
+
+    const systemContext: SystemContextInput = {
       provider: input.provider,
       model: input.model,
       skillRegistry: this.skills,
       sessionId: session.id,
     };
+
     const systemPrompt = buildSystemPrompt({
       basePrompt: this.opts.baseSystemPrompt,
       skills: activeSkills,
-      systemContext: sysCtx,
+      systemContext,
       memoryBlock,
       toolsBlock,
     });
 
     // ── 8. Persist user message ───────────────────────────────────────────────
-    const userMessage: Message = createMessage({ role: 'user', content: input.userInput });
-    const appendUser = await this.sessions.appendMessage({ sessionId: session.id, message: userMessage });
-    if (!appendUser.ok) throw appendUser.error;
-    session = appendUser.value;
+    const userMessage: Message = createMessage({
+      role: 'user',
+      content: input.userInput,
+    });
 
-    // ── 9. Context compression (semantic memory) ──────────────────────────────
+    const appendUserResult = await this.sessions.appendMessage({
+      sessionId: session.id,
+      message: userMessage,
+    });
+
+    if (!appendUserResult.ok) {
+      throw appendUserResult.error;
+    }
+
+    session = appendUserResult.value;
+
+    // ── 9. Context compression ────────────────────────────────────────────────
     let contextMessages: Message[];
+
     if (this.opts.useSemanticCompression) {
-      const compressed = this.contextCompressor.compress(session.messages, input.userInput, session.id, {
-        recentWindowSize: Math.min(this.opts.maxMessages, 8),
-      });
+      const compressed = this.contextCompressor.compress(
+        session.messages,
+        input.userInput,
+        session.id,
+        {
+          recentWindowSize: Math.min(this.opts.maxMessages, 8),
+        }
+      );
+
       contextMessages = compressed.messages;
+
       if (compressed.memoriesInjected > 0) {
         logger.debug('context compressed', {
           original: compressed.originalCount,
@@ -234,11 +344,15 @@ export class Orchestrator {
         messages: session.messages,
         maxMessages: this.opts.maxMessages,
       });
-      if (dropped > 0) logger.debug('messages dropped for context window', { dropped });
+
       contextMessages = messages;
+
+      if (dropped > 0) {
+        logger.debug('messages dropped for context window', { dropped });
+      }
     }
 
-    // ── 10. ToolLoop via Router (with auto-fallback) ──────────────────────────
+    // ── 10. ToolLoop via Router ───────────────────────────────────────────────
     logger.debug('starting tool-loop', {
       provider: input.provider.id,
       model: input.model,
@@ -255,12 +369,17 @@ export class Orchestrator {
       maxRepairAttempts: 2,
     });
 
-    // Custom chat fn that routes through the provider router
     const routedProvider: IProvider = {
       ...input.provider,
-      chat: async (opts: ChatOptions): Promise<ChatResponse> => {
-        const result = await this.router.chat(input.provider, input.model, opts, input.userInput);
-        return result.response;
+      chat: async (chatOptions: ChatOptions): Promise<ChatResponse> => {
+        const routedResult = await this.router.chat(
+          input.provider,
+          input.model,
+          chatOptions,
+          input.userInput
+        );
+
+        return routedResult.response;
       },
     };
 
@@ -269,7 +388,7 @@ export class Orchestrator {
       input.model,
       contextMessages,
       systemPrompt,
-      input.signal,
+      input.signal
     );
 
     logger.info('tool-loop complete', {
@@ -279,15 +398,30 @@ export class Orchestrator {
     });
 
     // ── 11. Persist assistant response ────────────────────────────────────────
-    const finalMsg = createMessage({ role: 'assistant', content: loopResult.finalText });
-    const appendAssistant = await this.sessions.appendMessage({ sessionId: session.id, message: finalMsg });
-    if (!appendAssistant.ok) throw appendAssistant.error;
-    session = appendAssistant.value;
+    const assistantMessage = createMessage({
+      role: 'assistant',
+      content: loopResult.finalText,
+    });
+
+    const appendAssistantResult = await this.sessions.appendMessage({
+      sessionId: session.id,
+      message: assistantMessage,
+    });
+
+    if (!appendAssistantResult.ok) {
+      throw appendAssistantResult.error;
+    }
+
+    session = appendAssistantResult.value;
     this._activeSessionId = session.id;
 
-    // ── 12. Store in semantic memory ──────────────────────────────────────────
+    // ── 12. Store semantic memory ─────────────────────────────────────────────
     if (this.opts.useSemanticCompression) {
-      this.contextCompressor.storeExchange(session.id, input.userInput, loopResult.finalText);
+      this.contextCompressor.storeExchange(
+        session.id,
+        input.userInput,
+        loopResult.finalText
+      );
     }
 
     const result: TurnResult = {
@@ -298,20 +432,48 @@ export class Orchestrator {
       toolSteps: loopResult.toolSteps,
       toolsUsed: loopResult.toolsUsed,
     };
+
     if (loopResult.toolsUsed.length > 0) {
       result.toolName = loopResult.toolsUsed[loopResult.toolsUsed.length - 1];
     }
+
     return result;
   }
 
-  private async persistExchange(sessionId: string, userInput: string, assistantText: string): Promise<Session> {
-    const userMsg = createMessage({ role: 'user', content: userInput });
-    const asstMsg = createMessage({ role: 'assistant', content: assistantText });
-    const a1 = await this.sessions.appendMessage({ sessionId, message: userMsg });
-    if (!a1.ok) throw a1.error;
-    const a2 = await this.sessions.appendMessage({ sessionId: a1.value.id, message: asstMsg });
-    if (!a2.ok) throw a2.error;
-    return a2.value;
+  private async persistExchange(
+    sessionId: string,
+    userInput: string,
+    assistantText: string
+  ): Promise<Session> {
+    const userMessage = createMessage({
+      role: 'user',
+      content: userInput,
+    });
+
+    const assistantMessage = createMessage({
+      role: 'assistant',
+      content: assistantText,
+    });
+
+    const appendUserResult = await this.sessions.appendMessage({
+      sessionId,
+      message: userMessage,
+    });
+
+    if (!appendUserResult.ok) {
+      throw appendUserResult.error;
+    }
+
+    const appendAssistantResult = await this.sessions.appendMessage({
+      sessionId: appendUserResult.value.id,
+      message: assistantMessage,
+    });
+
+    if (!appendAssistantResult.ok) {
+      throw appendAssistantResult.error;
+    }
+
+    return appendAssistantResult.value;
   }
 
   async runSequence(
@@ -320,11 +482,18 @@ export class Orchestrator {
   ): Promise<TurnResult[]> {
     const results: TurnResult[] = [];
     let sessionId: string | undefined = baseOpts.sessionId;
+
     for (const input of inputs) {
-      const result = await this.turn({ ...baseOpts, ...input, sessionId } as TurnInput);
+      const result = await this.turn({
+        ...baseOpts,
+        ...input,
+        sessionId,
+      } as TurnInput);
+
       results.push(result);
       sessionId = result.session.id;
     }
+
     return results;
   }
 }

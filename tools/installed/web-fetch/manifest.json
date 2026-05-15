@@ -1,22 +1,22 @@
 {
   "name": "web-fetch",
-  "displayName": "Web Fetch",
-  "description": "Fetch real-time information from the internet: news, headlines, or any URL",
-  "version": "1.0.0",
+  "displayName": "Web Fetch / Browse",
+  "description": "Search the internet for real-time information using Tavily (primary) or Firecrawl (fallback)",
+  "version": "2.0.0",
   "entry": "index.js",
   "enabled": true,
   "examples": [
     "What is the latest news today?",
-    "What is happening in the world right now?",
-    "Fetch the top headlines",
-    "Get current AI news",
-    "Browse https://example.com",
-    "What are the latest developments in technology?"
+    "Is gold a good investment right now?",
+    "Search for current AI trends",
+    "What is the current Bitcoin price?",
+    "Find recent news about climate change",
+    "apakah emas cocok untuk investasi sekarang?"
   ],
   "inputSchema": {
     "type": "object",
     "properties": {
-      "query": { "type": "string", "description": "Search query, topic, or URL to fetch" }
+      "query": { "type": "string", "description": "Search query or topic to browse" }
     },
     "required": ["query"]
   }

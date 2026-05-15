@@ -1,22 +1,31 @@
 {
   "name": "api-client",
   "displayName": "API Client",
-  "description": "Make GET requests to internal or external REST API endpoints",
-  "version": "1.0.0",
+  "description": "Full HTTP request builder — equivalent to curl. Supports GET/POST/PUT/DELETE, custom headers, query params, JSON body, port, and path parameters",
+  "version": "2.0.0",
   "entry": "index.js",
   "enabled": true,
   "examples": [
     "Get data from /api/users",
-    "Fetch /api/default/lids/123456789@lid",
-    "Call API endpoint /api/products",
-    "Query the REST API at /api/status",
-    "Get data from API /api/default/lids/123456789@lid"
+    "POST JSON body to http://localhost:3000/api/messages",
+    "Call API with X-Api-Key header",
+    "GET request to localhost port 3000",
+    "Send POST with Authorization Bearer token",
+    "curl -L http://localhost:3000/api/default/lids/123@lid -H X-Api-Key: abc"
   ],
   "inputSchema": {
     "type": "object",
     "properties": {
-      "path": { "type": "string", "description": "API path (e.g. /api/users) or full URL" }
-    },
-    "required": ["path"]
+      "endpoint":    { "type": "string", "description": "Base URL, e.g. http://localhost" },
+      "port":        { "type": "number", "description": "Port number" },
+      "path":        { "type": "string", "description": "URL path, e.g. /api/users" },
+      "url":         { "type": "string", "description": "Full URL (overrides endpoint+port+path)" },
+      "method":      { "type": "string", "description": "HTTP method: GET POST PUT PATCH DELETE" },
+      "headers":     { "type": "object", "description": "Request headers as object or array" },
+      "params":      { "type": "object", "description": "Query parameters" },
+      "body":        { "type": "object", "description": "Request body (JSON object or string)" },
+      "timeout":     { "type": "number", "description": "Timeout in ms (default: 20000)" },
+      "pathParams":  { "type": "object", "description": "Path parameter substitutions {id: 123}" }
+    }
   }
 }

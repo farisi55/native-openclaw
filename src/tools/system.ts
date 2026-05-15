@@ -1,15 +1,7 @@
 /**
  * tools/system.ts
- * System tool — returns local system info without spawning subprocesses.
- *
- * All operations use Node.js built-ins (no child_process.exec) to keep
- * the CLI responsive and cross-platform.
- *
- * Supported queries:
- *   time / what time / current time
- *   date / what date / today's date
- *   uptime / system uptime
- *   platform / os / operating system
+ * System info tool — time, date, uptime, platform.
+ * query param dispatches to the correct handler.
  */
 
 import { createLogger } from '../utils/logger';
@@ -20,8 +12,6 @@ export interface SystemResult {
   ok: boolean;
   content: string;
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -35,8 +25,6 @@ function formatUptime(seconds: number): string {
   parts.push(`${s}s`);
   return parts.join(' ');
 }
-
-// ─── Query handlers ───────────────────────────────────────────────────────────
 
 function getTime(): SystemResult {
   const now = new Date();
@@ -60,7 +48,7 @@ function getDate(): SystemResult {
     content: [
       `📅 **Current Date**`,
       ``,
-      `- Local:  ${now.toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' })}`,
+      `- Local:  ${now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
       `- UTC:    ${now.toUTCString().slice(0, 16)}`,
       `- ISO:    ${now.toISOString().slice(0, 10)}`,
     ].join('\n'),
@@ -68,16 +56,16 @@ function getDate(): SystemResult {
 }
 
 function getUptime(): SystemResult {
-  const upSec = process.uptime();
   const os = require('os') as typeof import('os');
-  const sysUpSec = os.uptime();
+  const upSec  = process.uptime();
+  const sysSec = os.uptime();
   return {
     ok: true,
     content: [
       `⏱️ **Uptime**`,
       ``,
       `- Process uptime:  ${formatUptime(upSec)}`,
-      `- System uptime:   ${formatUptime(sysUpSec)}`,
+      `- System uptime:   ${formatUptime(sysSec)}`,
     ].join('\n'),
   };
 }
@@ -101,36 +89,22 @@ function getPlatform(): SystemResult {
   };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+export function runSystemTool(input: string | { query?: string } | Record<string, unknown>): SystemResult {
+  const query = typeof input === 'string'
+    ? input
+    : (input as Record<string, unknown>)['query'] as string | undefined ?? 'time';
 
-export function runSystemTool(input: string): SystemResult {
-  const t = input.toLowerCase();
+  const t = (query ?? '').toLowerCase();
 
-  if (/\btime\b/.test(t) && !/\bdate\b/.test(t)) {
-    logger.debug('system: time query');
-    return getTime();
-  }
+  logger.debug('system tool', { query: t });
 
-  if (/\bdate\b/.test(t) || /\btoday\b/.test(t)) {
-    logger.debug('system: date query');
-    return getDate();
-  }
+  if (/\bdate\b/.test(t) && !/\btime\b/.test(t)) return getDate();
+  if (/\btime\b/.test(t) && !/\bdate\b/.test(t)) return getTime();
+  if (/\buptime\b/.test(t))   return getUptime();
+  if (/\b(platform|os|system|hardware|info)\b/.test(t)) return getPlatform();
 
-  if (/\buptime\b/.test(t)) {
-    logger.debug('system: uptime query');
-    return getUptime();
-  }
-
-  if (/\b(platform|os|operating\s*system|system\s*info|hardware)\b/.test(t)) {
-    logger.debug('system: platform query');
-    return getPlatform();
-  }
-
-  // Default: return both time and date
+  // Default: both time and date
   const time = getTime();
   const date = getDate();
-  return {
-    ok: true,
-    content: `${time.content}\n\n${date.content}`,
-  };
+  return { ok: true, content: `${time.content}\n\n${date.content}` };
 }
