@@ -6,12 +6,12 @@
   "entry": "index.js",
   "enabled": true,
   "examples": [
-    "restart this computer",
     "find all jpg files",
     "show listening ports",
     "list files in current directory",
     "run a shell command",
     "save custom command as alias",
+	"restart this computer",
     "list all saved commands"
   ],
   "inputSchema": {
