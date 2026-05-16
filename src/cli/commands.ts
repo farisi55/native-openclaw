@@ -8,7 +8,23 @@ import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
+import type { McpManager } from '../mcp';
 import { installTool, listAvailable } from '../tools/tool-installer';
+import { WorkspaceManager } from '../workspace';
+import {
+  getDnsServers,
+  getProxyConfig,
+  maskProxyUrl,
+  networkCheck,
+} from '../network';
+import {
+  ensureWorkflowTemplate,
+  loadWorkflowMarkdown,
+  parseWorkflowMarkdown,
+  runWorkflowFromWorkspace,
+  validateWorkflowDefinition,
+  workflowSummary,
+} from '../workflows';
 
 const C = {
   reset:   '\x1b[0m',
@@ -39,12 +55,13 @@ export interface CLIContext {
   sessions: SessionManager;
   settings: SettingsManager;
   toolRegistry: ToolRegistry;
+  mcpManager?: McpManager;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
   setProvider: (provider: IProvider, model: string) => void;
   setModel: (model: string) => void;
-  setSession: (id: string | null) => void;
+  setSession: (id: string | null) => Promise<void>;
 }
 
 // ─── /help ────────────────────────────────────────────────────────────────────
@@ -61,6 +78,7 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/model')}                        Show current model`,
     `  ${c('yellow', '/model <model-id>')}             Switch to a different model`,
     `  ${c('yellow', '/provider')}                     Show current provider`,
+    `  ${c('yellow', '/providers')}                    Show providers`,
     `  ${c('yellow', '/provider <id>')}                Switch to a different provider`,
     `  ${c('yellow', '/skills')}                       List registered skills`,
     `  ${c('yellow', '/skills on <id>')}               Activate a skill`,
@@ -68,11 +86,32 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/session')}                      Show current session info`,
     `  ${c('yellow', '/session new')}                  Start a new session`,
     `  ${c('yellow', '/session list')}                 List all saved sessions`,
+    `  ${c('yellow', '/session switch <id>')}           Resume a session by id`,
     `  ${c('yellow', '/session <id>')}                 Resume a session by id`,
     `  ${c('yellow', '/session delete <id>')}          Delete a session by id`,
     `  ${c('yellow', '/settings')}                     Show persistent settings`,
     `  ${c('yellow', '/settings default-model <id>')}   Set default model for current provider`,
     `  ${c('yellow', '/settings default-provider <id>')}  Set default provider`,
+    `  ${c('yellow', '/workspace')}                    Show workspace info`,
+    `  ${c('yellow', '/workspace list')}               List workspace files`,
+    `  ${c('yellow', '/workspace read <file>')}        Read a workspace file`,
+    `  ${c('yellow', '/workspace write <file> <text>')} Write a workspace file`,
+    `  ${c('yellow', '/workspace append <file> <text>')} Append to a workspace file`,
+    `  ${c('yellow', '/workspace mkdir <folder>')}     Create a workspace folder`,
+    `  ${c('yellow', '/network')}                      Show network diagnostics help`,
+    `  ${c('yellow', '/network dns')}                  Show configured DNS servers`,
+    `  ${c('yellow', '/network check <host>')}         Resolve a host`,
+    `  ${c('yellow', '/network proxy')}                Show proxy config`,
+    `  ${c('yellow', '/mcp')}                          Show MCP command help`,
+    `  ${c('yellow', '/mcp list')}                     List configured MCP servers`,
+    `  ${c('yellow', '/mcp add <name> [json]')}        Add MCP server preset or config`,
+    `  ${c('yellow', '/mcp start <name>')}             Start an MCP server`,
+    `  ${c('yellow', '/mcp stop <name>')}              Stop an MCP server`,
+    `  ${c('yellow', '/mcp tools [name]')}             List MCP tools`,
+    `  ${c('yellow', '/workflow')}                     Show workflow command help`,
+    `  ${c('yellow', '/workflow show')}                Show WORKFLOW.md summary`,
+    `  ${c('yellow', '/workflow run')}                 Execute WORKFLOW.md`,
+    `  ${c('yellow', '/workflow validate')}            Validate WORKFLOW.md`,
     `  ${c('yellow', '/tools')}                         List all installed tools`,
     `  ${c('yellow', '/tools install <name>')}          Install a tool from tools/available/`,
     `  ${c('yellow', '/tools enable <name>')}           Enable a disabled tool`,
@@ -241,13 +280,38 @@ export function cmdSkills(ctx: CLIContext, args: string[]): void {
 
 // ─── /session ─────────────────────────────────────────────────────────────────
 
+async function createAndActivateSession(ctx: CLIContext): Promise<Session> {
+  const result = await ctx.sessions.create({
+    providerId: ctx.activeProvider.id,
+    model: ctx.activeModel,
+    activeSkills: ctx.skillRegistry.activeIds,
+  });
+
+  if (!result.ok) throw result.error;
+
+  await ctx.setSession(result.value.id);
+  return result.value;
+}
+
+async function fallbackAfterActiveDelete(ctx: CLIContext): Promise<Session> {
+  const recentResult = await ctx.sessions.getMostRecentSession();
+  if (!recentResult.ok) throw recentResult.error;
+
+  if (recentResult.value) {
+    await ctx.setSession(recentResult.value.id);
+    return recentResult.value;
+  }
+
+  return createAndActivateSession(ctx);
+}
+
 export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void> {
   const [action, subArg] = args;
 
   // new
   if (action === 'new') {
-    ctx.setSession(null);
-    process.stdout.write(c('green', '\n  New session started.\n\n'));
+    const session = await createAndActivateSession(ctx);
+    process.stdout.write(c('green', `\n  New session ${session.id.slice(0, 8)}… started.\n\n`));
     return;
   }
 
@@ -289,25 +353,37 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
       return;
     }
     const deletedId = result.value;
-    // If deleted the active session → clear it
+    // If deleted the active session, switch to the most recent remaining session.
     if (ctx.activeSessionId && deletedId === ctx.activeSessionId) {
-      ctx.setSession(null);
-      process.stdout.write(c('yellow', `\n  Session ${deletedId.slice(0, 8)}… deleted (was active). New session started.\n\n`));
+      const fallback = await fallbackAfterActiveDelete(ctx);
+      process.stdout.write(
+        c('yellow', `\n  Session ${deletedId.slice(0, 8)}… deleted (was active). `) +
+        c('green', `Now using ${fallback.id.slice(0, 8)}…\n\n`)
+      );
     } else {
+      if (ctx.activeSessionId) {
+        await ctx.settings.setLastActiveSessionId(ctx.activeSessionId);
+      }
       process.stdout.write(c('green', `\n  Session ${deletedId.slice(0, 8)}… deleted.\n\n`));
     }
     return;
   }
 
   // resume by partial id
-  if (action && !['new', 'list', 'delete'].includes(action)) {
+  const switchId = action === 'switch' ? subArg : action;
+  if (switchId && !['new', 'list', 'delete', 'switch'].includes(switchId)) {
     const result = await ctx.sessions.list();
     if (!result.ok) { process.stdout.write(c('red', `  Error: ${result.error.message}\n\n`)); return; }
-    const match = result.value.find((s) => s.id.startsWith(action));
-    if (!match) { process.stdout.write(c('red', `  Session "${action}" not found.\n\n`)); return; }
-    ctx.setSession(match.id);
+    const match = result.value.find((s) => s.id.startsWith(switchId));
+    if (!match) { process.stdout.write(c('red', `  Session "${switchId}" not found.\n\n`)); return; }
+    await ctx.setSession(match.id);
     const turns = match.messages.filter((m) => m.role === 'user').length;
     process.stdout.write(c('green', `\n  Session ${match.id.slice(0, 8)}… resumed (${turns} turn(s)).\n\n`));
+    return;
+  }
+
+  if (action === 'switch' && !subArg) {
+    process.stdout.write(c('yellow', '\n  Usage: /session switch <id>\n\n'));
     return;
   }
 
@@ -443,6 +519,335 @@ export async function cmdSettings(ctx: CLIContext, args: string[]): Promise<void
   process.stdout.write('\n');
 }
 
+// ─── /workspace ───────────────────────────────────────────────────────────────
+
+export async function cmdWorkspace(_ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, target, ...rest] = args;
+  const workspace = new WorkspaceManager();
+  await workspace.ensureWorkspace();
+
+  if (!action) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Workspace')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'Root')}  ${workspace.rootDir}\n\n`);
+    process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /workspace list\n'));
+    process.stdout.write(c('dim', '    /workspace read <file>\n'));
+    process.stdout.write(c('dim', '    /workspace write <file> <text>\n'));
+    process.stdout.write(c('dim', '    /workspace append <file> <text>\n'));
+    process.stdout.write(c('dim', '    /workspace mkdir <folder>\n\n'));
+    return;
+  }
+
+  try {
+    if (action === 'list') {
+      const entries = await workspace.list(target ?? '.');
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'Workspace Files')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      if (entries.length === 0) {
+        process.stdout.write(c('dim', '  (empty)\n\n'));
+        return;
+      }
+      for (const entry of entries) {
+        const marker = entry.type === 'directory' ? c('cyan', 'dir ') : c('white', 'file');
+        process.stdout.write(`  ${marker}  ${entry.path}\n`);
+      }
+      process.stdout.write('\n');
+      return;
+    }
+
+    if (action === 'read' && target) {
+      const content = await workspace.read(target);
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', target)}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(content.split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
+      return;
+    }
+
+    if (action === 'write' && target) {
+      await workspace.write(target, rest.join(' '));
+      process.stdout.write(c('green', `\n  Wrote workspace file: ${target}\n\n`));
+      return;
+    }
+
+    if (action === 'append' && target) {
+      await workspace.append(target, rest.join(' '));
+      process.stdout.write(c('green', `\n  Appended to workspace file: ${target}\n\n`));
+      return;
+    }
+
+    if (action === 'mkdir' && target) {
+      await workspace.mkdir(target);
+      process.stdout.write(c('green', `\n  Created workspace folder: ${target}\n\n`));
+      return;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stdout.write(c('red', `\n  Workspace error: ${msg}\n\n`));
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /workspace [list|read|write|append|mkdir] ...\n\n'));
+}
+
+// ─── /network ─────────────────────────────────────────────────────────────────
+
+export async function cmdNetwork(_ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, target] = args;
+
+  if (!action) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Network')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /network dns\n'));
+    process.stdout.write(c('dim', '    /network check <host>\n'));
+    process.stdout.write(c('dim', '    /network proxy\n\n'));
+    return;
+  }
+
+  if (action === 'dns') {
+    const servers = getDnsServers();
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'DNS')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'DNS_SERVERS')}  ${servers.length > 0 ? servers.join(', ') : c('dim', '(OS default)')}\n\n`);
+    return;
+  }
+
+  if (action === 'proxy') {
+    const proxy = getProxyConfig();
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Proxy')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'HTTP_PROXY ')}  ${maskProxyUrl(proxy.httpProxy) ?? c('dim', '(not set)')}\n`);
+    process.stdout.write(`  ${c('dim', 'HTTPS_PROXY')}  ${maskProxyUrl(proxy.httpsProxy) ?? c('dim', '(not set)')}\n`);
+    process.stdout.write(`  ${c('dim', 'NO_PROXY   ')}  ${proxy.noProxy.length > 0 ? proxy.noProxy.join(', ') : c('dim', '(not set)')}\n\n`);
+    return;
+  }
+
+  if (action === 'check' && target) {
+    const result = await networkCheck(target);
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Network Check')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'Host     ')}  ${result.host}\n`);
+    process.stdout.write(`  ${c('dim', 'DNS      ')}  ${result.servers.length > 0 ? result.servers.join(', ') : '(OS default)'}\n`);
+    process.stdout.write(`  ${c('dim', 'Status   ')}  ${result.ok ? c('green', 'resolved') : c('red', 'failed')}\n`);
+    if (result.addresses.length > 0) {
+      process.stdout.write(`  ${c('dim', 'Addresses')}  ${result.addresses.join(', ')}\n`);
+    }
+    if (result.error) {
+      process.stdout.write(`  ${c('dim', 'Error    ')}  ${result.error}\n`);
+    }
+    process.stdout.write('\n');
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /network [dns|proxy|check <host>]\n\n'));
+}
+
+// ─── /mcp ───────────────────────────────────────────────────────────────────
+
+export async function cmdMcp(ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, name, ...rest] = args;
+  const manager = ctx.mcpManager;
+
+  if (!manager) {
+    process.stdout.write(c('yellow', '\n  MCP is disabled or not initialized.\n\n'));
+    return;
+  }
+
+  if (!action) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'MCP')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'Config')}  ${manager.path}\n\n`);
+    process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /mcp list\n'));
+    process.stdout.write(c('dim', '    /mcp add <name> [json]\n'));
+    process.stdout.write(c('dim', '    /mcp remove <name>\n'));
+    process.stdout.write(c('dim', '    /mcp start <name>\n'));
+    process.stdout.write(c('dim', '    /mcp stop <name>\n'));
+    process.stdout.write(c('dim', '    /mcp restart <name>\n'));
+    process.stdout.write(c('dim', '    /mcp tools [name]\n\n'));
+    return;
+  }
+
+  try {
+    if (action === 'list') {
+      const servers = await manager.listServers();
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'MCP Servers')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      if (servers.length === 0) {
+        process.stdout.write(c('dim', '  No MCP servers configured.\n\n'));
+        return;
+      }
+      for (const server of servers) {
+        const status = server.status === 'running' ? c('green', '● running') : c('dim', '○ stopped');
+        const argsText = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
+        process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.command}${argsText}\n`);
+      }
+      process.stdout.write('\n');
+      return;
+    }
+
+    if (action === 'add' && name) {
+      await manager.addServerFromInput(name, rest.join(' ').trim() || undefined);
+      process.stdout.write(c('green', `\n  MCP server "${name}" added.\n\n`));
+      return;
+    }
+
+    if (action === 'remove' && name) {
+      const removed = await manager.removeServer(name);
+      process.stdout.write(
+        removed
+          ? c('green', `\n  MCP server "${name}" removed.\n\n`)
+          : c('yellow', `\n  MCP server "${name}" is not configured.\n\n`)
+      );
+      return;
+    }
+
+    if (action === 'start' && name) {
+      const tools = await manager.startServer(name);
+      process.stdout.write(c('green', `\n  MCP server "${name}" started with ${tools.length} tool(s).\n\n`));
+      return;
+    }
+
+    if (action === 'stop' && name) {
+      const stopped = await manager.stopServer(name);
+      process.stdout.write(
+        stopped
+          ? c('yellow', `\n  MCP server "${name}" stopped.\n\n`)
+          : c('yellow', `\n  MCP server "${name}" was not running.\n\n`)
+      );
+      return;
+    }
+
+    if (action === 'restart' && name) {
+      const tools = await manager.restartServer(name);
+      process.stdout.write(c('green', `\n  MCP server "${name}" restarted with ${tools.length} tool(s).\n\n`));
+      return;
+    }
+
+    if (action === 'tools') {
+      const tools = manager.listTools(name);
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'MCP Tools')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      if (tools.length === 0) {
+        process.stdout.write(c('dim', '  No MCP tools loaded. Start a server first.\n\n'));
+        return;
+      }
+      for (const tool of tools) {
+        process.stdout.write(`  ${c('cyan', tool.runtimeName.padEnd(32))} ${c('dim', tool.description ?? '')}\n`);
+      }
+      process.stdout.write('\n');
+      return;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stdout.write(c('red', `\n  MCP error: ${msg}\n\n`));
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /mcp [list|add|remove|start|stop|restart|tools] ...\n\n'));
+}
+
+// ─── /workflow ──────────────────────────────────────────────────────────────
+
+export async function cmdWorkflow(ctx: CLIContext, args: string[]): Promise<void> {
+  const [action] = args;
+  const workspace = new WorkspaceManager();
+
+  if (!action) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Workflow')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /workflow show\n'));
+    process.stdout.write(c('dim', '    /workflow run\n'));
+    process.stdout.write(c('dim', '    /workflow edit\n'));
+    process.stdout.write(c('dim', '    /workflow template\n'));
+    process.stdout.write(c('dim', '    /workflow validate\n\n'));
+    return;
+  }
+
+  try {
+    if (action === 'template') {
+      const path = await ensureWorkflowTemplate(workspace);
+      process.stdout.write(c('green', `\n  WORKFLOW.md ready: ${path}\n\n`));
+      return;
+    }
+
+    if (action === 'show') {
+      const loaded = await loadWorkflowMarkdown(workspace);
+      const workflow = parseWorkflowMarkdown(loaded.markdown);
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'WORKFLOW.md')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(workflowSummary(workflow).split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
+      return;
+    }
+
+    if (action === 'validate') {
+      const loaded = await loadWorkflowMarkdown(workspace);
+      const workflow = parseWorkflowMarkdown(loaded.markdown);
+      const errors = validateWorkflowDefinition(workflow);
+      if (errors.length === 0) {
+        process.stdout.write(c('green', `\n  WORKFLOW.md is valid: ${loaded.path}\n\n`));
+      } else {
+        process.stdout.write(c('red', '\n  WORKFLOW.md validation errors:\n'));
+        for (const error of errors) process.stdout.write(c('red', `  - ${error}\n`));
+        process.stdout.write('\n');
+      }
+      return;
+    }
+
+    if (action === 'edit') {
+      const path = await ensureWorkflowTemplate(workspace);
+      const editor = process.env['VISUAL'] || process.env['EDITOR'];
+      if (editor && process.stdin.isTTY) {
+        const { spawnSync } = await import('child_process');
+        const result = spawnSync(editor, [path], { stdio: 'inherit', shell: true });
+        if (result.error) {
+          process.stdout.write(c('yellow', `\n  Could not open editor: ${result.error.message}\n`));
+          process.stdout.write(c('dim', `  Edit this file manually: ${path}\n\n`));
+        }
+      } else {
+        process.stdout.write(c('dim', `\n  Edit this file manually: ${path}\n\n`));
+      }
+      return;
+    }
+
+    if (action === 'run') {
+      const result = await runWorkflowFromWorkspace({
+        ...(ctx.mcpManager ? { mcpManager: ctx.mcpManager } : {}),
+        toolRegistry: ctx.toolRegistry,
+        provider: ctx.activeProvider,
+        model: ctx.activeModel,
+        workspace,
+      });
+      process.stdout.write('\n');
+      process.stdout.write(result.content.split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
+      return;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stdout.write(c('red', `\n  Workflow error: ${msg}\n\n`));
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /workflow [show|run|edit|template|validate]\n\n'));
+}
+
 // ─── /tools ───────────────────────────────────────────────────────────────────
 
 export async function cmdTools(ctx: CLIContext, args: string[]): Promise<void> {
@@ -456,6 +861,7 @@ export async function cmdTools(ctx: CLIContext, args: string[]): Promise<void> {
       return;
     }
     await ctx.toolRegistry.loadTools();
+    ctx.mcpManager?.registerRunningTools();
     process.stdout.write(c('green', `\n  ✅ ${result.message}\n`));
     process.stdout.write(c('dim', `  Registry reloaded: ${ctx.toolRegistry.size} tool(s) active.\n\n`));
     return;
@@ -465,6 +871,7 @@ export async function cmdTools(ctx: CLIContext, args: string[]): Promise<void> {
   if (action === 'enable' && name) {
     try {
       await ctx.toolRegistry.enableTool(name);
+      ctx.mcpManager?.registerRunningTools();
       process.stdout.write(c('green', `\n  ✅ Tool "${name}" enabled.\n\n`));
     } catch (e) {
       process.stdout.write(c('red', `\n  ❌ ${String(e)}\n\n`));

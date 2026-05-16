@@ -59,6 +59,8 @@ export interface ToolLoopResult {
   toolsUsed: string[];
   /** Raw LLM response messages for each step (for debugging). */
   stepMessages: Message[];
+  /** Structured operational flow trace; no hidden reasoning text. */
+  flow: Array<Record<string, unknown>>;
 }
 
 // ─── Structured parsing types ────────────────────────────────────────────────
@@ -409,6 +411,7 @@ export class ToolLoop {
     const availableTools = toolEntries.map((t) => t.name);
     const stepMessages: Message[] = [];
     const toolsUsed: string[] = [];
+    const flow: Array<Record<string, unknown>> = [];
     let toolSteps = 0;
     let repairAttempts = 0;
 
@@ -463,7 +466,7 @@ export class ToolLoop {
       } catch (e) {
         const errMsg = `LLM call failed at step ${step}: ${String(e)}`;
         logger.warn(errMsg);
-        return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages };
+        return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow };
       }
 
       stepMessages.push(createMessage({ role: 'assistant', content: llmText }));
@@ -482,7 +485,7 @@ export class ToolLoop {
               error: validationError,
               modelOutput: llmText,
             });
-            return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages };
+            return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow };
           }
 
           const tool = this.registry.getTool(parsed.tool) as any;
@@ -492,6 +495,7 @@ export class ToolLoop {
               toolSteps,
               toolsUsed,
               stepMessages,
+              flow,
             };
           }
 
@@ -503,6 +507,7 @@ export class ToolLoop {
 
           let toolResult: string;
           try {
+            flow.push({ stage: 'tool_call', tool: parsed.tool, input: parsed.input ?? {} });
             toolResult = await tool.run(parsed.input ?? {});
           } catch (e) {
             toolResult = `Tool execution failed: ${String(e)}`;
@@ -514,12 +519,18 @@ export class ToolLoop {
 
           toolsUsed.push(parsed.tool);
           toolSteps++;
+          flow.push({
+            stage: 'tool_result',
+            tool: parsed.tool,
+            ok: !toolResult.startsWith('Tool execution failed:'),
+          });
 
           return {
             finalText: toolResult,
             toolSteps,
             toolsUsed,
             stepMessages,
+            flow,
           };
         }
 
@@ -549,7 +560,7 @@ export class ToolLoop {
             continue;
           }
 
-          return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages };
+          return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow };
         }
 
         const tool = this.registry.getTool(parsed.tool) as any;
@@ -572,7 +583,7 @@ export class ToolLoop {
             continue;
           }
 
-          return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages };
+          return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow };
         }
 
         logger.info('tool-loop: executing tool', {
@@ -583,6 +594,7 @@ export class ToolLoop {
 
         let toolResult: string;
         try {
+          flow.push({ stage: 'tool_call', tool: parsed.tool, input: parsed.input ?? {} });
           toolResult = await tool.run(parsed.input ?? {});
         } catch (e) {
           toolResult = `Tool execution failed: ${String(e)}`;
@@ -591,6 +603,11 @@ export class ToolLoop {
 
         toolsUsed.push(parsed.tool);
         toolSteps++;
+        flow.push({
+          stage: 'tool_result',
+          tool: parsed.tool,
+          ok: !toolResult.startsWith('Tool execution failed:'),
+        });
 
         // Inject tool result back into message history and loop again.
         const assistantMsg = createMessage({ role: 'assistant', content: llmText });
@@ -613,6 +630,7 @@ export class ToolLoop {
           toolSteps,
           toolsUsed,
           stepMessages,
+          flow,
         };
       }
 
@@ -642,12 +660,13 @@ export class ToolLoop {
           toolSteps,
           toolsUsed,
           stepMessages,
+          flow,
         };
       }
 
       // Case 4: Plain text (no JSON) — treat as final answer.
       logger.debug('tool-loop: plain text final response', { step, toolSteps });
-      return { finalText: llmText, toolSteps, toolsUsed, stepMessages };
+      return { finalText: llmText, toolSteps, toolsUsed, stepMessages, flow };
     }
 
     // Fallback if the loop is exhausted unexpectedly.
@@ -656,6 +675,7 @@ export class ToolLoop {
       toolSteps,
       toolsUsed,
       stepMessages,
+      flow,
     };
   }
 }

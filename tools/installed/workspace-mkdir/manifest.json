@@ -1,0 +1,23 @@
+{
+  "name": "workspace-mkdir",
+  "displayName": "Workspace Mkdir",
+  "description": "Create a workspace folder.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Create reports folder",
+    "Make artifacts/experiment-1",
+    "Create backup"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace-relative folder path."
+      }
+    },
+    "required": ["path"]
+  }
+}

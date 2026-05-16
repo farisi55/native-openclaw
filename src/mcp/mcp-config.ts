@@ -1,0 +1,147 @@
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { dirname, resolve } from 'path';
+
+export interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export interface McpConfigFile {
+  mcpServers: Record<string, McpServerConfig>;
+}
+
+export const DEFAULT_MCP_CONFIG: McpConfigFile = {
+  mcpServers: {},
+};
+
+function createDefaultMcpConfig(): McpConfigFile {
+  return { mcpServers: {} };
+}
+
+export const MCP_SERVER_PRESETS: Record<string, McpServerConfig> = {
+  console: {
+    command: 'npx',
+    args: ['-y', '@ooples/mcp-console-automation'],
+  },
+  tavily: {
+    command: 'npx',
+    args: ['-y', '@tavily/mcp-server'],
+  },
+  firecrawl: {
+    command: 'npx',
+    args: ['-y', '@mendable/firecrawl-mcp-server'],
+  },
+  e2b: {
+    command: 'npx',
+    args: ['-y', '@e2b/mcp-server'],
+  },
+  brevo: {
+    command: 'npx',
+    args: ['-y', 'mcp-server-brevo'],
+  },
+};
+
+export function resolveMcpConfigPath(configPath = './data/mcp.json'): string {
+  return resolve(process.cwd(), configPath);
+}
+
+export function validateMcpServerConfig(value: unknown): McpServerConfig {
+  if (!value || typeof value !== 'object') {
+    throw new Error('MCP server config must be an object.');
+  }
+
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate['command'] !== 'string' || candidate['command'].trim() === '') {
+    throw new Error('MCP server config requires a non-empty command.');
+  }
+
+  if (candidate['args'] !== undefined) {
+    if (!Array.isArray(candidate['args']) || !candidate['args'].every((arg) => typeof arg === 'string')) {
+      throw new Error('MCP server args must be an array of strings.');
+    }
+  }
+
+  if (candidate['env'] !== undefined) {
+    if (!candidate['env'] || typeof candidate['env'] !== 'object' || Array.isArray(candidate['env'])) {
+      throw new Error('MCP server env must be an object.');
+    }
+    for (const [key, val] of Object.entries(candidate['env'] as Record<string, unknown>)) {
+      if (typeof key !== 'string' || typeof val !== 'string') {
+        throw new Error('MCP server env values must be strings.');
+      }
+    }
+  }
+
+  const config: McpServerConfig = {
+    command: candidate['command'].trim(),
+  };
+
+  if (candidate['args'] !== undefined) config.args = candidate['args'] as string[];
+  if (candidate['env'] !== undefined) config.env = candidate['env'] as Record<string, string>;
+
+  return config;
+}
+
+export function validateMcpConfigFile(value: unknown): McpConfigFile {
+  if (!value || typeof value !== 'object') return createDefaultMcpConfig();
+
+  const candidate = value as Record<string, unknown>;
+  const rawServers = candidate['mcpServers'];
+  if (!rawServers || typeof rawServers !== 'object' || Array.isArray(rawServers)) {
+    return createDefaultMcpConfig();
+  }
+
+  const mcpServers: Record<string, McpServerConfig> = {};
+  for (const [name, config] of Object.entries(rawServers as Record<string, unknown>)) {
+    mcpServers[name] = validateMcpServerConfig(config);
+  }
+
+  return { mcpServers };
+}
+
+export async function loadMcpConfig(configPath = './data/mcp.json'): Promise<McpConfigFile> {
+  const absolutePath = resolveMcpConfigPath(configPath);
+
+  if (!existsSync(absolutePath)) {
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, JSON.stringify(DEFAULT_MCP_CONFIG, null, 2), 'utf-8');
+    return createDefaultMcpConfig();
+  }
+
+  const raw = await readFile(absolutePath, 'utf-8');
+  const parsed = raw.trim() ? JSON.parse(raw) : DEFAULT_MCP_CONFIG;
+  return validateMcpConfigFile(parsed);
+}
+
+export async function saveMcpConfig(
+  configPath: string,
+  config: McpConfigFile
+): Promise<void> {
+  const absolutePath = resolveMcpConfigPath(configPath);
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, JSON.stringify(validateMcpConfigFile(config), null, 2), 'utf-8');
+}
+
+export function parseMcpServerInput(name: string, rawJson?: string): McpServerConfig {
+  const normalized = name.toLowerCase();
+
+  if (!rawJson || rawJson.trim() === '') {
+    const preset = MCP_SERVER_PRESETS[normalized];
+    if (!preset) {
+      throw new Error(`No MCP preset found for "${name}". Provide a JSON server config.`);
+    }
+    const config: McpServerConfig = { command: preset.command };
+    if (preset.args) config.args = [...preset.args];
+    if (preset.env) config.env = { ...preset.env };
+    return config;
+  }
+
+  const parsed = JSON.parse(rawJson);
+  const fullConfig = validateMcpConfigFile(parsed);
+  const fromFull = fullConfig.mcpServers[name] ?? fullConfig.mcpServers[normalized];
+  if (fromFull) return fromFull;
+
+  return validateMcpServerConfig(parsed);
+}

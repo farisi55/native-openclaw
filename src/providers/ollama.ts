@@ -12,6 +12,7 @@ import { ProviderError, type ChatOptions, type ChatResponse, type ModelInfo } fr
 import { getOptionalEnv } from '../config/env';
 import { now } from '../utils/helpers';
 import { BaseProvider } from './base';
+import { networkFetch } from '../network';
 
 // ─── Ollama wire types ────────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ export class OllamaProvider extends BaseProvider {
 
   override async healthCheck(): Promise<boolean> {
     try {
-      const r = await fetch(`${this.baseUrl}/`, { method: 'GET' });
+      const r = await networkFetch(`${this.baseUrl}/`, { method: 'GET' });
       return r.ok;
     } catch {
       return false;

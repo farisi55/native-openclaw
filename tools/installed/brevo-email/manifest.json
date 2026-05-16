@@ -1,0 +1,22 @@
+{
+  "name": "brevo-email",
+  "displayName": "Brevo Email",
+  "description": "Send HTML email through Brevo using BREVO_* environment configuration.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Send this HTML report by email",
+    "Kirim laporan HTML via Brevo"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "subject": { "type": "string", "description": "Email subject" },
+      "htmlContent": { "type": "string", "description": "HTML email body" },
+      "recipientEmail": { "type": "string", "description": "Optional recipient override" },
+      "recipientName": { "type": "string", "description": "Optional recipient name override" }
+    },
+    "required": ["subject", "htmlContent"]
+  }
+}

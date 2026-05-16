@@ -17,6 +17,7 @@
 
 import { createLogger } from '../utils/logger';
 import { getOptionalEnv } from '../config/env';
+import { networkFetch } from '../network';
 
 const logger = createLogger('tool:api-client');
 const DEFAULT_TIMEOUT = 20_000;
@@ -219,7 +220,7 @@ export async function runApiClient(
     };
     if (body !== undefined) init.body = body;
 
-    const res = await fetch(url, init);
+    const res = await networkFetch(url, init);
     clearTimeout(timer);
 
     // Collect response headers

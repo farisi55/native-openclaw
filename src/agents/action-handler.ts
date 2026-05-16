@@ -16,6 +16,8 @@
 
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager } from '../storage/session-manager';
+import type { McpManager } from '../mcp';
+import { validateMcpConfigFile } from '../mcp';
 import { loadSkillFromFile } from '../skills/loader';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
@@ -31,6 +33,8 @@ export interface ActionContext {
   skillsDir: string;
   /** Currently active session ID (may be null). */
   activeSessionId: string | null;
+  /** Optional MCP manager for MCP install/add natural-language actions. */
+  mcpManager?: McpManager;
   /** Called when the active session must be cleared (e.g. after delete). */
   onSessionCleared: () => void;
 }
@@ -49,6 +53,8 @@ const USE_SKILL      = /^(?:use|activate|enable)\s+skill\s+(.+)$/i;
 const INSTALL_SKILL  = /^install\s+skill\s+(.+)$/i;
 const DISABLE_SKILL  = /^(?:disable|deactivate|remove)\s+skill\s+(.+)$/i;
 const DELETE_SESSION = /^delete\s+session\s+([a-f0-9-]{4,36})$/i;
+const ADD_MCP        = /^(?:install|add|use)\s+mcp\s+(.+)$/i;
+const ADD_MCP_CONFIG = /^add\s+this\s+mcp\s+config\s*:\s*(\{[\s\S]+\})$/i;
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -123,6 +129,44 @@ async function handleDeleteSession(idPrefix: string, ctx: ActionContext): Promis
   return `🗑️ Session \`${deletedId.slice(0, 8)}…\` deleted.`;
 }
 
+function normalizeMcpName(input: string): string {
+  const lower = input.trim().toLowerCase();
+  if (lower.includes('console')) return 'console';
+  if (lower.includes('tavily')) return 'tavily';
+  if (lower.includes('firecrawl')) return 'firecrawl';
+  if (lower.includes('e2b')) return 'e2b';
+  if (lower.includes('brevo')) return 'brevo';
+  return lower.replace(/^server\s+/, '').replace(/\s+/g, '-');
+}
+
+async function handleAddMcp(nameInput: string, ctx: ActionContext): Promise<string> {
+  if (!ctx.mcpManager) {
+    return 'MCP is disabled or not initialized. Set MCP_ENABLED=true and restart.';
+  }
+
+  const name = normalizeMcpName(nameInput);
+  await ctx.mcpManager.addServerFromInput(name);
+  logger.info('MCP server added via action', { name });
+  return `MCP server \`${name}\` added. Run \`/mcp start ${name}\` to start it and register its tools.`;
+}
+
+async function handleAddMcpConfig(rawJson: string, ctx: ActionContext): Promise<string> {
+  if (!ctx.mcpManager) {
+    return 'MCP is disabled or not initialized. Set MCP_ENABLED=true and restart.';
+  }
+
+  const config = validateMcpConfigFile(JSON.parse(rawJson));
+  const names = Object.keys(config.mcpServers);
+  if (names.length === 0) return 'No MCP servers found in that config.';
+
+  for (const name of names) {
+    await ctx.mcpManager.addServer(name, config.mcpServers[name]!);
+  }
+
+  logger.info('MCP config added via action', { servers: names });
+  return `Added MCP server(s): ${names.map((name) => `\`${name}\``).join(', ')}. Use \`/mcp start <name>\` to start one.`;
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 /**
@@ -171,6 +215,28 @@ export async function handleAction(
     const idPrefix = deleteMatch[1].trim();
     logger.debug('action: delete session', { idPrefix });
     return { handled: true, response: await handleDeleteSession(idPrefix, ctx) };
+  }
+
+  const mcpConfigMatch = ADD_MCP_CONFIG.exec(trimmed);
+  if (mcpConfigMatch?.[1]) {
+    logger.debug('action: add MCP config');
+    try {
+      return { handled: true, response: await handleAddMcpConfig(mcpConfigMatch[1], ctx) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { handled: true, response: `Could not add MCP config: ${msg}` };
+    }
+  }
+
+  const mcpMatch = ADD_MCP.exec(trimmed);
+  if (mcpMatch?.[1]) {
+    logger.debug('action: add MCP', { input: mcpMatch[1] });
+    try {
+      return { handled: true, response: await handleAddMcp(mcpMatch[1], ctx) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { handled: true, response: `Could not add MCP server: ${msg}` };
+    }
   }
 
   return { handled: false };

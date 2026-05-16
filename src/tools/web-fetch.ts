@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../utils/logger';
+import { networkFetch } from '../network';
 
 const logger = createLogger('tool:web-fetch');
 const TIMEOUT_MS = 15_000;
@@ -29,7 +30,7 @@ async function fetchWithTimeout(url: string, headers: Record<string, string> = {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers });
+    const res = await networkFetch(url, { signal: controller.signal, headers });
     clearTimeout(timer);
     return res;
   } catch (e) {

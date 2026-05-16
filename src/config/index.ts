@@ -7,7 +7,17 @@
 import { validateConfig } from './validator';
 import type { AppConfig } from './validator';
 
-export type { AppConfig, ProviderConfig, AgentConfig, StorageConfig } from './validator';
+export type {
+  AppConfig,
+  ProviderConfig,
+  AgentConfig,
+  StorageConfig,
+  WorkspaceConfig,
+  ApiConfig,
+  TelegramConfig,
+  NetworkConfig,
+  McpConfig,
+} from './validator';
 export { getEnv, getOptionalEnv, getEnvInt, getEnvFloat, getEnvBool } from './env';
 
 let _config: Readonly<AppConfig> | null = null;

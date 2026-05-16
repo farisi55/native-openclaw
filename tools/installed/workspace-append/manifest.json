@@ -1,0 +1,27 @@
+{
+  "name": "workspace-append",
+  "displayName": "Workspace Append",
+  "description": "Append text to a workspace file.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Append this note to MEMORY.md",
+    "Add a checkpoint to HEARTBEAT.md",
+    "Save a task note"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace-relative file path."
+      },
+      "content": {
+        "type": "string",
+        "description": "Text to append."
+      }
+    },
+    "required": ["path", "content"]
+  }
+}

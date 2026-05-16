@@ -15,6 +15,7 @@ export { GroqProvider } from './groq';
 export { MistralProvider } from './mistral';
 export { GeminiProvider } from './gemini';
 export { SambaNovaProvider } from './sambanova';
+export { ZaiProvider } from './zai';
 
 const logger = createLogger('providers');
 
@@ -59,6 +60,13 @@ export async function createProviderRegistry(config: AppConfig): Promise<Provide
       const { SambaNovaProvider } = await import('./sambanova');
       return new SambaNovaProvider();
     }, 'sambanova');
+  }
+
+  if (process.env['ZAI_API_KEY']) {
+    await tryRegister(registry, async () => {
+      const { ZaiProvider } = await import('./zai');
+      return new ZaiProvider();
+    }, 'zai');
   }
 
   if (registry.size === 0) {

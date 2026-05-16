@@ -10,6 +10,7 @@
  */
 
 import { createLogger } from '../utils/logger';
+import { networkFetch } from '../network';
 
 const logger = createLogger('tool:browsing');
 
@@ -44,7 +45,7 @@ async function fetchWithTimeout(
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
   try {
-    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    const res = await networkFetch(url, { ...opts, signal: ctrl.signal });
     clearTimeout(timer);
     return res;
   } catch (e) {

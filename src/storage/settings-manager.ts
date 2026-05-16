@@ -14,6 +14,7 @@ export interface AppSettings {
   defaultProvider?: string;
   defaultModel?: string;
   defaultModels?: Record<string, string>;
+  lastActiveSessionId?: string;
   routerEnabled?: boolean;
   autoFallback?: boolean;
   autoSwitch?: boolean;
@@ -27,6 +28,7 @@ const BUILTIN_DEFAULTS: Record<string, string> = {
   openrouter:  'liquid/lfm-2.5-1.2b-instruct:free',
   gemini:      'gemini-1.5-flash',
   sambanova:   'Meta-Llama-3.1-70B-Instruct',
+  zai:          'glm-4.5',
   openai:      'gpt-4o-mini',
   anthropic:   'claude-3-haiku-20240307',
 };
@@ -82,6 +84,20 @@ export class SettingsManager {
   async setDefaultModel(model: string): Promise<void> {
     await this.kv.set('defaultModel', model);
     logger.info('default model saved', { model });
+  }
+
+  async getLastActiveSessionId(): Promise<string | null> {
+    return this.get<string>('lastActiveSessionId');
+  }
+
+  async setLastActiveSessionId(sessionId: string): Promise<void> {
+    await this.kv.set('lastActiveSessionId', sessionId);
+    logger.debug('last active session saved', { sessionId });
+  }
+
+  async clearLastActiveSessionId(): Promise<void> {
+    await this.kv.delete('lastActiveSessionId');
+    logger.debug('last active session cleared');
   }
 
   async getRouterEnabled(): Promise<boolean> {

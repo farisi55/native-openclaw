@@ -1,0 +1,27 @@
+{
+  "name": "workspace-write",
+  "displayName": "Workspace Write",
+  "description": "Write or replace a workspace file.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Write a report to reports/summary.md",
+    "Save notes to NOTES.md",
+    "Create an artifact file"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace-relative file path."
+      },
+      "content": {
+        "type": "string",
+        "description": "File content to write."
+      }
+    },
+    "required": ["path", "content"]
+  }
+}

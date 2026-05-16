@@ -1,0 +1,53 @@
+import type { WorkflowDefinition, WorkflowToolCapability } from './workflow-types';
+
+export function buildWorkflowPlanningPrompt(
+  workflow: WorkflowDefinition,
+  tools: WorkflowToolCapability[]
+): string {
+  return [
+    'You are an autonomous workflow planner.',
+    '',
+    'Given WORKFLOW.md content and available tools, produce a JSON execution plan.',
+    '',
+    'Output ONLY valid JSON:',
+    '',
+    '{',
+    '  "title": "string",',
+    '  "topic": "string",',
+    '  "steps": [',
+    '    {',
+    '      "id": "step-1",',
+    '      "type": "search | scrape | analyze | chart | report | email | workspace_write",',
+    '      "tool": "tool-name-or-null",',
+    '      "goal": "string",',
+    '      "input": {}',
+    '    }',
+    '  ],',
+    '  "requiresEmail": true,',
+    '  "requiresChart": true,',
+    '  "missingTools": []',
+    '}',
+    '',
+    'Rules:',
+    '- Do not invent tools.',
+    '- Use only available tools.',
+    '- If tool is missing, add it to missingTools.',
+    '- Prefer Tavily for search if available.',
+    '- Prefer Firecrawl for scraping if available.',
+    '- Prefer E2B for Python/chart if available.',
+    '- Prefer Brevo for email if available.',
+    '- If MCP tools are unavailable, use native tools if available.',
+    '- If no suitable tool exists, report missing capability.',
+    '',
+    'Available tools:',
+    JSON.stringify(tools.map((tool) => ({
+      name: tool.runtimeName,
+      source: tool.source,
+      capabilities: tool.capabilities,
+      description: tool.description,
+    })), null, 2),
+    '',
+    'WORKFLOW.md:',
+    workflow.rawMarkdown,
+  ].join('\n');
+}

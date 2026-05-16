@@ -16,6 +16,7 @@ import {
 import type { Message } from '../types/message';
 import { createLogger } from '../utils/logger';
 import { now } from '../utils/helpers';
+import { networkFetch } from '../network';
 
 // ─── OpenAI-compatible wire types ─────────────────────────────────────────────
 
@@ -100,7 +101,7 @@ export abstract class BaseProvider implements IProvider {
       if (rest.headers) init.headers = rest.headers;
       if (rest.body !== undefined) init.body = rest.body;
 
-      const response = await fetch(url, init);
+      const response = await networkFetch(url, init);
       clearTimeout(timer);
 
       if (!response.ok) await this.handleHttpError(response);

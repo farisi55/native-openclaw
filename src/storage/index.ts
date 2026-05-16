@@ -14,3 +14,5 @@ export type { AppSettings } from './settings-manager';
 
 export { MemoryManager } from './memory-manager';
 export type { GlobalMemory, SessionMemory, MemoryStore, MemoryValue } from './memory-manager';
+
+export { TelegramSessionManager } from './telegram-session-manager';

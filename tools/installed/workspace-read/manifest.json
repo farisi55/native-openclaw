@@ -1,0 +1,23 @@
+{
+  "name": "workspace-read",
+  "displayName": "Workspace Read",
+  "description": "Read a workspace file.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Read AGENTS.md",
+    "Open MEMORY.md",
+    "Show the notes in reports/summary.md"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace-relative file path."
+      }
+    },
+    "required": ["path"]
+  }
+}

@@ -173,6 +173,29 @@ export class ToolRegistry {
     return this.loaded;
   }
 
+  registerRuntimeTool(tool: RegisteredTool): void {
+    this.registry.set(tool.manifest.name, tool);
+    logger.info('runtime tool registered', { name: tool.manifest.name });
+  }
+
+  unregisterTool(name: string): boolean {
+    const removed = this.registry.delete(name);
+    if (removed) logger.info('runtime tool unregistered', { name });
+    return removed;
+  }
+
+  unregisterByPrefix(prefix: string): number {
+    let removed = 0;
+    for (const name of [...this.registry.keys()]) {
+      if (name.startsWith(prefix)) {
+        this.registry.delete(name);
+        removed++;
+      }
+    }
+    if (removed > 0) logger.info('runtime tools unregistered', { prefix, removed });
+    return removed;
+  }
+
   // ── Enable / disable ───────────────────────────────────────────────────────
 
   async enableTool(name: string): Promise<void> {

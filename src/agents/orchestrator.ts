@@ -23,6 +23,7 @@ import type { SessionManager, Session } from '../storage/session-manager';
 import type { MemoryManager } from '../storage/memory-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { ProviderRouter } from '../router/provider-router';
+import type { McpManager } from '../mcp';
 import { ToolLoop } from './tool-loop';
 import { ReasoningEngine } from './reasoning-engine';
 import { CapabilityInstaller } from './capability-installer';
@@ -32,6 +33,7 @@ import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
 import { extractMemory } from './memory-extractor';
 import type { SystemContextInput } from './system-context';
+import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { createLogger } from '../utils/logger';
 import { getOptionalEnv } from '../config/env';
 
@@ -76,6 +78,11 @@ export interface OrchestratorOptions {
    * Default: true
    */
   useSemanticCompression?: boolean;
+
+  /**
+   * Optional MCP manager for natural-language MCP management actions.
+   */
+  mcpManager?: McpManager;
 }
 
 export interface TurnInput {
@@ -93,6 +100,7 @@ export interface TurnResult {
   session: Session;
   newSession: boolean;
   wasAction: boolean;
+  flow: Array<Record<string, unknown>>;
   toolName?: string | undefined;
   toolsUsed?: string[];
   toolSteps?: number;
@@ -106,10 +114,11 @@ export class Orchestrator {
   private readonly memory: MemoryManager;
   private readonly toolRegistry: ToolRegistry;
   private readonly router: ProviderRouter;
+  private readonly mcpManager: McpManager | undefined;
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
-  private readonly opts: Required<OrchestratorOptions>;
+  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager'>>;
 
   private _activeSessionId: string | null = null;
 
@@ -128,6 +137,7 @@ export class Orchestrator {
     this.toolRegistry = toolRegistry;
     this.router = router;
     this.contextCompressor = contextCompressor;
+    this.mcpManager = opts.mcpManager;
 
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
@@ -148,6 +158,7 @@ export class Orchestrator {
     // ── 1. Session ────────────────────────────────────────────────────────────
     let session: Session;
     let newSession = false;
+    const flow: Array<Record<string, unknown>> = [];
 
     if (input.sessionId) {
       const sessionResult = await this.sessions.get(input.sessionId);
@@ -217,6 +228,38 @@ export class Orchestrator {
         session,
         newSession,
         wasAction: true,
+        flow: [{ stage: 'final', type: 'capability_action' }],
+      };
+    }
+
+    if (isWorkflowRunRequest(input.userInput)) {
+      const workflowResult = await runWorkflowFromWorkspace({
+        ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
+        toolRegistry: this.toolRegistry,
+        provider: input.provider,
+        model: input.model,
+      });
+
+      session = await this.persistExchange(
+        session.id,
+        input.userInput,
+        workflowResult.content
+      );
+
+      return {
+        assistantText: workflowResult.content,
+        session,
+        newSession,
+        wasAction: true,
+        flow: [
+          {
+            stage: 'final',
+            type: 'workflow',
+            workflow: workflowResult.title,
+            tools: workflowResult.toolsUsed,
+          },
+        ],
+        toolsUsed: workflowResult.toolsUsed,
       };
     }
 
@@ -228,6 +271,7 @@ export class Orchestrator {
       sessions: this.sessions,
       skillsDir,
       activeSessionId: this._activeSessionId,
+      ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
       onSessionCleared: () => {
         this._activeSessionId = null;
       },
@@ -253,6 +297,7 @@ export class Orchestrator {
         session,
         newSession,
         wasAction: true,
+        flow: [{ stage: 'final', type: 'action' }],
       };
     }
 
@@ -268,12 +313,24 @@ export class Orchestrator {
 
       if (reasoningResult.needsTool && reasoningResult.tool) {
         reasoningHint = reasoningResult.tool;
+        flow.push({
+          stage: 'reasoning',
+          needsTool: true,
+          tool: reasoningHint,
+          reason: reasoningResult.reason || 'Tool likely needed',
+        });
 
         logger.info('reasoning: tool hint', {
           tool: reasoningHint,
           reason: reasoningResult.reason,
         });
       } else {
+        flow.push({
+          stage: 'reasoning',
+          needsTool: false,
+          tool: null,
+          reason: reasoningResult.reason || 'No tool needed',
+        });
         logger.debug('reasoning: no tool needed', {
           reason: reasoningResult.reason,
         });
@@ -369,6 +426,10 @@ export class Orchestrator {
       maxRepairAttempts: 2,
     });
 
+    let routedProviderId = input.provider.id;
+    let routedModel = input.model;
+    let usedFallback = false;
+
     const routedProvider: IProvider = {
       ...input.provider,
       chat: async (chatOptions: ChatOptions): Promise<ChatResponse> => {
@@ -378,6 +439,10 @@ export class Orchestrator {
           chatOptions,
           input.userInput
         );
+
+        routedProviderId = routedResult.providerId;
+        routedModel = routedResult.model;
+        usedFallback = routedResult.usedFallback;
 
         return routedResult.response;
       },
@@ -390,6 +455,15 @@ export class Orchestrator {
       systemPrompt,
       input.signal
     );
+
+    flow.push(...loopResult.flow);
+    if (usedFallback) {
+      flow.push({
+        stage: 'provider_fallback',
+        provider: routedProviderId,
+        model: routedModel,
+      });
+    }
 
     logger.info('tool-loop complete', {
       toolSteps: loopResult.toolSteps,
@@ -429,9 +503,15 @@ export class Orchestrator {
       session,
       newSession,
       wasAction: false,
+      flow: [...flow, { stage: 'final' }],
       toolSteps: loopResult.toolSteps,
       toolsUsed: loopResult.toolsUsed,
+      usedFallback,
     };
+
+    if (usedFallback) {
+      result.fallbackProvider = routedProviderId;
+    }
 
     if (loopResult.toolsUsed.length > 0) {
       result.toolName = loopResult.toolsUsed[loopResult.toolsUsed.length - 1];

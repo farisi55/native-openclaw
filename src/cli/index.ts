@@ -7,13 +7,15 @@ import * as readline from 'readline/promises';
 import { stdin as input, stdout as output, exit } from 'process';
 import type { ProviderRegistry, IProvider } from '../types/provider';
 import type { SkillRegistry } from '../skills/registry';
-import type { SessionManager } from '../storage/session-manager';
+import type { SessionManager, Session } from '../storage/session-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { Orchestrator } from '../agents/orchestrator';
+import type { McpManager } from '../mcp';
+import { createSlashCommandCompleter } from './autocomplete';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
-  cmdSession, cmdProvider, cmdSettings, cmdTools,
+  cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdNetwork, cmdMcp, cmdWorkflow,
   type CLIContext,
 } from './commands';
 
@@ -47,6 +49,54 @@ function printBanner(providerName: string, model: string, skillCount: number): v
 function buildPrompt(providerId: string, modelId: string): string {
   const short = modelId.length > 22 ? modelId.slice(0, 20) + '…' : modelId;
   return `${C.bold}${C.green}you${C.reset} ${C.dim}(${providerId}/${short})${C.reset} › `;
+}
+
+export async function createDefaultSession(
+  sessions: SessionManager,
+  settings: SettingsManager,
+  provider: IProvider,
+  model: string,
+  skillIds: string[]
+): Promise<Session> {
+  const createResult = await sessions.create({
+    providerId: provider.id,
+    model,
+    activeSkills: skillIds,
+  });
+
+  if (!createResult.ok) throw createResult.error;
+
+  await settings.setLastActiveSessionId(createResult.value.id);
+  return createResult.value;
+}
+
+export async function resolveStartupSession(
+  sessions: SessionManager,
+  settings: SettingsManager,
+  provider: IProvider,
+  model: string,
+  skillIds: string[]
+): Promise<Session> {
+  const lastActiveSessionId = await settings.getLastActiveSessionId();
+
+  if (lastActiveSessionId) {
+    const result = await sessions.get(lastActiveSessionId);
+    if (!result.ok) throw result.error;
+    if (result.value) {
+      await settings.setLastActiveSessionId(result.value.id);
+      return result.value;
+    }
+  }
+
+  const recentResult = await sessions.getMostRecentSession();
+  if (!recentResult.ok) throw recentResult.error;
+
+  if (recentResult.value) {
+    await settings.setLastActiveSessionId(recentResult.value.id);
+    return recentResult.value;
+  }
+
+  return createDefaultSession(sessions, settings, provider, model, skillIds);
 }
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -95,9 +145,13 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'model':               await cmdModel(ctx, args); break;
     case 'skills': case 'sk':   cmdSkills(ctx, args); break;
     case 'session': case 's':   await cmdSession(ctx, args); break;
-    case 'provider': case 'p':  await cmdProvider(ctx, args); break;
+    case 'provider': case 'providers': case 'p':  await cmdProvider(ctx, args); break;
     case 'settings':            await cmdSettings(ctx, args); break;
     case 'tools': case 't':     await cmdTools(ctx, args); break;
+    case 'workspace': case 'w': await cmdWorkspace(ctx, args); break;
+    case 'network': case 'net': await cmdNetwork(ctx, args); break;
+    case 'mcp':                 await cmdMcp(ctx, args); break;
+    case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;
     case 'exit': case 'quit': case 'q':
       output.write(c('dim', '\n  Goodbye.\n\n'));
       exit(0);
@@ -114,10 +168,11 @@ export interface CLIRunnerOptions {
   settings: SettingsManager;
   toolRegistry: ToolRegistry;
   orchestrator: Orchestrator;
+  mcpManager?: McpManager;
 }
 
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
-  const { providers, skillRegistry, sessions, settings, toolRegistry, orchestrator } = opts;
+  const { providers, skillRegistry, sessions, settings, toolRegistry, orchestrator, mcpManager } = opts;
 
   if (providers.size === 0) {
     output.write(c('red', '\n  No providers available. Check your .env configuration.\n\n'));
@@ -128,7 +183,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
   const savedProvider  = await settings.getDefaultProvider();
   const savedModel     = await settings.getDefaultModel();
 
-  const priority = ['groq', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'ollama'];
+  const priority = ['zai', 'groq', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'ollama'];
   let activeProvider: IProvider | undefined;
 
   // Try saved default first
@@ -164,7 +219,14 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     }
   }
 
-  let activeSessionId: string | null = null;
+  let activeSession = await resolveStartupSession(
+    sessions,
+    settings,
+    activeProvider!,
+    activeModel,
+    skillRegistry.activeIds
+  );
+  let activeSessionId: string | null = activeSession.id;
 
   // ── Build context ───────────────────────────────────────────────────────────
   const ctx: CLIContext = {
@@ -173,17 +235,30 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     sessions,
     settings,
     toolRegistry,
+    ...(mcpManager ? { mcpManager } : {}),
     get activeProvider()  { return activeProvider!; },
     get activeModel()     { return activeModel; },
     get activeSessionId() { return activeSessionId; },
     setProvider(p: IProvider, m: string) { activeProvider = p; activeModel = m; },
     setModel(m: string)   { activeModel = m; },
-    setSession(id: string | null) { activeSessionId = id; },
+    async setSession(id: string | null) {
+      activeSessionId = id;
+      if (id) {
+        await settings.setLastActiveSessionId(id);
+      } else {
+        await settings.clearLastActiveSessionId();
+      }
+    },
   };
 
   printBanner(activeProvider!.displayName, activeModel, skillRegistry.size);
 
-  const rl = readline.createInterface({ input, output, terminal: true });
+  const rl = readline.createInterface({
+    input,
+    output,
+    terminal: true,
+    completer: createSlashCommandCompleter(),
+  });
   rl.on('close', () => { output.write(c('dim', '\n  Goodbye.\n\n')); exit(0); });
 
   // ── REPL ───────────────────────────────────────────────────────────────────
@@ -222,6 +297,12 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
       // Sync session id in case action-handler cleared it
       if (result.wasAction && !result.session.id) {
         activeSessionId = null;
+      }
+
+      if (activeSessionId) {
+        await settings.setLastActiveSessionId(activeSessionId);
+      } else {
+        await settings.clearLastActiveSessionId();
       }
 
       printAssistantReply(

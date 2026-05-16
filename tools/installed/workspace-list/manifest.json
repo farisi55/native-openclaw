@@ -1,0 +1,22 @@
+{
+  "name": "workspace-list",
+  "displayName": "Workspace List",
+  "description": "List workspace files and folders.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "List workspace files",
+    "Show files in reports",
+    "What is in the workspace?"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Optional workspace-relative folder path."
+      }
+    }
+  }
+}

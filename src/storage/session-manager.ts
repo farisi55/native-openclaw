@@ -86,6 +86,12 @@ export class SessionManager {
     return { ok: true, value: sessions };
   }
 
+  async getMostRecentSession(): Promise<Result<Session | null>> {
+    const result = await this.list();
+    if (!result.ok) return { ok: false, error: result.error };
+    return { ok: true, value: result.value[0] ?? null };
+  }
+
   async appendMessage(opts: AppendMessageOptions): Promise<Result<Session>> {
     const getResult = await this.get(opts.sessionId);
     if (!getResult.ok) return { ok: false, error: getResult.error };

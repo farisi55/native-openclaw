@@ -14,10 +14,16 @@ import { SemanticMemory } from './memory/semantic-memory';
 import { ContextCompressor } from './memory/context-compressor';
 import { Orchestrator } from './agents';
 import { startCLI } from './cli';
+import { WorkspaceManager } from './workspace';
+import { startApiServerIfEnabled } from './api';
+import { startTelegramIntegrationIfEnabled } from './integrations';
+import { configureDnsDefaults } from './network';
+import { McpManager } from './mcp';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   setRootLogLevel(config.logLevel);
+  configureDnsDefaults();
 
   const logger = createLogger('bootstrap');
 
@@ -78,8 +84,30 @@ async function bootstrap(): Promise<void> {
   }
 
   // Plugin tool registry
+  const workspace = new WorkspaceManager();
+  await workspace.ensureWorkspace();
+  logger.info(`Workspace ready: ${workspace.rootDir}`);
+
   const toolRegistry = new ToolRegistry(process.cwd());
   await toolRegistry.loadTools();
+
+  let mcpManager: McpManager | undefined;
+  if (config.mcp.enabled) {
+    mcpManager = new McpManager({
+      configPath: config.mcp.configPath,
+      toolRegistry,
+    });
+    await mcpManager.init();
+    const mcpResults = await mcpManager.startAllConfigured();
+    const failed = mcpResults.filter((result) => !result.ok);
+    if (failed.length > 0) {
+      logger.warn('Some MCP servers failed to start', { failed });
+    }
+    logger.info('MCP ready', {
+      servers: mcpResults.length,
+      tools: mcpManager.listTools().map((tool) => tool.runtimeName),
+    });
+  }
 
   logger.info(`Tools ready (${toolRegistry.size})`, {
     tools: toolRegistry.listTools().map((tool) => tool.manifest.name),
@@ -100,8 +128,29 @@ async function bootstrap(): Promise<void> {
       maxTokens: config.agent.maxTokens,
       useReasoning: process.env['REASONING_ENABLED'] !== 'false',
       useSemanticCompression: process.env['SEMANTIC_MEMORY'] !== 'false',
+      ...(mcpManager ? { mcpManager } : {}),
     }
   );
+
+  await startApiServerIfEnabled({
+    providers,
+    skillRegistry,
+    sessions,
+    settings,
+    toolRegistry,
+    orchestrator,
+    ...(mcpManager ? { mcpManager } : {}),
+  });
+
+  await startTelegramIntegrationIfEnabled({
+    providers,
+    skillRegistry,
+    sessions,
+    settings,
+    toolRegistry,
+    orchestrator,
+    ...(mcpManager ? { mcpManager } : {}),
+  }, config.storage.dataDir);
 
   // CLI
   await startCLI({
@@ -111,6 +160,7 @@ async function bootstrap(): Promise<void> {
     settings,
     toolRegistry,
     orchestrator,
+    ...(mcpManager ? { mcpManager } : {}),
   });
 }
 
