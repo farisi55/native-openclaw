@@ -44,6 +44,76 @@ function stripMarkdownFences(text: string): string {
   return text.replace(/```json/gi, '').replace(/```/g, '').trim();
 }
 
+const INTERNAL_XML_BLOCK_RE = /<(reasoning|analysis|thought|plan)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const INTERNAL_HEADING_RE = /^(#{1,6}\s*)?(reasoning|thought|analysis|plan|decision|observation|action|tool call|internal reasoning)\s*:?\s*$/i;
+const ANSWER_HEADING_RE = /^#{1,6}\s*(final answer|answer|jawaban)\s*:?\s*$/i;
+const INTERNAL_LINE_RE = /^(?:[-*]\s*)?(?:the user is asking|user is asking|the user asks|from the memory|based on memory|i should answer|i need to answer|i need to|reasoning:|thought:|analysis:|plan:|decision:|observation:|action:|tool call:|internal reasoning:|i will use|i should use)\b/i;
+const FINAL_LABEL_RE = /^(?:final answer|answer|jawaban)\s*:\s*/i;
+
+function removeInternalHeadingBlocks(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  let droppingInternalSection = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (INTERNAL_HEADING_RE.test(trimmed)) {
+      droppingInternalSection = true;
+      continue;
+    }
+
+    if (droppingInternalSection) {
+      if (/^#{1,6}\s+\S/.test(trimmed) && !INTERNAL_HEADING_RE.test(trimmed)) {
+        droppingInternalSection = false;
+        if (!ANSWER_HEADING_RE.test(trimmed)) kept.push(line);
+      }
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join('\n');
+}
+
+export function sanitizeFinalAnswer(text: string): string {
+  const original = text.trim();
+  if (!original) return original;
+
+  let cleaned = original
+    .replace(INTERNAL_XML_BLOCK_RE, '')
+    .trim();
+
+  cleaned = removeInternalHeadingBlocks(cleaned).trim();
+
+  const lines = cleaned.split(/\r?\n/);
+  let start = 0;
+
+  while (start < lines.length) {
+    const trimmed = lines[start]?.trim() ?? '';
+    if (!trimmed || INTERNAL_LINE_RE.test(trimmed)) {
+      start++;
+      continue;
+    }
+    break;
+  }
+
+  cleaned = lines
+    .slice(start)
+    .join('\n')
+    .replace(FINAL_LABEL_RE, '')
+    .trim();
+
+  return cleaned || original;
+}
+
+function toolLoopResult(result: ToolLoopResult): ToolLoopResult {
+  return {
+    ...result,
+    finalText: sanitizeFinalAnswer(result.finalText),
+  };
+}
+
 function extractBalancedJsonCandidate(text: string): string | null {
   const cleaned = stripMarkdownFences(text);
 
@@ -310,7 +380,7 @@ export class ToolLoop {
       } catch (e) {
         const errMsg = `LLM call failed at step ${step}: ${String(e)}`;
         logger.warn(errMsg);
-        return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow };
+        return toolLoopResult({ finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow });
       }
 
       stepMessages.push(createMessage({ role: 'assistant', content: llmText }));
@@ -321,13 +391,13 @@ export class ToolLoop {
           const validationError = validateToolCall(parsed, availableTools);
           if (validationError) {
             logger.warn('tool-loop: invalid tool call at max step', { error: validationError, modelOutput: llmText });
-            return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow };
+            return toolLoopResult({ finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
           }
 
           // FIX: getTool returns RegisteredTool | undefined — no 'as any'
           const tool: RegisteredTool | undefined = this.registry.getTool(parsed.tool);
           if (!tool) {
-            return { finalText: `❌ Tool "${parsed.tool}" was requested but is not available.`, toolSteps, toolsUsed, stepMessages, flow };
+            return toolLoopResult({ finalText: `❌ Tool "${parsed.tool}" was requested but is not available.`, toolSteps, toolsUsed, stepMessages, flow });
           }
 
           let toolResult: string;
@@ -341,7 +411,7 @@ export class ToolLoop {
           toolsUsed.push(parsed.tool);
           toolSteps++;
           flow.push({ stage: 'tool_result', tool: parsed.tool, ok: !toolResult.startsWith('Tool execution failed:') });
-          return { finalText: toolResult, toolSteps, toolsUsed, stepMessages, flow };
+          return toolLoopResult({ finalText: toolResult, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         const validationError = validateToolCall(parsed, availableTools);
@@ -353,7 +423,7 @@ export class ToolLoop {
             logger.debug('tool-loop: repair retry queued', { repairAttempts, step });
             continue;
           }
-          return { finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow };
+          return toolLoopResult({ finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         // FIX: no 'as any' — proper type
@@ -366,7 +436,7 @@ export class ToolLoop {
             currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(`Requested unavailable tool: ${parsed.tool}\n\n${llmText}`, availableTools) })];
             continue;
           }
-          return { finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow };
+          return toolLoopResult({ finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         logger.info('tool-loop: executing tool', { tool: parsed.tool, input: parsed.input, step });
@@ -391,7 +461,7 @@ export class ToolLoop {
 
       if (parsed?.type === 'final_response') {
         logger.debug('tool-loop: structured final_response', { step, toolSteps });
-        return { finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow };
+        return toolLoopResult({ finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow });
       }
 
       if (looksLikeStructuredToolCall(llmText, availableTools)) {
@@ -401,16 +471,16 @@ export class ToolLoop {
           currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(llmText, availableTools) })];
           continue;
         }
-        return {
+        return toolLoopResult({
           finalText: '❌ The model produced a tool-call-like response, but it could not be parsed safely.',
           toolSteps, toolsUsed, stepMessages, flow,
-        };
+        });
       }
 
       logger.debug('tool-loop: plain text final response', { step, toolSteps });
-      return { finalText: llmText, toolSteps, toolsUsed, stepMessages, flow };
+      return toolLoopResult({ finalText: llmText, toolSteps, toolsUsed, stepMessages, flow });
     }
 
-    return { finalText: '', toolSteps, toolsUsed, stepMessages, flow };
+    return toolLoopResult({ finalText: '', toolSteps, toolsUsed, stepMessages, flow });
   }
 }

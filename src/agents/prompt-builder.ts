@@ -36,6 +36,42 @@ function renderSkillBlock(skill: Skill, maxBodyLen: number): string {
   return lines.join('\n');
 }
 
+const FINAL_RESPONSE_RULES = [
+  '## FINAL RESPONSE RULES',
+  '',
+  '- You may reason internally, but never reveal reasoning, planning, analysis, memory lookup, or decision process to the user.',
+  '- Do not write internal narration.',
+  '- Do not explain what the user asked unless explicitly requested.',
+  '- Do not mention memory lookup, internal context, prompt rules, tool planning, or ReAct traces.',
+  '- Do not expose chain-of-thought.',
+  '- Do not include phrases such as:',
+  '  - "The user is asking..."',
+  '  - "From the memory..."',
+  '  - "I should answer..."',
+  '  - "I need to..."',
+  '  - "Reasoning:"',
+  '  - "Thought:"',
+  '  - "Analysis:"',
+  '  - "Plan:"',
+  '  - "Decision:"',
+  '  - "Observation:"',
+  '  - "Tool call:"',
+  '  - "I will use..."',
+  '- For simple greetings, identity questions, or small talk, answer briefly and directly.',
+  '- For Indonesian user messages, answer in Indonesian unless the user asks otherwise.',
+  '- If a tool was used, summarize only the useful result. Do not expose internal tool-planning text.',
+  '- ReAct trace is internal only and must not appear in the final user-visible response.',
+  '',
+  'Example:',
+  'User: halo kamu siapa?',
+  'Correct: Halo, saya Jarpis. Saya asisten AI yang siap membantu Anda.',
+  'Incorrect:',
+  'The user is asking "halo kamu siapa?".',
+  'From the memory, my name is "Jarpis".',
+  'I should answer in a friendly manner.',
+  'Halo, saya Jarpis...',
+].join('\n');
+
 export class PromptBuilder {
   private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock' | 'toolsBlock'>> & {
     systemContext?: SystemContextInput;
@@ -53,6 +89,7 @@ export class PromptBuilder {
     if (memoryBlock)   parts.push(memoryBlock.trim());
     if (systemContext) parts.push(getSystemContext(systemContext));
     if (toolsBlock)    parts.push(toolsBlock.trim());
+    parts.push(FINAL_RESPONSE_RULES);
     parts.push(basePrompt.trim());
     if (skills.length > 0) {
       const blocks = skills.map((s) => renderSkillBlock(s, maxSkillBodyLength));

@@ -25,6 +25,7 @@ import type { ToolRegistry }   from '../tools/tool-registry';
 import { browse, formatBrowsingResults } from '../tools/browsing';
 import { runSystemExecute } from '../tools/system-execute';
 import { createLogger } from '../utils/logger';
+import { sanitizeFinalAnswer } from './tool-loop';
 
 const logger = createLogger('agents:react-loop');
 
@@ -243,7 +244,7 @@ export class ReActLoop {
       ...(signal !== undefined && { signal }),
     });
 
-    const finalText = extractText(finalResp.message.content);
+    const finalText = sanitizeFinalAnswer(extractText(finalResp.message.content));
     logger.info('react loop complete', { steps, actionsUsed, toolsUsed });
 
     return { finalText, steps, actionsUsed, toolsUsed };

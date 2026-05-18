@@ -39,6 +39,17 @@ import { getOptionalEnv } from '../config/env';
 
 const logger = createLogger('agent:orchestrator');
 
+function sanitizeFlowReason(reason: string | undefined, fallback: string): string {
+  const cleaned = (reason ?? '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return fallback;
+
+  if (/(the user is asking|user is asking|from the memory|based on memory|i should|i need to|reasoning:|thought:|analysis:|plan:|decision:|observation:|internal reasoning)/i.test(cleaned)) {
+    return fallback;
+  }
+
+  return cleaned.length > 140 ? `${cleaned.slice(0, 137)}...` : cleaned;
+}
+
 export interface OrchestratorOptions {
   baseSystemPrompt?: string;
 
@@ -317,7 +328,7 @@ export class Orchestrator {
           stage: 'reasoning',
           needsTool: true,
           tool: reasoningHint,
-          reason: reasoningResult.reason || 'Tool likely needed',
+          reason: sanitizeFlowReason(reasoningResult.reason, 'Tool likely needed'),
         });
 
         logger.info('reasoning: tool hint', {
@@ -329,7 +340,7 @@ export class Orchestrator {
           stage: 'reasoning',
           needsTool: false,
           tool: null,
-          reason: reasoningResult.reason || 'No tool needed',
+          reason: sanitizeFlowReason(reasoningResult.reason, 'No tool needed'),
         });
         logger.debug('reasoning: no tool needed', {
           reason: reasoningResult.reason,

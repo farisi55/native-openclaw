@@ -24,48 +24,48 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
   const registry: ProviderRegistry = new Map();
 
   await tryRegister(registry, async () => {
-    const { OllamaProvider } = await import('./ollama');
+    const { OllamaProvider } = await import('./ollama.js');
     return new OllamaProvider();
   }, 'ollama');
 
   if (process.env['OPENROUTER_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { OpenRouterProvider } = await import('./openrouter');
+      const { OpenRouterProvider } = await import('./openrouter.js');
       return new OpenRouterProvider();
     }, 'openrouter');
   }
 
   if (process.env['GROQ_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { GroqProvider } = await import('./groq');
+      const { GroqProvider } = await import('./groq.js');
       return new GroqProvider();
     }, 'groq');
   }
 
   if (process.env['MISTRAL_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { MistralProvider } = await import('./mistral');
+      const { MistralProvider } = await import('./mistral.js');
       return new MistralProvider();
     }, 'mistral');
   }
 
   if (process.env['GEMINI_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { GeminiProvider } = await import('./gemini');
+      const { GeminiProvider } = await import('./gemini.js');
       return new GeminiProvider();
     }, 'gemini');
   }
 
   if (process.env['SAMBANOVA_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { SambaNovaProvider } = await import('./sambanova');
+      const { SambaNovaProvider } = await import('./sambanova.js');
       return new SambaNovaProvider();
     }, 'sambanova');
   }
 
   if (process.env['ZAI_API_KEY']) {
     await tryRegister(registry, async () => {
-      const { ZaiProvider } = await import('./zai');
+      const { ZaiProvider } = await import('./zai.js');
       return new ZaiProvider();
     }, 'zai');
   }
