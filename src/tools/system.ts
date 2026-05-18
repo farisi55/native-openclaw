@@ -1,9 +1,9 @@
 /**
  * tools/system.ts
  * System info tool — time, date, uptime, platform.
- * query param dispatches to the correct handler.
  */
 
+import * as os from 'os';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('tool:system');
@@ -56,7 +56,6 @@ function getDate(): SystemResult {
 }
 
 function getUptime(): SystemResult {
-  const os = require('os') as typeof import('os');
   const upSec  = process.uptime();
   const sysSec = os.uptime();
   return {
@@ -71,7 +70,6 @@ function getUptime(): SystemResult {
 }
 
 function getPlatform(): SystemResult {
-  const os = require('os') as typeof import('os');
   const memTotal = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
   const memFree  = (os.freemem()  / 1024 / 1024 / 1024).toFixed(1);
   return {
@@ -95,7 +93,6 @@ export function runSystemTool(input: string | { query?: string } | Record<string
     : (input as Record<string, unknown>)['query'] as string | undefined ?? 'time';
 
   const t = (query ?? '').toLowerCase();
-
   logger.debug('system tool', { query: t });
 
   if (/\bdate\b/.test(t) && !/\btime\b/.test(t)) return getDate();
@@ -103,7 +100,6 @@ export function runSystemTool(input: string | { query?: string } | Record<string
   if (/\buptime\b/.test(t))   return getUptime();
   if (/\b(platform|os|system|hardware|info)\b/.test(t)) return getPlatform();
 
-  // Default: both time and date
   const time = getTime();
   const date = getDate();
   return { ok: true, content: `${time.content}\n\n${date.content}` };

@@ -11,7 +11,14 @@ export function makeMcpToolName(serverName: string, toolName: string): string {
   return `mcp:${serverName}:${toolName}`;
 }
 
-function toToolInputSchema(inputSchema: Record<string, unknown> | undefined): ToolManifest['inputSchema'] | undefined {
+// FIX: use explicit inline type instead of ToolManifest['inputSchema'] (which is optional)
+interface SchemaShape {
+  type: string;
+  properties?: Record<string, { type: string; description?: string }>;
+  required?: string[];
+}
+
+function toToolInputSchema(inputSchema: Record<string, unknown> | undefined): SchemaShape | undefined {
   if (!inputSchema) return undefined;
   const type = typeof inputSchema['type'] === 'string' ? inputSchema['type'] : 'object';
   const rawProperties = inputSchema['properties'];
@@ -29,9 +36,8 @@ function toToolInputSchema(inputSchema: Record<string, unknown> | undefined): To
     }
   }
 
-  const schema: ToolManifest['inputSchema'] = {
-    type,
-  };
+  // FIX: build schema with explicit type, conditionally add optional fields
+  const schema: SchemaShape = { type };
   if (Object.keys(properties).length > 0) schema.properties = properties;
   if (Array.isArray(inputSchema['required'])) {
     schema.required = inputSchema['required'].filter((item): item is string => typeof item === 'string');
@@ -69,7 +75,6 @@ function formatMcpResult(result: unknown): string {
       if (text) return text;
     }
   }
-
   return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
 }
 
@@ -90,8 +95,9 @@ export function createMcpRegisteredTool(
     enabled: true,
   };
 
+  // FIX: assign only if defined — avoids exactOptionalPropertyTypes issue
   const inputSchema = toToolInputSchema(tool.inputSchema);
-  if (inputSchema) manifest.inputSchema = inputSchema;
+  if (inputSchema !== undefined) manifest.inputSchema = inputSchema;
 
   return {
     manifest,
@@ -99,7 +105,6 @@ export function createMcpRegisteredTool(
       if (dangerous && !isConfirmed(input)) {
         return `MCP tool "${runtimeName}" may execute code or system commands. Re-run with {"confirm": true} after user confirmation.`;
       }
-
       const result = await caller.callTool(serverName, tool.name, cleanInput(input));
       return formatMcpResult(result);
     },

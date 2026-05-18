@@ -1,7 +1,7 @@
 /**
  * providers/index.ts
  * Registry factory — instantiates all configured providers.
- * v8: adds SambaNova.
+ * v8: adds SambaNova + Z.ai.
  */
 
 import type { AppConfig } from '../config';
@@ -19,7 +19,8 @@ export { ZaiProvider } from './zai';
 
 const logger = createLogger('providers');
 
-export async function createProviderRegistry(config: AppConfig): Promise<ProviderRegistry> {
+// FIX: prefix with underscore — suppresses noUnusedParameters cleanly without 'void' hack
+export async function createProviderRegistry(_config: AppConfig): Promise<ProviderRegistry> {
   const registry: ProviderRegistry = new Map();
 
   await tryRegister(registry, async () => {
@@ -75,7 +76,6 @@ export async function createProviderRegistry(config: AppConfig): Promise<Provide
     logger.info(`Registered providers: ${[...registry.keys()].join(', ')}`);
   }
 
-  void config;
   return registry;
 }
 

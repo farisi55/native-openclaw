@@ -1,15 +1,10 @@
 /**
  * config/validator.ts
  * Zod-based config schema + validator.
- * Produces a typed, frozen AppConfig on success.
  */
 
 import { z } from 'zod';
-import {
-  getOptionalEnv,
-  getEnvInt,
-  getEnvFloat,
-} from './env';
+import { getOptionalEnv, getEnvInt, getEnvFloat } from './env';
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -99,50 +94,38 @@ function buildProviderConfig(
 ): ProviderConfig | undefined {
   const apiKey = getOptionalEnv(`${prefix}_API_KEY`);
   if (!apiKey) return undefined;
-
   return {
     apiKey,
     baseUrl: getOptionalEnv(`${prefix}_BASE_URL`, defaultBaseUrl) ?? defaultBaseUrl,
-    defaultModel:
-      getOptionalEnv(modelEnvKey, defaultModel) ?? defaultModel,
+    defaultModel: getOptionalEnv(modelEnvKey, defaultModel) ?? defaultModel,
   };
 }
 
+function parseBoolEnv(key: string, fallback: boolean): boolean {
+  return ['true', '1', 'yes'].includes((getOptionalEnv(key, String(fallback)) ?? String(fallback)).toLowerCase());
+}
+
 function buildRawConfig(): unknown {
+  // FIX: exactOptionalPropertyTypes — use conditional spread instead of || undefined
+  const apiAuthToken = getOptionalEnv('API_AUTH_TOKEN');
+  const telegramBotToken = getOptionalEnv('TELEGRAM_BOT_TOKEN');
+  const httpProxy = getOptionalEnv('HTTP_PROXY') || getOptionalEnv('http_proxy');
+  const httpsProxy = getOptionalEnv('HTTPS_PROXY') || getOptionalEnv('https_proxy');
+
   return {
     env: getOptionalEnv('APP_ENV', 'development'),
     logLevel: getOptionalEnv('LOG_LEVEL', 'info'),
     providers: {
-      openai: buildProviderConfig(
-        'OPENAI',
-        'https://api.openai.com/v1',
-        'gpt-4o'
-      ),
-      anthropic: buildProviderConfig(
-        'ANTHROPIC',
-        'https://api.anthropic.com',
-        'claude-opus-4-20250514'
-      ),
-      gemini: buildProviderConfig(
-        'GEMINI',
-        'https://generativelanguage.googleapis.com/v1beta',
-        'gemini-2.0-flash'
-      ),
-      zai: buildProviderConfig(
-        'ZAI',
-        'https://api.z.ai/api/paas/v4',
-        'glm-4.5',
-        'ZAI_MODEL'
-      ),
+      openai: buildProviderConfig('OPENAI', 'https://api.openai.com/v1', 'gpt-4o'),
+      anthropic: buildProviderConfig('ANTHROPIC', 'https://api.anthropic.com', 'claude-opus-4-20250514'),
+      gemini: buildProviderConfig('GEMINI', 'https://generativelanguage.googleapis.com/v1beta', 'gemini-2.0-flash'),
+      zai: buildProviderConfig('ZAI', 'https://api.z.ai/api/paas/v4', 'glm-4.5', 'ZAI_MODEL'),
     },
     agent: {
       maxTurns: getEnvInt('AGENT_MAX_TURNS', 20),
       temperature: getEnvFloat('AGENT_TEMPERATURE', 0.7),
       maxTokens: getEnvInt('AGENT_MAX_TOKENS', 4096),
-      systemPrompt: getOptionalEnv(
-        'AGENT_SYSTEM_PROMPT',
-        'You are a helpful AI assistant.'
-      ),
+      systemPrompt: getOptionalEnv('AGENT_SYSTEM_PROMPT', 'You are a helpful AI assistant.'),
     },
     storage: {
       backend: getOptionalEnv('STORAGE_BACKEND', 'file'),
@@ -151,26 +134,27 @@ function buildRawConfig(): unknown {
     workspace: {
       dir: getOptionalEnv('WORKSPACE_DIR', './workspace'),
     },
+    // FIX: use conditional spread — never pass 'undefined' to an optional key
     api: {
-      enabled: ['true', '1', 'yes'].includes((getOptionalEnv('API_ENABLED', 'false') ?? 'false').toLowerCase()),
+      enabled: parseBoolEnv('API_ENABLED', false),
       host: getOptionalEnv('API_HOST', '127.0.0.1'),
       port: getEnvInt('API_PORT', 18789),
-      authToken: getOptionalEnv('API_AUTH_TOKEN') || undefined,
+      ...(apiAuthToken ? { authToken: apiAuthToken } : {}),
     },
     telegram: {
-      enabled: ['true', '1', 'yes'].includes((getOptionalEnv('TELEGRAM_ENABLED', 'false') ?? 'false').toLowerCase()),
-      botToken: getOptionalEnv('TELEGRAM_BOT_TOKEN') || undefined,
+      enabled: parseBoolEnv('TELEGRAM_ENABLED', false),
+      ...(telegramBotToken ? { botToken: telegramBotToken } : {}),
       allowedChatIds: getOptionalEnv('TELEGRAM_ALLOWED_CHAT_IDS', '') ?? '',
-      allowAll: ['true', '1', 'yes'].includes((getOptionalEnv('TELEGRAM_ALLOW_ALL', 'false') ?? 'false').toLowerCase()),
+      allowAll: parseBoolEnv('TELEGRAM_ALLOW_ALL', false),
     },
     network: {
-      httpProxy: getOptionalEnv('HTTP_PROXY') || getOptionalEnv('http_proxy') || undefined,
-      httpsProxy: getOptionalEnv('HTTPS_PROXY') || getOptionalEnv('https_proxy') || undefined,
+      ...(httpProxy ? { httpProxy } : {}),
+      ...(httpsProxy ? { httpsProxy } : {}),
       noProxy: getOptionalEnv('NO_PROXY', '') ?? '',
       dnsServers: getOptionalEnv('DNS_SERVERS', '') ?? '',
     },
     mcp: {
-      enabled: ['true', '1', 'yes'].includes((getOptionalEnv('MCP_ENABLED', 'true') ?? 'true').toLowerCase()),
+      enabled: parseBoolEnv('MCP_ENABLED', true),
       configPath: getOptionalEnv('MCP_CONFIG_PATH', './data/mcp.json') ?? './data/mcp.json',
     },
   };
@@ -178,10 +162,6 @@ function buildRawConfig(): unknown {
 
 // ─── Validate ─────────────────────────────────────────────────────────────────
 
-/**
- * Load, validate and return the application config.
- * Throws with a descriptive message on validation failure.
- */
 export function validateConfig(): Readonly<AppConfig> {
   const raw = buildRawConfig();
   const result = AppConfigSchema.safeParse(raw);
@@ -195,8 +175,6 @@ export function validateConfig(): Readonly<AppConfig> {
 
   const cfg = result.data;
 
-  // Allow any configured provider — groq/mistral/openrouter/ollama are
-  // read directly from env by their respective adapters, not from AppConfig.
   const hasLegacyProvider =
     cfg.providers.openai || cfg.providers.anthropic || cfg.providers.gemini || cfg.providers.zai;
   const hasExternalProvider =
@@ -204,7 +182,7 @@ export function validateConfig(): Readonly<AppConfig> {
     Boolean(process.env['MISTRAL_API_KEY']) ||
     Boolean(process.env['OPENROUTER_API_KEY']) ||
     Boolean(process.env['ZAI_API_KEY']);
-  const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']) || true; // always attempted
+  const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']) || true;
 
   if (!hasLegacyProvider && !hasExternalProvider && !hasOllama) {
     throw new Error(

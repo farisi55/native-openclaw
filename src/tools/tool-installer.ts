@@ -4,8 +4,8 @@
  * No internet download — purely local filesystem.
  */
 
-import { readdir, mkdir, copyFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { readdir, mkdir, copyFile, rm } from 'fs/promises';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -24,7 +24,6 @@ export async function installTool(
   const availableDir = join(root, 'tools', 'available', name);
   const installedDir = join(root, 'tools', 'installed', name);
 
-  // ── Validate source ──────────────────────────────────────────────────────
   if (!existsSync(availableDir)) {
     return {
       ok: false,
@@ -37,12 +36,10 @@ export async function installTool(
     return { ok: false, message: `Tool "${name}" is missing manifest.json` };
   }
 
-  // ── Already installed? ───────────────────────────────────────────────────
   if (existsSync(join(installedDir, 'manifest.json'))) {
     return { ok: false, message: `Tool "${name}" is already installed. Use /tools enable ${name} to re-enable it.` };
   }
 
-  // ── Copy all files ───────────────────────────────────────────────────────
   await mkdir(installedDir, { recursive: true });
 
   let files: string[];
@@ -71,20 +68,19 @@ export async function uninstallTool(
     return { ok: false, message: `Tool "${name}" is not installed.` };
   }
 
-  const { rm } = await import('fs/promises');
   await rm(installedDir, { recursive: true, force: true });
   logger.info('tool uninstalled', { name });
   return { ok: true, message: `Tool "${name}" uninstalled.` };
 }
 
+// FIX: use top-level readdirSync import, no inline require
 export function listAvailable(projectRoot?: string): string[] {
   const root = projectRoot ?? process.cwd();
   const dir = join(root, 'tools', 'available');
   if (!existsSync(dir)) return [];
   try {
-    const { readdirSync, existsSync: es } = require('fs') as typeof import('fs');
     return readdirSync(dir).filter((d: string) =>
-      es(join(dir, d, 'manifest.json'))
+      existsSync(join(dir, d, 'manifest.json'))
     );
   } catch {
     return [];

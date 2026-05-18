@@ -9,6 +9,7 @@ import type {
   WorkflowRunResult,
   WorkflowToolCapability,
   WorkflowToolResult,
+  WorkflowGeneratedFile,
 } from './workflow-types';
 import { loadWorkflowMarkdown } from './workflow-loader';
 import { parseWorkflowMarkdown, validateWorkflowDefinition } from './workflow-parser';
@@ -154,16 +155,10 @@ function discoverTools(deps: WorkflowRunnerDeps): WorkflowToolCapability[] {
 }
 
 function extractJsonObject(text: string): unknown | null {
-  try {
-    return JSON.parse(text);
-  } catch {
+  try { return JSON.parse(text); } catch {
     const match = /\{[\s\S]*\}/.exec(text);
     if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(match[0]); } catch { return null; }
   }
 }
 
@@ -218,9 +213,7 @@ async function planWithLlm(workflow: WorkflowDefinition, tools: WorkflowToolCapa
       requiresChart: raw['requiresChart'] === true || workflow.analysisRequirements.some((item) => /chart|grafik|plot/i.test(item)),
       missingTools: Array.isArray(raw['missingTools']) ? raw['missingTools'].filter((item): item is string => typeof item === 'string') : [],
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function buildHeuristicPlan(workflow: WorkflowDefinition, tools: WorkflowToolCapability[]): WorkflowExecutionPlan {
@@ -240,9 +233,7 @@ function buildHeuristicPlan(workflow: WorkflowDefinition, tools: WorkflowToolCap
       type: 'search',
       tool: searchTool?.runtimeName ?? null,
       goal: requirement,
-      input: {
-        query: `${workflow.topic}: ${requirement}`,
-      },
+      input: { query: `${workflow.topic}: ${requirement}` },
     });
   });
 
@@ -252,9 +243,7 @@ function buildHeuristicPlan(workflow: WorkflowDefinition, tools: WorkflowToolCap
       type: 'scrape',
       tool: scrapeTool.runtimeName,
       goal: `Collect detailed page data for ${workflow.topic}`,
-      input: {
-        query: workflow.topic,
-      },
+      input: { query: workflow.topic },
     });
   }
 
@@ -334,7 +323,6 @@ async function runTool(tool: WorkflowToolCapability, input: Record<string, unkno
   if (tool.source === 'mcp' && deps.mcpManager && tool.server && tool.toolName) {
     return stringifyToolResult(await deps.mcpManager.callTool(tool.server, tool.toolName, input));
   }
-
   const native = deps.toolRegistry.getTool(tool.runtimeName);
   if (!native) throw new Error(`Native tool "${tool.runtimeName}" is not available.`);
   return native.run(input);
@@ -342,41 +330,14 @@ async function runTool(tool: WorkflowToolCapability, input: Record<string, unkno
 
 async function executeCollectionStep(step: WorkflowPlanStep, tool: WorkflowToolCapability | undefined, deps: WorkflowRunnerDeps): Promise<WorkflowToolResult> {
   if (!tool) {
-    return {
-      stepId: step.id,
-      type: step.type,
-      tool: null,
-      goal: step.goal,
-      ok: false,
-      output: '',
-      sources: [],
-      error: `No available tool for ${step.type}.`,
-    };
+    return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: false, output: '', sources: [], error: `No available tool for ${step.type}.` };
   }
-
   try {
     const query = typeof step.input['query'] === 'string' ? step.input['query'] : step.goal;
     const output = await runTool(tool, { query, url: step.input['url'], max_results: 5, maxResults: 5 }, deps);
-    return {
-      stepId: step.id,
-      type: step.type,
-      tool: tool.runtimeName,
-      goal: step.goal,
-      ok: true,
-      output,
-      sources: extractUrls(output),
-    };
+    return { stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: true, output, sources: extractUrls(output) };
   } catch (err) {
-    return {
-      stepId: step.id,
-      type: step.type,
-      tool: tool.runtimeName,
-      goal: step.goal,
-      ok: false,
-      output: '',
-      sources: [],
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return { stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: false, output: '', sources: [], error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -392,26 +353,9 @@ async function executeAnalysis(step: WorkflowPlanStep, tool: WorkflowToolCapabil
         'print("Analysis should identify key data points, sentiment, trend, and recommendation.")',
       ].join('\n');
       const output = await runTool(tool, { code, language: 'python', confirm: true }, deps);
-      return {
-        stepId: step.id,
-        type: step.type,
-        tool: tool.runtimeName,
-        goal: step.goal,
-        ok: true,
-        output,
-        sources: extractUrls(output),
-      };
+      return { stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: true, output, sources: extractUrls(output) };
     } catch (err) {
-      return {
-        stepId: step.id,
-        type: step.type,
-        tool: tool.runtimeName,
-        goal: step.goal,
-        ok: false,
-        output: '',
-        sources: [],
-        error: err instanceof Error ? err.message : String(err),
-      };
+      return { stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: false, output: '', sources: [], error: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -437,35 +381,14 @@ async function executeAnalysis(step: WorkflowPlanStep, tool: WorkflowToolCapabil
           }),
         ],
       });
-      return {
-        stepId: step.id,
-        type: step.type,
-        tool: null,
-        goal: step.goal,
-        ok: true,
-        output: String(response.message.content),
-        sources: [],
-      };
+      return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: true, output: String(response.message.content), sources: [] };
     } catch (err) {
-      return {
-        stepId: step.id,
-        type: step.type,
-        tool: null,
-        goal: step.goal,
-        ok: false,
-        output: '',
-        sources: [],
-        error: `LLM fallback analysis failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
+      return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: false, output: '', sources: [], error: `LLM fallback analysis failed: ${err instanceof Error ? err.message : String(err)}` };
     }
   }
 
   return {
-    stepId: step.id,
-    type: step.type,
-    tool: null,
-    goal: step.goal,
-    ok: true,
+    stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: true,
     output: [
       `Topic: ${workflow.topic}`,
       'Analysis fallback:',
@@ -484,12 +407,7 @@ async function executeEmail(args: {
   deps: WorkflowRunnerDeps;
 }): Promise<WorkflowRunResult['emailStatus']> {
   if (!args.workflow.email.sendEmail) {
-    return {
-      attempted: false,
-      sent: false,
-      method: 'skipped',
-      detail: 'sendEmail is false in WORKFLOW.md.',
-    };
+    return { attempted: false, sent: false, method: 'skipped', detail: 'sendEmail is false in WORKFLOW.md.' };
   }
 
   const subject = replaceDateTemplates(args.workflow.email.subject, args.date) ?? `${args.workflow.title} - ${args.date}`;
@@ -506,19 +424,9 @@ async function executeEmail(args: {
         senderName: process.env['BREVO_SENDER_NAME'] ?? 'Native OpenClaw',
         recipientName: process.env['BREVO_RECIPIENT_NAME'],
       }));
-      return {
-        attempted: true,
-        sent: !/error|failed|not sent|gagal/i.test(output),
-        method: 'mcp-brevo',
-        detail: output,
-      };
+      return { attempted: true, sent: !/error|failed|not sent|gagal/i.test(output), method: 'mcp-brevo', detail: output };
     } catch (err) {
-      return {
-        attempted: true,
-        sent: false,
-        method: 'mcp-brevo',
-        detail: err instanceof Error ? err.message : String(err),
-      };
+      return { attempted: true, sent: false, method: 'mcp-brevo', detail: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -531,12 +439,7 @@ async function executeEmail(args: {
     recipientName: process.env['BREVO_RECIPIENT_NAME'],
   });
 
-  return {
-    attempted: true,
-    sent: result.ok,
-    method: 'internal-brevo',
-    detail: result.content,
-  };
+  return { attempted: true, sent: result.ok, method: 'internal-brevo', detail: result.content };
 }
 
 export async function runWorkflowFromDefinition(
@@ -561,7 +464,10 @@ export async function runWorkflowFromDefinition(
   let analysisText = '';
   let html = '';
   let chartPath: string | null = null;
-  const generatedFiles = [];
+
+  // FIX: explicit type annotation — eliminates noImplicitAny risk
+  const generatedFiles: WorkflowGeneratedFile[] = [];
+
   const slug = slugify(workflow.title || workflow.topic);
   const htmlPath = `reports/${slug}-${date}.html`;
   const jsonPath = `reports/${slug}-${date}.json`;
@@ -597,16 +503,8 @@ export async function runWorkflowFromDefinition(
       }
       await writeFile(workspace.resolvePath(chartFile), createTrendPng(series));
       chartPath = chartFile;
-      generatedFiles.push({ path: chartFile, type: 'png' as const });
-      results.push({
-        stepId: step.id,
-        type: step.type,
-        tool: tool.runtimeName,
-        goal: step.goal,
-        ok: true,
-        output: `Chart generated from ${series.length} numeric observations.`,
-        sources: [],
-      });
+      generatedFiles.push({ path: chartFile, type: 'png' });
+      results.push({ stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: true, output: `Chart generated from ${series.length} numeric observations.`, sources: [] });
       continue;
     }
   }
@@ -617,50 +515,24 @@ export async function runWorkflowFromDefinition(
       : 'No data collection succeeded. The workflow report is limited to execution diagnostics.';
   }
 
-  html = buildWorkflowHtmlReport({
-    workflow,
-    date: dateTimeKey(now),
-    results,
-    analysisText,
-    chartPath,
-    generatedFiles,
-    errors,
-    missingCapabilities,
-  });
+  html = buildWorkflowHtmlReport({ workflow, date: dateTimeKey(now), results, analysisText, chartPath, generatedFiles, errors, missingCapabilities });
   await workspace.write(htmlPath, html);
-  generatedFiles.push({ path: htmlPath, type: 'html' as const });
+  generatedFiles.push({ path: htmlPath, type: 'html' });
 
   const emailStep = plan.steps.find((step) => step.type === 'email');
   const emailStatus = await executeEmail({
     step: emailStep ?? { id: 'email-1', type: 'email', tool: null, goal: 'Send report email', input: {} },
     tool: emailStep ? findToolForStep(emailStep, tools) : undefined,
-    workflow,
-    html,
-    date,
-    deps,
+    workflow, html, date, deps,
   });
   if (workflow.email.sendEmail && !emailStatus.sent) {
     missingCapabilities.push(`Email not sent: ${emailStatus.detail}`);
   }
 
   const sources = [...new Set(results.flatMap((result) => result.sources))];
-  const rawData = {
-    workflow: {
-      title: workflow.title,
-      topic: workflow.topic,
-      role: workflow.role,
-      objective: workflow.objective,
-    },
-    plan,
-    toolResults: results,
-    sources,
-    errors,
-    missingCapabilities,
-    generatedFiles,
-    emailStatus,
-  };
+  const rawData = { workflow: { title: workflow.title, topic: workflow.topic, role: workflow.role, objective: workflow.objective }, plan, toolResults: results, sources, errors, missingCapabilities, generatedFiles, emailStatus };
   await workspace.write(jsonPath, JSON.stringify(rawData, null, 2));
-  generatedFiles.push({ path: jsonPath, type: 'json' as const });
+  generatedFiles.push({ path: jsonPath, type: 'json' });
 
   const toolsUsed = [...new Set(results.map((result) => result.tool).filter((tool): tool is string => Boolean(tool)))];
   const runResult: WorkflowRunResult = {
