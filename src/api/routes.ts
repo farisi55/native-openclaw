@@ -19,6 +19,10 @@ import { resolveStartupSession } from '../cli';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
+export interface ChatRouteOptions {
+  signal?: AbortSignal;
+}
+
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, '');
 }
@@ -186,7 +190,8 @@ async function handleCommand(
 export async function handleChatRoute(
   body: ChatRequestBody,
   deps: ApiDependencies,
-  state: ApiRuntimeState
+  state: ApiRuntimeState,
+  options: ChatRouteOptions = {}
 ): Promise<{ status: number; body: ChatApiResponse }> {
   const startedAt = Date.now();
   const message = typeof body.message === 'string' ? body.message.trim() : '';
@@ -229,6 +234,7 @@ export async function handleChatRoute(
       provider: state.activeProvider,
       model: state.activeModel,
       sessionId: activeSessionId,
+      ...(options.signal ? { signal: options.signal } : {}),
     });
 
     state.activeSessionId = result.session.id;

@@ -15,6 +15,17 @@ const { createMessage } = require('../dist/types/message');
 
 const originalFetch = global.fetch;
 
+const telegramRuntime = {
+  ackEnabled: true,
+  ackMessage: 'Sedang diproses...',
+  processTimeoutMs: 90000,
+  logPollingErrors: false,
+  retryMinMs: 3000,
+  retryMaxMs: 60000,
+  pollTimeoutSeconds: 25,
+  queueNoticeEnabled: false,
+};
+
 const provider = {
   id: 'fake',
   displayName: 'Fake Provider',
@@ -76,7 +87,18 @@ async function withDeps(fn) {
   }
 }
 
-function mockTelegramFetch(sentMessages) {
+function telegramConfig(overrides = {}) {
+  return {
+    enabled: true,
+    botToken: 'test-token',
+    allowedChatIds: new Set(['123']),
+    allowAll: false,
+    ...telegramRuntime,
+    ...overrides,
+  };
+}
+
+function mockTelegramFetch(sentMessages, sentActions = []) {
   global.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     if (String(url).includes('/getUpdates')) {
@@ -95,6 +117,16 @@ function mockTelegramFetch(sentMessages) {
         status: 200,
         async json() {
           return { ok: true, result: { message_id: sentMessages.length } };
+        },
+      };
+    }
+    if (String(url).includes('/sendChatAction')) {
+      sentActions.push(body);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true, result: true };
         },
       };
     }
@@ -117,15 +149,11 @@ test('TELEGRAM_ENABLED=false does not start polling', async () => {
 test('Telegram integration starts when enabled with bot token and allowed chat', async () => {
   await withDeps(async (deps, dataDir) => {
     const sent = [];
-    mockTelegramFetch(sent);
+    const actions = [];
+    mockTelegramFetch(sent, actions);
     const integration = new TelegramIntegration(
       deps,
-      {
-        enabled: true,
-        botToken: 'test-token',
-        allowedChatIds: new Set(['123']),
-        allowAll: false,
-      },
+      telegramConfig(),
       dataDir
     );
 
@@ -138,15 +166,11 @@ test('Telegram integration starts when enabled with bot token and allowed chat',
 test('Telegram normal message replies and persists chat session mapping', async () => {
   await withDeps(async (deps, dataDir) => {
     const sent = [];
-    mockTelegramFetch(sent);
+    const actions = [];
+    mockTelegramFetch(sent, actions);
     const integration = new TelegramIntegration(
       deps,
-      {
-        enabled: true,
-        botToken: 'test-token',
-        allowedChatIds: new Set(['123']),
-        allowAll: false,
-      },
+      telegramConfig(),
       dataDir
     );
     await integration.start();
@@ -154,9 +178,13 @@ test('Telegram normal message replies and persists chat session mapping', async 
 
     const handled = await integration.handleIncomingText('123', 'hello');
     assert.equal(handled, true);
-    assert.equal(sent.length, 1);
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].chat_id, '123');
+    assert.equal(actions[0].action, 'typing');
+    assert.equal(sent.length, 2);
     assert.equal(sent[0].chat_id, '123');
-    assert.match(sent[0].text, /telegram: hello/);
+    assert.equal(sent[0].text, 'Sedang diproses...');
+    assert.match(sent[1].text, /telegram: hello/);
 
     const mapping = new TelegramSessionManager(dataDir);
     const sessionId = await mapping.getSessionId('123');
@@ -170,15 +198,11 @@ test('Telegram normal message replies and persists chat session mapping', async 
 test('Telegram /help command replies', async () => {
   await withDeps(async (deps, dataDir) => {
     const sent = [];
-    mockTelegramFetch(sent);
+    const actions = [];
+    mockTelegramFetch(sent, actions);
     const integration = new TelegramIntegration(
       deps,
-      {
-        enabled: true,
-        botToken: 'test-token',
-        allowedChatIds: new Set(['123']),
-        allowAll: false,
-      },
+      telegramConfig(),
       dataDir
     );
     await integration.start();
@@ -186,29 +210,61 @@ test('Telegram /help command replies', async () => {
 
     const handled = await integration.handleIncomingText('123', '/help');
     assert.equal(handled, true);
-    assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /Command Reference/);
+    assert.equal(actions.length, 1);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].text, 'Sedang diproses...');
+    assert.match(sent[1].text, /Command Reference/);
   });
 });
 
 test('Telegram unauthorized chat id is ignored', async () => {
   await withDeps(async (deps, dataDir) => {
     const sent = [];
-    mockTelegramFetch(sent);
+    const actions = [];
+    mockTelegramFetch(sent, actions);
     const integration = new TelegramIntegration(
       deps,
-      {
-        enabled: true,
-        botToken: 'test-token',
-        allowedChatIds: new Set(['123']),
-        allowAll: false,
-      },
+      telegramConfig(),
       dataDir
     );
 
     const handled = await integration.handleIncomingText('999', 'hello');
     assert.equal(handled, false);
     assert.equal(sent.length, 0);
+    assert.equal(actions.length, 0);
   });
 });
 
+test('Telegram processing timeout sends friendly timeout response', async () => {
+  await withDeps(async (deps, dataDir) => {
+    deps.orchestrator.turn = async () => new Promise((resolve) => {
+      setTimeout(() => {
+        resolve({
+          assistantText: 'late reply',
+          session: { id: 'late-session' },
+          newSession: false,
+          wasAction: false,
+          flow: [],
+        });
+      }, 50);
+    });
+
+    const sent = [];
+    const actions = [];
+    mockTelegramFetch(sent, actions);
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({ processTimeoutMs: 5 }),
+      dataDir
+    );
+    await integration.start();
+    integration.stop();
+
+    const handled = await integration.handleIncomingText('123', 'slow');
+    assert.equal(handled, true);
+    assert.equal(actions.length, 1);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].text, 'Sedang diproses...');
+    assert.match(sent[1].text, /Proses terlalu lama/);
+  });
+});

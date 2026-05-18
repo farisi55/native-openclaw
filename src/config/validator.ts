@@ -47,6 +47,14 @@ const TelegramConfigSchema = z.object({
   botToken: z.string().optional(),
   allowedChatIds: z.string(),
   allowAll: z.boolean(),
+  ackEnabled: z.boolean(),
+  ackMessage: z.string(),
+  processTimeoutMs: z.number().int().min(1),
+  logPollingErrors: z.boolean(),
+  retryMinMs: z.number().int().min(1),
+  retryMaxMs: z.number().int().min(1),
+  pollTimeoutSeconds: z.number().int().min(1),
+  queueNoticeEnabled: z.boolean(),
 });
 export type TelegramConfig = z.infer<typeof TelegramConfigSchema>;
 
@@ -146,6 +154,14 @@ function buildRawConfig(): unknown {
       ...(telegramBotToken ? { botToken: telegramBotToken } : {}),
       allowedChatIds: getOptionalEnv('TELEGRAM_ALLOWED_CHAT_IDS', '') ?? '',
       allowAll: parseBoolEnv('TELEGRAM_ALLOW_ALL', false),
+      ackEnabled: parseBoolEnv('TELEGRAM_ACK_ENABLED', true),
+      ackMessage: getOptionalEnv('TELEGRAM_ACK_MESSAGE', 'Sedang diproses...') ?? 'Sedang diproses...',
+      processTimeoutMs: getEnvInt('TELEGRAM_PROCESS_TIMEOUT_MS', 90_000),
+      logPollingErrors: parseBoolEnv('TELEGRAM_LOG_POLLING_ERRORS', false),
+      retryMinMs: getEnvInt('TELEGRAM_RETRY_MIN_MS', 3_000),
+      retryMaxMs: getEnvInt('TELEGRAM_RETRY_MAX_MS', 60_000),
+      pollTimeoutSeconds: getEnvInt('TELEGRAM_POLL_TIMEOUT', 25),
+      queueNoticeEnabled: parseBoolEnv('TELEGRAM_QUEUE_NOTICE_ENABLED', false),
     },
     network: {
       ...(httpProxy ? { httpProxy } : {}),

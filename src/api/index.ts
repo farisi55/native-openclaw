@@ -6,6 +6,7 @@ export {
 export type { StartedApiServer } from './server';
 
 export { handleChatRoute, createApiRuntimeState } from './routes';
+export type { ChatRouteOptions } from './routes';
 export type {
   ApiConfig,
   ApiDependencies,
@@ -13,4 +14,3 @@ export type {
   ChatApiResponse,
   ChatRequestBody,
 } from './types';
-

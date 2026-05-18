@@ -1,4 +1,4 @@
-import { getEnvBool, getOptionalEnv } from '../config';
+import { getEnvBool, getEnvInt, getOptionalEnv } from '../config';
 import type { ApiDependencies, ApiRuntimeState } from '../api';
 import { createApiRuntimeState, handleChatRoute } from '../api';
 import { TelegramSessionManager } from '../storage';
@@ -14,6 +14,25 @@ export interface TelegramConfig {
   botToken?: string;
   allowedChatIds: Set<string>;
   allowAll: boolean;
+  ackEnabled?: boolean;
+  ackMessage?: string;
+  processTimeoutMs?: number;
+  logPollingErrors?: boolean;
+  retryMinMs?: number;
+  retryMaxMs?: number;
+  pollTimeoutSeconds?: number;
+  queueNoticeEnabled?: boolean;
+}
+
+interface TelegramRuntimeOptions {
+  ackEnabled: boolean;
+  ackMessage: string;
+  processTimeoutMs: number;
+  logPollingErrors: boolean;
+  retryMinMs: number;
+  retryMaxMs: number;
+  pollTimeoutSeconds: number;
+  queueNoticeEnabled: boolean;
 }
 
 interface TelegramUpdate {
@@ -32,6 +51,44 @@ interface TelegramApiResponse<T> {
   description?: string;
 }
 
+class TelegramProcessingTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TelegramProcessingTimeoutError';
+  }
+}
+
+function positiveInt(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function resolveRuntimeOptions(cfg: TelegramConfig): TelegramRuntimeOptions {
+  const retryMinMs = positiveInt(
+    cfg.retryMinMs ?? getEnvInt('TELEGRAM_RETRY_MIN_MS', 3_000),
+    3_000
+  );
+
+  return {
+    ackEnabled: cfg.ackEnabled ?? getEnvBool('TELEGRAM_ACK_ENABLED', true),
+    ackMessage: cfg.ackMessage ?? getOptionalEnv('TELEGRAM_ACK_MESSAGE', 'Sedang diproses...') ?? 'Sedang diproses...',
+    processTimeoutMs: positiveInt(
+      cfg.processTimeoutMs ?? getEnvInt('TELEGRAM_PROCESS_TIMEOUT_MS', 90_000),
+      90_000
+    ),
+    logPollingErrors: cfg.logPollingErrors ?? getEnvBool('TELEGRAM_LOG_POLLING_ERRORS', false),
+    retryMinMs,
+    retryMaxMs: Math.max(
+      retryMinMs,
+      positiveInt(cfg.retryMaxMs ?? getEnvInt('TELEGRAM_RETRY_MAX_MS', 60_000), 60_000)
+    ),
+    pollTimeoutSeconds: positiveInt(
+      cfg.pollTimeoutSeconds ?? getEnvInt('TELEGRAM_POLL_TIMEOUT', 25),
+      25
+    ),
+    queueNoticeEnabled: cfg.queueNoticeEnabled ?? getEnvBool('TELEGRAM_QUEUE_NOTICE_ENABLED', false),
+  };
+}
+
 export function loadTelegramConfig(): TelegramConfig {
   const token = getOptionalEnv('TELEGRAM_BOT_TOKEN');
   const allowedRaw = getOptionalEnv('TELEGRAM_ALLOWED_CHAT_IDS', '') ?? '';
@@ -46,6 +103,14 @@ export function loadTelegramConfig(): TelegramConfig {
     enabled: getEnvBool('TELEGRAM_ENABLED', false),
     allowedChatIds,
     allowAll: getEnvBool('TELEGRAM_ALLOW_ALL', false),
+    ackEnabled: getEnvBool('TELEGRAM_ACK_ENABLED', true),
+    ackMessage: getOptionalEnv('TELEGRAM_ACK_MESSAGE', 'Sedang diproses...') ?? 'Sedang diproses...',
+    processTimeoutMs: getEnvInt('TELEGRAM_PROCESS_TIMEOUT_MS', 90_000),
+    logPollingErrors: getEnvBool('TELEGRAM_LOG_POLLING_ERRORS', false),
+    retryMinMs: getEnvInt('TELEGRAM_RETRY_MIN_MS', 3_000),
+    retryMaxMs: getEnvInt('TELEGRAM_RETRY_MAX_MS', 60_000),
+    pollTimeoutSeconds: getEnvInt('TELEGRAM_POLL_TIMEOUT', 25),
+    queueNoticeEnabled: getEnvBool('TELEGRAM_QUEUE_NOTICE_ENABLED', false),
   };
   if (token) cfg.botToken = token;
   return cfg;
@@ -56,6 +121,8 @@ export class TelegramIntegration {
   private stopped = true;
   private baseState: ApiRuntimeState | null = null;
   private readonly telegramSessions: TelegramSessionManager;
+  private readonly runtime: TelegramRuntimeOptions;
+  private readonly chatQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly deps: ApiDependencies,
@@ -63,6 +130,7 @@ export class TelegramIntegration {
     dataDir: string
   ) {
     this.telegramSessions = new TelegramSessionManager(dataDir);
+    this.runtime = resolveRuntimeOptions(cfg);
   }
 
   async start(): Promise<void> {
@@ -84,7 +152,10 @@ export class TelegramIntegration {
 
     this.baseState = await createApiRuntimeState(this.deps);
     this.stopped = false;
-    void this.pollLoop();
+    void this.pollLoop().catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Telegram polling stopped unexpectedly', { error: msg });
+    });
     logger.info('Telegram integration started');
   }
 
@@ -93,7 +164,15 @@ export class TelegramIntegration {
   }
 
   async handleIncomingText(chatId: string, text: string): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
     if (!this.isAllowed(chatId)) return false;
+
+    await this.sendChatAction(chatId);
+    if (this.runtime.ackEnabled) {
+      await this.sendText(chatId, this.runtime.ackMessage);
+    }
+
     if (!this.baseState) {
       this.baseState = await createApiRuntimeState(this.deps);
     }
@@ -105,11 +184,29 @@ export class TelegramIntegration {
       activeSessionId: sessionId,
     };
 
-    const response = await handleChatRoute(
-      { message: text, sessionId: state.activeSessionId ?? undefined },
-      this.deps,
-      state
-    );
+    let response: Awaited<ReturnType<typeof handleChatRoute>>;
+    try {
+      response = await this.withTelegramTimeout(
+        (signal) => handleChatRoute(
+          { message: trimmed, sessionId: state.activeSessionId ?? undefined },
+          this.deps,
+          state,
+          { signal }
+        ),
+        this.runtime.processTimeoutMs,
+        'Proses terlalu lama atau provider sedang lambat. Silakan coba lagi sebentar lagi.'
+      );
+    } catch (err) {
+      if (err instanceof TelegramProcessingTimeoutError) {
+        logger.warn('Telegram message handling timed out', {
+          chatId,
+          timeoutMs: this.runtime.processTimeoutMs,
+        });
+        await this.sendText(chatId, err.message);
+        return true;
+      }
+      throw err;
+    }
 
     if (response.body.sessionId) {
       await this.telegramSessions.setSessionId(chatId, response.body.sessionId);
@@ -124,6 +221,34 @@ export class TelegramIntegration {
 
     await this.sendText(chatId, reply || '(empty response)');
     return true;
+  }
+
+  private enqueueChatMessage(chatId: string, text: string): void {
+    if (!this.isAllowed(chatId)) return;
+
+    if (this.runtime.queueNoticeEnabled && this.chatQueues.has(chatId)) {
+      void this.sendText(chatId, 'Pesan diterima. Masih memproses pesan sebelumnya...');
+    }
+
+    const previous = this.chatQueues.get(chatId) ?? Promise.resolve();
+    let next: Promise<void>;
+
+    next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await this.handleIncomingText(chatId, text);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn('Telegram message handling error', { chatId, error: msg });
+      })
+      .finally(() => {
+        if (this.chatQueues.get(chatId) === next) {
+          this.chatQueues.delete(chatId);
+        }
+      });
+
+    this.chatQueues.set(chatId, next);
   }
 
   private async ensureChatSession(chatId: string): Promise<string | null> {
@@ -152,21 +277,51 @@ export class TelegramIntegration {
   }
 
   private async pollLoop(): Promise<void> {
+    let consecutiveErrors = 0;
+    let lastErrorMessage = '';
+
     while (!this.stopped) {
       try {
         const updates = await this.getUpdates();
+
+        if (consecutiveErrors > 0) {
+          logger.info('Telegram polling recovered', {
+            previousErrors: consecutiveErrors,
+          });
+        }
+
+        consecutiveErrors = 0;
+        lastErrorMessage = '';
+
         for (const update of updates) {
           this.offset = Math.max(this.offset, update.update_id + 1);
           const chatId = update.message?.chat?.id;
           const text = update.message?.text;
-          if (chatId === undefined || !text) continue;
-          await this.handleIncomingText(String(chatId), text);
+          if (chatId === undefined || typeof text !== 'string' || !text.trim()) continue;
+          this.enqueueChatMessage(String(chatId), text);
         }
       } catch (err) {
-        logger.warn('Telegram polling error', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        await this.sleep(3000);
+        consecutiveErrors++;
+
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (
+          this.runtime.logPollingErrors ||
+          consecutiveErrors === 1 ||
+          errorMessage !== lastErrorMessage
+        ) {
+          logger.warn('Telegram polling error', {
+            error: errorMessage,
+            consecutiveErrors,
+          });
+        }
+
+        lastErrorMessage = errorMessage;
+
+        const delayMs = Math.min(
+          this.runtime.retryMaxMs,
+          this.runtime.retryMinMs * consecutiveErrors
+        );
+        await this.sleep(delayMs);
       }
     }
   }
@@ -174,7 +329,7 @@ export class TelegramIntegration {
   private async getUpdates(): Promise<TelegramUpdate[]> {
     const data = await this.telegramFetch<TelegramUpdate[]>('getUpdates', {
       offset: this.offset,
-      timeout: 25,
+      timeout: this.runtime.pollTimeoutSeconds,
       allowed_updates: ['message'],
     });
     return data;
@@ -183,11 +338,28 @@ export class TelegramIntegration {
   private async sendText(chatId: string, text: string): Promise<void> {
     const chunks = this.splitMessage(text);
     for (const chunk of chunks) {
-      await this.telegramFetch('sendMessage', {
+      try {
+        await this.telegramFetch('sendMessage', {
+          chat_id: chatId,
+          text: chunk,
+          disable_web_page_preview: true,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn('Telegram sendMessage failed', { chatId, error: msg });
+      }
+    }
+  }
+
+  private async sendChatAction(chatId: string, action: 'typing' = 'typing'): Promise<void> {
+    try {
+      await this.telegramFetch('sendChatAction', {
         chat_id: chatId,
-        text: chunk,
-        disable_web_page_preview: true,
+        action,
       });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.debug('Telegram sendChatAction failed', { chatId, action, error: msg });
     }
   }
 
@@ -213,6 +385,28 @@ export class TelegramIntegration {
       throw new Error(data.description ?? `Telegram API ${method} failed with HTTP ${response.status}`);
     }
     return (data.result ?? null) as T;
+  }
+
+  private async withTelegramTimeout<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    ms: number,
+    message: string
+  ): Promise<T> {
+    const controller = new AbortController();
+    let timeout: NodeJS.Timeout | undefined;
+
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new TelegramProcessingTimeoutError(message));
+      }, ms);
+    });
+
+    try {
+      return await Promise.race([run(controller.signal), timeoutPromise]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   private sleep(ms: number): Promise<void> {
