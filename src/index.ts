@@ -111,6 +111,7 @@ async function bootstrap(): Promise<void> {
 
   logger.info(`Tools ready (${toolRegistry.size})`, {
     tools: toolRegistry.listTools().map((tool) => tool.manifest.name),
+    installedDir: toolRegistry.installedToolsDir,
   });
 
   // Orchestrator

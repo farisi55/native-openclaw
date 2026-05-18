@@ -10,6 +10,7 @@
 
 import type { ToolRegistry } from './tool-registry';
 import { parseLLMResponse, validateToolCall } from '../agents/tool-parser';
+import { normalizeToolName } from '../agents/tool-loop';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('tools:executor');
@@ -57,24 +58,32 @@ export class ToolExecutor {
     if (!parsed || parsed.type !== 'tool_call') return { handled: false };
 
     const availableTools = this.registry.listTools().map((t) => t.manifest.name);
-    const validationError = validateToolCall(parsed, availableTools);
+    const normalizedTool = normalizeToolName(parsed.tool, availableTools);
+    if (normalizedTool !== parsed.tool) {
+      logger.info('LLM-assisted: normalized tool alias', {
+        from: parsed.tool,
+        to: normalizedTool,
+      });
+    }
+    const toolCall = { ...parsed, tool: normalizedTool };
+    const validationError = validateToolCall(toolCall, availableTools);
     if (validationError) {
       logger.warn('LLM-assisted: invalid tool call', { error: validationError });
       return { handled: false };
     }
 
-    const tool = this.registry.getTool(parsed.tool);
+    const tool = this.registry.getTool(toolCall.tool);
     if (!tool) return { handled: false };
 
-    logger.info('tool triggered (LLM-assisted)', { tool: parsed.tool, input: parsed.input });
+    logger.info('tool triggered (LLM-assisted)', { tool: toolCall.tool, input: toolCall.input });
     try {
-      const response = await tool.run(parsed.input);
-      return { handled: true, response, toolName: parsed.tool };
+      const response = await tool.run(toolCall.input);
+      return { handled: true, response, toolName: toolCall.tool };
     } catch (e) {
       return {
         handled: true,
-        response: `❌ Tool "${parsed.tool}" failed: ${String(e)}`,
-        toolName: parsed.tool,
+        response: `❌ Tool "${toolCall.tool}" failed: ${String(e)}`,
+        toolName: toolCall.tool,
       };
     }
   }

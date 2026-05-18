@@ -15,8 +15,11 @@ import type { IProvider } from '../types/provider';
 import type { ToolRegistry } from '../tools/tool-registry';
 import { createLogger } from '../utils/logger';
 import { createMessage, extractText } from '../types/message';
+import { normalizeToolName } from './tool-loop';
 
 const logger = createLogger('agents:reasoning');
+const CURRENT_INFO_RE = /\b(news|latest|current events?|today|current price|market update|football transfer|transfer news|search internet|web lookup)\b|berita|terbaru|hari ini|informasi terbaru|harga .*hari ini|update pasar|transfer sepakbola/i;
+const REAL_TIME_REASON = 'Requires real-time internet access';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,6 +59,13 @@ function buildReasoningPrompt(toolNames: string[], toolDescriptions: string): st
     '',
     `Valid tool names: ${toolNames.join(', ')}`,
     '',
+    'Tool name rules:',
+    '- Use ONLY exact valid tool names.',
+    '- Do not invent tool names.',
+    '- For news, latest information, current events, web lookup, current prices, or market updates, use web-fetch if available.',
+    '- Never use news_api, news, search_api, web_search, browser, or browse unless that exact name is in the valid tool list.',
+    '- If no valid suitable tool exists, set needsTool to false.',
+    '',
     'DO NOT add any text outside the JSON.',
   ].join('\n');
 }
@@ -90,6 +100,15 @@ export class ReasoningEngine {
     const toolDescriptions = tools
       .map((t) => `- ${t.manifest.name}: ${t.manifest.description}`)
       .join('\n');
+
+    if (toolNames.includes('web-fetch') && CURRENT_INFO_RE.test(userInput)) {
+      return {
+        needsTool: true,
+        tool: 'web-fetch',
+        reason: REAL_TIME_REASON,
+        directAnswer: false,
+      };
+    }
 
     const systemPrompt = buildReasoningPrompt(toolNames, toolDescriptions);
 
@@ -138,7 +157,8 @@ export class ReasoningEngine {
 
       const needsTool = Boolean(obj.needsTool);
       const rawTool   = typeof obj.tool === 'string' ? obj.tool : null;
-      const tool      = needsTool && rawTool && validTools.includes(rawTool) ? rawTool : null;
+      const normalizedTool = rawTool ? normalizeToolName(rawTool, validTools) : null;
+      const tool      = needsTool && normalizedTool && validTools.includes(normalizedTool) ? normalizedTool : null;
       const reason    = typeof obj.reason === 'string' ? obj.reason : '';
 
       // If LLM said it needs a tool but gave an invalid name, clear needsTool

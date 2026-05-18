@@ -7,7 +7,7 @@
     "build": "npx tsc",
     "dev": "npx ts-node src/index.ts",
     "start": "node dist/index.js",
-    "test": "npm run build && node test/session-resume.test.js && node test/zai-provider.test.js && node test/workspace.test.js && node test/api-server.test.js && node test/telegram.test.js && node test/network.test.js && node test/mcp.test.js && node test/gold-workflow.test.js && node test/slash-autocomplete.test.js && node test/reasoning-sanitizer.test.js",
+    "test": "npm run build && node test/session-resume.test.js && node test/zai-provider.test.js && node test/workspace.test.js && node test/api-server.test.js && node test/telegram.test.js && node test/network.test.js && node test/mcp.test.js && node test/gold-workflow.test.js && node test/slash-autocomplete.test.js && node test/reasoning-sanitizer.test.js && node test/tool-alias.test.js",
     "lint": "npx eslint \"src/**/*.ts\"",
     "lint:fix": "npx eslint \"src/**/*.ts\" --fix",
     "type-check": "npx tsc --noEmit",

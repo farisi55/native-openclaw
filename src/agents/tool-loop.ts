@@ -12,6 +12,23 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('agents:tool-loop');
 
+const TOOL_ALIASES: Record<string, string> = {
+  news_api: 'web-fetch',
+  news: 'web-fetch',
+  web_news: 'web-fetch',
+  web_search: 'web-fetch',
+  search: 'web-fetch',
+  browser: 'web-fetch',
+  browse: 'web-fetch',
+  internet: 'web-fetch',
+  internet_search: 'web-fetch',
+  current_info: 'web-fetch',
+  latest_info: 'web-fetch',
+};
+
+const NO_TOOLS_MESSAGE =
+  'Tool execution is currently unavailable because no tools are loaded. Please check that the app is running from the project root and that tools/installed contains enabled tool manifests.';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ToolLoopOptions {
@@ -150,6 +167,35 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function normalizeToolName(toolName: string, availableTools: string[]): string {
+  const trimmed = toolName.trim();
+  if (availableTools.includes(trimmed)) return trimmed;
+
+  const exactCaseInsensitive = availableTools.find(
+    (tool) => tool.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (exactCaseInsensitive) return exactCaseInsensitive;
+
+  const aliasTarget = TOOL_ALIASES[trimmed.toLowerCase()];
+  if (aliasTarget && availableTools.includes(aliasTarget)) return aliasTarget;
+
+  return toolName;
+}
+
+function normalizeParsedToolCall(
+  parsed: { type: 'tool_call'; tool: string; input: unknown },
+  availableTools: string[]
+): { type: 'tool_call'; tool: string; input: unknown } {
+  const normalizedTool = normalizeToolName(parsed.tool, availableTools);
+  if (normalizedTool !== parsed.tool) {
+    logger.info('tool-loop: normalized tool alias', {
+      from: parsed.tool,
+      to: normalizedTool,
+    });
+  }
+  return normalizedTool === parsed.tool ? parsed : { ...parsed, tool: normalizedTool };
+}
+
 function normalizeStructuredResponse(raw: unknown, availableTools: string[]): ParsedStructuredResponse {
   if (!isPlainObject(raw)) return null;
 
@@ -238,9 +284,19 @@ function buildStrictToolContractBlock(
   lines.push('2) Final response:');
   lines.push('{', '  "type": "final_response",', '  "content": "..."', '}', '');
   lines.push('Rules:');
+  lines.push('- Use ONLY exact tool names listed in AVAILABLE TOOLS.');
+  lines.push('- Do not invent tool names.');
+  lines.push('- Never use news_api, news, search_api, web_search, browser, or browse unless that exact name appears in AVAILABLE TOOLS.');
+  lines.push('- If no suitable tool exists, return a final_response explaining that the capability is unavailable.');
+  lines.push('- Tool call output must use the exact registered tool name.');
   lines.push('- Do not wrap JSON in markdown fences.');
   lines.push('- Do not add explanations outside JSON.');
   lines.push('- Do not output any keys other than type/tool/input/content.');
+  if (availableTools.some((tool) => tool.name === 'web-fetch')) {
+    lines.push('- For news, latest information, current events, current prices, online lookup, or web search, use web-fetch.');
+    lines.push('- Example for real-time internet/news/current information:');
+    lines.push('{ "type": "tool_call", "tool": "web-fetch", "input": { "query": "latest news today" } }');
+  }
   if (preferredTool) lines.push(`- Preferred tool hint: ${preferredTool}`);
   lines.push('');
 
@@ -387,34 +443,55 @@ export class ToolLoop {
       const parsed = parseStructuredResponse(llmText, availableTools);
 
       if (parsed?.type === 'tool_call') {
+        if (availableTools.length === 0) {
+          logger.warn('tool-loop: no tools available for requested tool call', {
+            requestedTool: parsed.tool,
+          });
+          return toolLoopResult({
+            finalText: NO_TOOLS_MESSAGE,
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          });
+        }
+
+        const toolCall = normalizeParsedToolCall(parsed, availableTools);
+
         if (isLastStep) {
-          const validationError = validateToolCall(parsed, availableTools);
+          const validationError = validateToolCall(toolCall, availableTools);
           if (validationError) {
             logger.warn('tool-loop: invalid tool call at max step', { error: validationError, modelOutput: llmText });
-            return toolLoopResult({ finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
+            return toolLoopResult({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
           }
 
           // FIX: getTool returns RegisteredTool | undefined — no 'as any'
-          const tool: RegisteredTool | undefined = this.registry.getTool(parsed.tool);
+          const tool: RegisteredTool | undefined = this.registry.getTool(toolCall.tool);
           if (!tool) {
-            return toolLoopResult({ finalText: `❌ Tool "${parsed.tool}" was requested but is not available.`, toolSteps, toolsUsed, stepMessages, flow });
+            return toolLoopResult({
+              finalText: `Tool "${toolCall.tool}" was requested but is not available.`,
+              toolSteps,
+              toolsUsed,
+              stepMessages,
+              flow,
+            });
           }
 
           let toolResult: string;
           try {
-            flow.push({ stage: 'tool_call', tool: parsed.tool, input: parsed.input ?? {} });
-            toolResult = await tool.run(parsed.input ?? {});
+            flow.push({ stage: 'tool_call', tool: toolCall.tool, input: toolCall.input ?? {} });
+            toolResult = await tool.run(toolCall.input ?? {});
           } catch (e) {
             toolResult = `Tool execution failed: ${String(e)}`;
-            logger.warn('tool-loop: tool error on final step', { tool: parsed.tool, error: String(e) });
+            logger.warn('tool-loop: tool error on final step', { tool: toolCall.tool, error: String(e) });
           }
-          toolsUsed.push(parsed.tool);
+          toolsUsed.push(toolCall.tool);
           toolSteps++;
-          flow.push({ stage: 'tool_result', tool: parsed.tool, ok: !toolResult.startsWith('Tool execution failed:') });
+          flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: !toolResult.startsWith('Tool execution failed:') });
           return toolLoopResult({ finalText: toolResult, toolSteps, toolsUsed, stepMessages, flow });
         }
 
-        const validationError = validateToolCall(parsed, availableTools);
+        const validationError = validateToolCall(toolCall, availableTools);
         if (validationError) {
           logger.warn('tool-loop: invalid tool call', { error: validationError, modelOutput: llmText });
           if (this.opts.enableRepair && repairAttempts < this.opts.maxRepairAttempts) {
@@ -423,39 +500,39 @@ export class ToolLoop {
             logger.debug('tool-loop: repair retry queued', { repairAttempts, step });
             continue;
           }
-          return toolLoopResult({ finalText: `❌ ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
+          return toolLoopResult({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         // FIX: no 'as any' — proper type
-        const tool: RegisteredTool | undefined = this.registry.getTool(parsed.tool);
+        const tool: RegisteredTool | undefined = this.registry.getTool(toolCall.tool);
         if (!tool) {
-          const errMsg = `Tool "${parsed.tool}" is not registered.`;
-          logger.warn('tool-loop: tool missing', { tool: parsed.tool });
+          const errMsg = `Tool "${toolCall.tool}" is not registered.`;
+          logger.warn('tool-loop: tool missing', { tool: toolCall.tool });
           if (this.opts.enableRepair && repairAttempts < this.opts.maxRepairAttempts) {
             repairAttempts++;
-            currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(`Requested unavailable tool: ${parsed.tool}\n\n${llmText}`, availableTools) })];
+            currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(`Requested unavailable tool: ${toolCall.tool}\n\n${llmText}`, availableTools) })];
             continue;
           }
-          return toolLoopResult({ finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow });
+          return toolLoopResult({ finalText: errMsg, toolSteps, toolsUsed, stepMessages, flow });
         }
 
-        logger.info('tool-loop: executing tool', { tool: parsed.tool, input: parsed.input, step });
+        logger.info('tool-loop: executing tool', { tool: toolCall.tool, input: toolCall.input, step });
         let toolResult: string;
         try {
-          flow.push({ stage: 'tool_call', tool: parsed.tool, input: parsed.input ?? {} });
-          toolResult = await tool.run(parsed.input ?? {});
+          flow.push({ stage: 'tool_call', tool: toolCall.tool, input: toolCall.input ?? {} });
+          toolResult = await tool.run(toolCall.input ?? {});
         } catch (e) {
           toolResult = `Tool execution failed: ${String(e)}`;
-          logger.warn('tool-loop: tool error', { tool: parsed.tool, error: String(e) });
+          logger.warn('tool-loop: tool error', { tool: toolCall.tool, error: String(e) });
         }
-        toolsUsed.push(parsed.tool);
+        toolsUsed.push(toolCall.tool);
         toolSteps++;
-        flow.push({ stage: 'tool_result', tool: parsed.tool, ok: !toolResult.startsWith('Tool execution failed:') });
+        flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: !toolResult.startsWith('Tool execution failed:') });
 
         const assistantMsg = createMessage({ role: 'assistant', content: llmText });
-        const toolResultMsg = buildToolResultMessage(parsed.tool, toolResult);
+        const toolResultMsg = buildToolResultMessage(toolCall.tool, toolResult);
         currentMessages = [...currentMessages, assistantMsg, toolResultMsg];
-        logger.debug('tool-loop: result injected, continuing', { tool: parsed.tool, step, toolSteps });
+        logger.debug('tool-loop: result injected, continuing', { tool: toolCall.tool, step, toolSteps });
         continue;
       }
 

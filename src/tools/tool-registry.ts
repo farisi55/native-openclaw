@@ -6,7 +6,8 @@
 
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join, resolve } from 'path';
+import { pathToFileURL } from 'url';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('tools:registry');
@@ -39,20 +40,51 @@ export interface RegisteredTool {
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export class ToolRegistry {
+  private readonly toolsDir: string;
   private readonly installedDir: string;
   private readonly registry = new Map<string, RegisteredTool>();
   private loaded = false;
 
   constructor(projectRoot?: string) {
     const root = projectRoot ?? process.cwd();
-    this.installedDir = join(root, 'tools', 'installed');
+    this.toolsDir = this.resolveToolsDir(root);
+    this.installedDir = join(this.toolsDir, 'installed');
+  }
+
+  get installedToolsDir(): string {
+    return this.installedDir;
+  }
+
+  private resolveToolsDir(projectRoot: string): string {
+    const configured = process.env['TOOLS_DIR'];
+    const candidates: string[] = [];
+
+    if (configured?.trim()) {
+      const raw = configured.trim();
+      candidates.push(isAbsolute(raw) ? raw : resolve(projectRoot, raw));
+    }
+
+    candidates.push(resolve(projectRoot, 'tools'));
+    candidates.push(resolve(process.cwd(), 'tools'));
+    candidates.push(resolve(__dirname, '..', '..', 'tools'));
+
+    const unique = [...new Set(candidates.map((candidate) => resolve(candidate)))];
+    const found = unique.find((candidate) => existsSync(join(candidate, 'installed')));
+    return found ?? unique[0] ?? resolve(projectRoot, 'tools');
   }
 
   async loadTools(): Promise<void> {
     this.registry.clear();
 
     if (!existsSync(this.installedDir)) {
-      logger.debug('tools/installed directory not found — no plugins loaded');
+      logger.warn('No tools loaded', {
+        cwd: process.cwd(),
+        toolsDir: this.toolsDir,
+        installedDir: this.installedDir,
+        installedDirExists: false,
+        manifestFilesFound: 0,
+        hint: 'Run the app from the project root, set TOOLS_DIR=./tools, or ensure tools/installed contains enabled manifests.',
+      });
       this.loaded = true;
       return;
     }
@@ -61,16 +93,26 @@ export class ToolRegistry {
     try {
       entries = await readdir(this.installedDir);
     } catch (e) {
-      logger.warn('could not read tools/installed', { error: String(e) });
+      logger.warn('No tools loaded', {
+        cwd: process.cwd(),
+        toolsDir: this.toolsDir,
+        installedDir: this.installedDir,
+        installedDirExists: true,
+        manifestFilesFound: 0,
+        error: String(e),
+        hint: 'Check filesystem permissions and that tools/installed is readable.',
+      });
       this.loaded = true;
       return;
     }
 
     const errors: string[] = [];
+    let manifestFilesFound = 0;
 
     for (const toolDir of entries) {
       const manifestPath = join(this.installedDir, toolDir, 'manifest.json');
       if (!existsSync(manifestPath)) continue;
+      manifestFilesFound++;
 
       let manifest: ToolManifest;
       try {
@@ -98,9 +140,22 @@ export class ToolRegistry {
 
     if (errors.length > 0) logger.warn('some tools failed to load', { errors });
 
+    if (this.registry.size === 0) {
+      logger.warn('No tools loaded', {
+        cwd: process.cwd(),
+        toolsDir: this.toolsDir,
+        installedDir: this.installedDir,
+        installedDirExists: true,
+        manifestFilesFound,
+        errors,
+        hint: 'Check that manifests are enabled and each tool has a loadable dist/tools/plugins/<name>.plugin.js or installed entry file.',
+      });
+    }
+
     logger.info('tool registry loaded', {
       count: this.registry.size,
       tools: [...this.registry.keys()],
+      installedDir: this.installedDir,
     });
 
     this.loaded = true;
@@ -117,7 +172,7 @@ export class ToolRegistry {
     const distPlugin = pjoin(cwd, 'dist', 'tools', 'plugins', `${pluginName}.plugin.js`);
     if (existsSync(distPlugin)) {
       try {
-        const mod = await import(distPlugin) as { run?: (input: unknown) => Promise<string> };
+        const mod = await import(pathToFileURL(distPlugin).href) as { run?: (input: unknown) => Promise<string> };
         if (typeof mod.run === 'function') return mod.run;
       } catch (e) {
         logger.debug('dist plugin import failed', { path: distPlugin, error: String(e) });
@@ -127,7 +182,7 @@ export class ToolRegistry {
     const entryPath = presolve(this.installedDir, toolDir, manifest.entry);
     if (existsSync(entryPath)) {
       try {
-        const mod = await import(entryPath) as { run?: (input: unknown) => Promise<string> };
+        const mod = await import(pathToFileURL(entryPath).href) as { run?: (input: unknown) => Promise<string> };
         if (typeof mod.run === 'function') return mod.run;
       } catch (e) {
         logger.debug('entry import failed', { path: entryPath, error: String(e) });
@@ -137,7 +192,7 @@ export class ToolRegistry {
     const srcPlugin = pjoin(cwd, 'src', 'tools', 'plugins', `${pluginName}.plugin.ts`);
     if (existsSync(srcPlugin)) {
       try {
-        const mod = await import(srcPlugin) as { run?: (input: unknown) => Promise<string> };
+        const mod = await import(pathToFileURL(srcPlugin).href) as { run?: (input: unknown) => Promise<string> };
         if (typeof mod.run === 'function') return mod.run;
       } catch (e) {
         logger.debug('src plugin import failed', { path: srcPlugin, error: String(e) });
@@ -246,6 +301,7 @@ export class ToolRegistry {
    */
   buildToolsBlock(): string | null {
     if (this.registry.size === 0) return null;
+    const hasWebFetch = this.registry.has('web-fetch');
 
     const sections: string[] = [
       '## AVAILABLE TOOLS',
@@ -264,8 +320,27 @@ export class ToolRegistry {
       '{"type":"final_response","content":"<your answer here>"}',
       '```',
       '',
+      'TOOL NAME RULES:',
+      '- Use ONLY tools listed below in AVAILABLE TOOLS.',
+      '- Do not invent tool names.',
+      '- For news, latest information, current events, web search, current prices, or online lookup, use `web-fetch` if available.',
+      '- Never use `news_api`, `news`, `search_api`, `web_search`, `browser`, or `browse` unless that exact tool name appears below.',
+      '- If no suitable tool exists, answer that the capability is unavailable instead of inventing a tool.',
+      '- Tool call output must use the exact registered tool name.',
+      '',
       '---',
     ];
+
+    if (hasWebFetch) {
+      sections.push(
+        'For real-time internet/news/current information, use:',
+        '```json',
+        '{"type":"tool_call","tool":"web-fetch","input":{"query":"latest news today"}}',
+        '```',
+        '',
+        '---'
+      );
+    }
 
     let toolIndex = 1;
     for (const tool of this.registry.values()) {
