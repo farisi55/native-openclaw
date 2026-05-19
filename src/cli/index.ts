@@ -19,6 +19,8 @@ import {
   type CLIContext,
 } from './commands';
 
+const startupSessionLocks = new WeakMap<SessionManager, Promise<Session>>();
+
 const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
   cyan: '\x1b[36m', green: '\x1b[32m', yellow: '\x1b[33m',
@@ -71,6 +73,25 @@ export async function createDefaultSession(
 }
 
 export async function resolveStartupSession(
+  sessions: SessionManager,
+  settings: SettingsManager,
+  provider: IProvider,
+  model: string,
+  skillIds: string[]
+): Promise<Session> {
+  const existingResolution = startupSessionLocks.get(sessions);
+  if (existingResolution) return existingResolution;
+
+  const resolution = resolveStartupSessionUnlocked(sessions, settings, provider, model, skillIds)
+    .finally(() => {
+      startupSessionLocks.delete(sessions);
+    });
+
+  startupSessionLocks.set(sessions, resolution);
+  return resolution;
+}
+
+async function resolveStartupSessionUnlocked(
   sessions: SessionManager,
   settings: SettingsManager,
   provider: IProvider,

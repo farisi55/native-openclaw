@@ -1,7 +1,7 @@
 {
   "name": "brevo-email",
   "displayName": "Brevo Email",
-  "description": "Send HTML email through Brevo using BREVO_* environment configuration.",
+  "description": "Send HTML email through Brevo. Omit sender/recipient fields unless the user explicitly provides them; the tool uses BREVO_* environment defaults.",
   "version": "1.0.0",
   "entry": "index.js",
   "enabled": true,
@@ -14,8 +14,8 @@
     "properties": {
       "subject": { "type": "string", "description": "Email subject" },
       "htmlContent": { "type": "string", "description": "HTML email body" },
-      "recipientEmail": { "type": "string", "description": "Optional recipient override" },
-      "recipientName": { "type": "string", "description": "Optional recipient name override" }
+      "recipientEmail": { "type": "string", "description": "Optional explicit recipient override. Omit when user did not provide a real recipient email; never use placeholders." },
+      "recipientName": { "type": "string", "description": "Optional explicit recipient name override. Omit when user did not provide a real recipient name; never use placeholders." }
     },
     "required": ["subject", "htmlContent"]
   }

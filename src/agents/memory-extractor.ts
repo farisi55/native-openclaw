@@ -71,7 +71,7 @@ const AGENT_NAME_PATTERNS: RegExp[] = [
 /** Patterns that set the USER's name (stored in session memory). */
 const USER_NAME_PATTERNS: RegExp[] = [
   /my\s+name\s+is\s+(.+)/i,
-  /i['']?m\s+([A-Z][a-zA-Z]+)(?:\s|$|[.,!?])/,
+  /i[\u2019\u2018'']?m\s+([a-zA-Z][a-zA-Z]+)(?:\s|$|[.,!?])/i,
   /call\s+me\s+(.+)/i,
 ];
 

@@ -142,22 +142,31 @@ export class SessionManager {
       return { ok: false, error: new Error('ID prefix must be at least 4 characters') };
     }
 
-    // Resolve prefix → full ID
-    let targetId = idOrPrefix;
+    // 1. Try exact match first (full UUID passed directly)
+    const exactResult = await this.store.get(idOrPrefix);
+    if (exactResult.ok && exactResult.value !== null) {
+      const del = await this.store.delete(idOrPrefix);
+      if (!del.ok) return { ok: false, error: del.error };
+      if (del.value) {
+        logger.info('session deleted (exact)', { id: idOrPrefix });
+        return { ok: true, value: idOrPrefix };
+      }
+    }
+
+    // 2. Prefix match — only when input is clearly a short prefix (< 36 chars)
     if (idOrPrefix.length < 36) {
       const listResult = await this.list();
       if (!listResult.ok) return { ok: false, error: listResult.error };
       const match = listResult.value.find((s) => s.id.startsWith(idOrPrefix));
       if (!match) return { ok: true, value: null };
-      targetId = match.id;
+      const del = await this.store.delete(match.id);
+      if (!del.ok) return { ok: false, error: del.error };
+      if (del.value) {
+        logger.info('session deleted (prefix)', { id: match.id });
+        return { ok: true, value: match.id };
+      }
     }
 
-    const result = await this.store.delete(targetId);
-    if (!result.ok) return { ok: false, error: result.error };
-    if (result.value) {
-      logger.info('session deleted', { id: targetId });
-      return { ok: true, value: targetId };
-    }
     return { ok: true, value: null };
   }
 

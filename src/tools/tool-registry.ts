@@ -302,6 +302,7 @@ export class ToolRegistry {
   buildToolsBlock(): string | null {
     if (this.registry.size === 0) return null;
     const hasWebFetch = this.registry.has('web-fetch');
+    const hasBrevoEmail = this.registry.has('brevo-email');
 
     const sections: string[] = [
       '## AVAILABLE TOOLS',
@@ -337,6 +338,20 @@ export class ToolRegistry {
         '```json',
         '{"type":"tool_call","tool":"web-fetch","input":{"query":"latest news today"}}',
         '```',
+        '',
+        '---'
+      );
+    }
+
+    if (hasBrevoEmail) {
+      sections.push(
+        'BREVO EMAIL RULES:',
+        '- Do not invent recipientEmail, senderEmail, recipientName, or senderName.',
+        '- If the user does not explicitly provide a recipient, omit recipientEmail and recipientName; brevo-email will use BREVO_RECIPIENT_EMAIL and BREVO_RECIPIENT_NAME.',
+        '- Never use email@example.com, recipient@example.com, test@example.com, @example.com emails, "Nama Penerima", or other placeholders.',
+        '- Never claim an email was sent unless brevo-email returns ok=true.',
+        '- If brevo-email returns ok=false, tell the user sending failed and summarize the safe error detail.',
+        '- For email about current prices, today, latest news, or market updates, use web-fetch first when available, then call brevo-email with the fetched information.',
         '',
         '---'
       );

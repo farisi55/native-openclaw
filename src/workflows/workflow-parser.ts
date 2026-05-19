@@ -87,11 +87,24 @@ export function parseWorkflowMarkdown(markdown: string): WorkflowDefinition {
 
 export function validateWorkflowDefinition(workflow: WorkflowDefinition): string[] {
   const errors: string[] = [];
-  if (!workflow.title.trim()) errors.push('Missing workflow title.');
-  if (!workflow.topic.trim()) errors.push('Missing required section: Topic.');
-  if (workflow.dataRequirements.length === 0) errors.push('Missing required section: Data Requirements.');
-  if (workflow.analysisRequirements.length === 0) errors.push('Missing required section: Analysis Requirements.');
-  if (workflow.outputRequirements.length === 0) errors.push('Missing required section: Output Requirements.');
+
+  if (!workflow.title.trim()) {
+    errors.push('Missing workflow title.');
+  }
+
+  const sectionPresence: Record<string, boolean> = {
+    'Topic': workflow.topic.trim().length > 0,
+    'Data Requirements': workflow.dataRequirements.length > 0,
+    'Analysis Requirements': workflow.analysisRequirements.length > 0,
+    'Output Requirements': workflow.outputRequirements.length > 0,
+  };
+
+  for (const section of REQUIRED_SECTIONS) {
+    if (!sectionPresence[section]) {
+      errors.push(`Missing required section: ${section}.`);
+    }
+  }
+
   return errors;
 }
 

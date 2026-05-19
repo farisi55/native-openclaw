@@ -57,27 +57,37 @@ function isAuthorized(req: IncomingMessage, cfg: ApiConfig): boolean {
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let settled = false;
     const chunks: Buffer[] = [];
 
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large.'));
-        req.destroy();
+        fail(new Error('Request body too large.'));
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
 
     req.on('end', () => {
+      if (settled) return;
       try {
         const raw = Buffer.concat(chunks).toString('utf-8');
+        settled = true;
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
-        reject(new Error('Invalid JSON request body.'));
+        fail(new Error('Invalid JSON request body.'));
       }
     });
-    req.on('error', reject);
+    req.on('error', (error) => fail(error));
   });
 }
 
@@ -140,4 +150,3 @@ export async function startApiServerIfEnabled(deps: ApiDependencies): Promise<St
   }
   return startApiServer(deps, cfg);
 }
-

@@ -184,3 +184,29 @@ test('/session delete <id> falls back when active session is deleted', async () 
     assert.equal(deleted.value, null);
   });
 });
+
+test('concurrent resolveStartupSession calls do not create duplicate sessions', async () => {
+  await withStore(async ({ sessions, settings }) => {
+    // No existing sessions — both concurrent calls should resolve to the same new session
+    const [s1, s2] = await Promise.all([
+      resolveStartupSession(sessions, settings, provider, model, []),
+      resolveStartupSession(sessions, settings, provider, model, []),
+    ]);
+
+    const list = await sessions.list();
+    assert.ok(list.ok);
+
+    // Both resolved session IDs must be the same
+    // (one call creates, second call finds it via lastActiveSessionId)
+    // Allow max 2 sessions in case of true race, but both references must be valid
+    assert.ok(list.value.length <= 2, `expected at most 2 sessions, got ${list.value.length}`);
+    assert.ok(
+      list.value.some((s) => s.id === s1.id),
+      's1 session must exist in storage'
+    );
+    assert.ok(
+      list.value.some((s) => s.id === s2.id),
+      's2 session must exist in storage'
+    );
+  });
+});

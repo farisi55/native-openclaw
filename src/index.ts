@@ -76,6 +76,16 @@ async function bootstrap(): Promise<void> {
 
   logger.info(`Semantic memory: ${semanticMemory.size()} chunks loaded`);
 
+  // Graceful shutdown — flush pending semantic memory writes
+  const gracefulShutdown = async (signal: string): Promise<void> => {
+    process.stderr.write(`\n[shutdown] ${signal} received — flushing memory...\n`);
+    await semanticMemory.save();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+
   // Restore agent identity
   const agentName = await memory.getGlobalValue('agentName');
 

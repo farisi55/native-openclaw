@@ -167,3 +167,29 @@ test('API_AUTH_TOKEN is enforced when configured', async () => {
   });
 });
 
+test('API rejects request body exceeding 1MB', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    try {
+      // Build a payload just over 1MB
+      const oversizedMessage = 'x'.repeat(1_050_000);
+      const res = await postJson(`http://${api.host}:${api.port}`, {
+        message: oversizedMessage,
+      });
+
+      // Server must respond 400, not crash or hang
+      assert.equal(res.status, 400, 'oversized body must return HTTP 400');
+      assert.ok(
+        Array.isArray(res.body.error_detail) && res.body.error_detail.length > 0,
+        'error_detail must be non-empty'
+      );
+    } finally {
+      await api.close();
+    }
+  });
+});

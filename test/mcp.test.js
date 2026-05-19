@@ -162,6 +162,38 @@ async function testStartListAndCallFakeServer() {
   });
 }
 
+async function testRestartServerReRegistersTools() {
+  await withTempDir(async (dir) => {
+    const serverPath = await writeFakeMcpServer(dir);
+    const registry = new ToolRegistry(dir);
+    const manager = new McpManager({
+      configPath: path.join(dir, 'mcp.json'),
+      toolRegistry: registry,
+    });
+    await manager.init();
+    await manager.addServer('fake', { command: process.execPath, args: [serverPath] });
+
+    // Initial start
+    const toolsFirst = await manager.startServer('fake');
+    assert.strictEqual(toolsFirst.length, 1, 'should have 1 tool after first start');
+    assert.ok(registry.has('mcp:fake:echo'), 'tool must be registered after start');
+
+    // Restart
+    const toolsAfter = await manager.restartServer('fake');
+    assert.strictEqual(toolsAfter.length, 1, 'should have 1 tool after restart');
+    assert.ok(registry.has('mcp:fake:echo'), 'tool must be re-registered after restart');
+
+    // Verify tool still callable after restart
+    const runtimeTool = registry.getTool('mcp:fake:echo');
+    assert.ok(runtimeTool, 'getTool must return a tool after restart');
+    const result = await runtimeTool.run({ text: 'restart-test' });
+    assert.strictEqual(result, 'echo:restart-test', 'tool must return correct output after restart');
+
+    await manager.stopServer('fake');
+    assert.strictEqual(registry.has('mcp:fake:echo'), false, 'tool must be unregistered after stop');
+  });
+}
+
 async function testFailedServerDoesNotCrashStartAll() {
   await withTempDir(async (dir) => {
     const registry = new ToolRegistry(dir);
@@ -180,6 +212,7 @@ async function run() {
   await testConfigAutoCreated();
   await testCliAddAndList();
   await testStartListAndCallFakeServer();
+  await testRestartServerReRegistersTools();
   await testFailedServerDoesNotCrashStartAll();
   console.log('mcp tests passed');
 }

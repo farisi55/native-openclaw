@@ -29,6 +29,9 @@ const TOOL_ALIASES: Record<string, string> = {
 const NO_TOOLS_MESSAGE =
   'Tool execution is currently unavailable because no tools are loaded. Please check that the app is running from the project root and that tools/installed contains enabled tool manifests.';
 
+const CURRENT_INFO_EMAIL_RE = /(hari ini|terbaru|current|latest|today|news|berita|harga|price|emas|gold|market|pasar)/i;
+const EMAIL_INTENT_RE = /\b(email|mail)\b|kirim\s+email|send\s+email/i;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ToolLoopOptions {
@@ -196,6 +199,96 @@ function normalizeParsedToolCall(
   return normalizedTool === parsed.tool ? parsed : { ...parsed, tool: normalizedTool };
 }
 
+function isPlaceholderEmail(value: string): boolean {
+  const lower = value.trim().toLowerCase();
+  return lower.endsWith('@example.com') ||
+    ['email@example.com', 'recipient@example.com', 'test@example.com'].includes(lower);
+}
+
+function isPlaceholderName(value: string): boolean {
+  return [
+    'nama penerima',
+    'nama pengirim',
+    'recipient name',
+    'sender name',
+    'test user',
+    'example user',
+  ].includes(value.trim().toLowerCase());
+}
+
+function normalizeBrevoToolInput(input: unknown): unknown {
+  if (!isPlainObject(input)) return input;
+
+  const cleaned: Record<string, unknown> = { ...input };
+  for (const key of ['recipientEmail', 'senderEmail']) {
+    const value = cleaned[key];
+    if (typeof value === 'string' && isPlaceholderEmail(value)) delete cleaned[key];
+  }
+  for (const key of ['recipientName', 'senderName']) {
+    const value = cleaned[key];
+    if (typeof value === 'string' && isPlaceholderName(value)) delete cleaned[key];
+  }
+  return cleaned;
+}
+
+function normalizeToolCallInput(
+  toolCall: { type: 'tool_call'; tool: string; input: unknown }
+): { type: 'tool_call'; tool: string; input: unknown } {
+  if (toolCall.tool !== 'brevo-email') return toolCall;
+  return { ...toolCall, input: normalizeBrevoToolInput(toolCall.input) };
+}
+
+function originalUserText(messages: Message[]): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === 'user') return extractText(message.content);
+  }
+  return '';
+}
+
+function shouldFetchBeforeBrevoEmail(messages: Message[], availableTools: string[], toolsUsed: string[]): boolean {
+  if (!availableTools.includes('web-fetch')) return false;
+  if (toolsUsed.includes('web-fetch')) return false;
+  const text = originalUserText(messages);
+  return EMAIL_INTENT_RE.test(text) && CURRENT_INFO_EMAIL_RE.test(text);
+}
+
+function brevoFinalAnswer(toolResult: string): string {
+  const parsed = safeJsonParse(toolResult);
+  if (isPlainObject(parsed)) {
+    const ok = parsed['ok'] === true;
+    const content = typeof parsed['content'] === 'string' ? parsed['content'] : '';
+    const recipient = typeof parsed['recipientEmail'] === 'string' ? parsed['recipientEmail'] : '';
+    const messageId = typeof parsed['messageId'] === 'string' ? parsed['messageId'] : '';
+    const status = typeof parsed['status'] === 'number' ? ` HTTP ${parsed['status']}.` : '';
+    const error = typeof parsed['error'] === 'string' ? parsed['error'] : '';
+
+    if (ok) {
+      const target = recipient ? ` ke ${recipient}` : '';
+      const idText = messageId ? ` Message ID: ${messageId}.` : '';
+      return `Email berhasil dikirim${target}.${idText}`;
+    }
+
+    const detail = content || error || 'Brevo tidak mengonfirmasi pengiriman.';
+    return `Email gagal dikirim.${status} ${detail}`.trim();
+  }
+
+  if (/not sent|failed|error|missing/i.test(toolResult)) {
+    return `Email gagal dikirim. ${toolResult}`;
+  }
+  if (/sent/i.test(toolResult)) {
+    return `Email berhasil dikirim. ${toolResult}`;
+  }
+  return toolResult;
+}
+
+function toolResultOk(toolName: string, toolResult: string): boolean {
+  if (toolName !== 'brevo-email') return !toolResult.startsWith('Tool execution failed:');
+  const parsed = safeJsonParse(toolResult);
+  if (isPlainObject(parsed) && typeof parsed['ok'] === 'boolean') return parsed['ok'];
+  return /^Brevo email sent/i.test(toolResult);
+}
+
 function normalizeStructuredResponse(raw: unknown, availableTools: string[]): ParsedStructuredResponse {
   if (!isPlainObject(raw)) return null;
 
@@ -296,6 +389,14 @@ function buildStrictToolContractBlock(
     lines.push('- For news, latest information, current events, current prices, online lookup, or web search, use web-fetch.');
     lines.push('- Example for real-time internet/news/current information:');
     lines.push('{ "type": "tool_call", "tool": "web-fetch", "input": { "query": "latest news today" } }');
+  }
+  if (availableTools.some((tool) => tool.name === 'brevo-email')) {
+    lines.push('- For brevo-email: do not invent recipientEmail, senderEmail, recipientName, or senderName.');
+    lines.push('- If the user does not explicitly provide a recipient, omit recipientEmail and recipientName; brevo-email will use BREVO_RECIPIENT_EMAIL and BREVO_RECIPIENT_NAME.');
+    lines.push('- Never use email@example.com, recipient@example.com, test@example.com, @example.com emails, "Nama Penerima", or other placeholders.');
+    lines.push('- Never claim the email was sent unless brevo-email returns ok=true.');
+    lines.push('- If brevo-email returns ok=false, tell the user the send failed and summarize the safe error detail.');
+    lines.push('- For email about current prices, today, latest news, or market updates: call web-fetch first when available, then call brevo-email using the fetched information.');
   }
   if (preferredTool) lines.push(`- Preferred tool hint: ${preferredTool}`);
   lines.push('');
@@ -456,7 +557,39 @@ export class ToolLoop {
           });
         }
 
-        const toolCall = normalizeParsedToolCall(parsed, availableTools);
+        const toolCall = normalizeToolCallInput(normalizeParsedToolCall(parsed, availableTools));
+
+        if (
+          toolCall.tool === 'brevo-email' &&
+          shouldFetchBeforeBrevoEmail(messages, availableTools, toolsUsed)
+        ) {
+          const webTool = this.registry.getTool('web-fetch');
+          if (webTool) {
+            const query = originalUserText(messages);
+            logger.info('tool-loop: fetching real-time data before brevo-email', { query });
+            let webResult: string;
+            try {
+              flow.push({ stage: 'tool_call', tool: 'web-fetch', input: { query } });
+              webResult = await webTool.run({ query });
+            } catch (e) {
+              webResult = `Tool execution failed: ${String(e)}`;
+              logger.warn('tool-loop: web-fetch before email failed', { error: String(e) });
+            }
+            toolsUsed.push('web-fetch');
+            toolSteps++;
+            flow.push({ stage: 'tool_result', tool: 'web-fetch', ok: !webResult.startsWith('Tool execution failed:') });
+            currentMessages = [
+              ...currentMessages,
+              createMessage({
+                role: 'user',
+                content:
+                  `TOOL RESULT [web-fetch]:\n\n${webResult}\n\n` +
+                  'Use this current information for the email. Now call brevo-email with subject and htmlContent only unless the user explicitly provided sender or recipient details. Do not invent recipientEmail.',
+              }),
+            ];
+            continue;
+          }
+        }
 
         if (isLastStep) {
           const validationError = validateToolCall(toolCall, availableTools);
@@ -487,8 +620,14 @@ export class ToolLoop {
           }
           toolsUsed.push(toolCall.tool);
           toolSteps++;
-          flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: !toolResult.startsWith('Tool execution failed:') });
-          return toolLoopResult({ finalText: toolResult, toolSteps, toolsUsed, stepMessages, flow });
+          flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: toolResultOk(toolCall.tool, toolResult) });
+          return toolLoopResult({
+            finalText: toolCall.tool === 'brevo-email' ? brevoFinalAnswer(toolResult) : toolResult,
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          });
         }
 
         const validationError = validateToolCall(toolCall, availableTools);
@@ -527,7 +666,17 @@ export class ToolLoop {
         }
         toolsUsed.push(toolCall.tool);
         toolSteps++;
-        flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: !toolResult.startsWith('Tool execution failed:') });
+        flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: toolResultOk(toolCall.tool, toolResult) });
+
+        if (toolCall.tool === 'brevo-email') {
+          return toolLoopResult({
+            finalText: brevoFinalAnswer(toolResult),
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          });
+        }
 
         const assistantMsg = createMessage({ role: 'assistant', content: llmText });
         const toolResultMsg = buildToolResultMessage(toolCall.tool, toolResult);
