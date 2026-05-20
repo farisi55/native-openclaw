@@ -3,8 +3,7 @@
  * Interactive chat REPL — connects all services.
  */
 
-import * as readline from 'readline/promises';
-import { stdin as input, stdout as output, exit } from 'process';
+import { stdout as output, exit } from 'process';
 import type { ProviderRegistry, IProvider } from '../types/provider';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
@@ -12,7 +11,8 @@ import type { ToolRegistry } from '../tools/tool-registry';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { Orchestrator } from '../agents/orchestrator';
 import type { McpManager } from '../mcp';
-import { createSlashCommandCompleter } from './autocomplete';
+import { readLineWithSlashAutocomplete } from './autocomplete';
+import { SLASH_COMMANDS } from './command-registry';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
   cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
@@ -277,19 +277,14 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
 
   printBanner(activeProvider!.displayName, activeModel, skillRegistry.size);
 
-  const rl = readline.createInterface({
-    input,
-    output,
-    terminal: true,
-    completer: createSlashCommandCompleter(),
-  });
-  rl.on('close', () => { output.write(c('dim', '\n  Goodbye.\n\n')); exit(0); });
-
   // ── REPL ───────────────────────────────────────────────────────────────────
   while (true) {
     let userInput: string;
     try {
-      userInput = await rl.question(buildPrompt(activeProvider!.id, activeModel));
+      userInput = await readLineWithSlashAutocomplete({
+        prompt: buildPrompt(activeProvider!.id, activeModel),
+        commands: SLASH_COMMANDS,
+      });
     } catch {
       output.write(c('dim', '\n  Goodbye.\n\n'));
       exit(0);

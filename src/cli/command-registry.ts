@@ -95,7 +95,8 @@ function matchesCommand(candidate: string, query: string): boolean {
 
 export function getSlashCommandSuggestions(
   input: string,
-  max = 50
+  max = 50,
+  commands: readonly SlashCommandDefinition[] = SLASH_COMMANDS
 ): SlashCommandDefinition[] {
   const query = normalizeInput(input);
   if (!query.startsWith('/')) return [];
@@ -103,7 +104,7 @@ export function getSlashCommandSuggestions(
   const seen = new Set<string>();
   const matches: SlashCommandDefinition[] = [];
 
-  for (const definition of SLASH_COMMANDS) {
+  for (const definition of commands) {
     const isMatch = allMatchableCommands(definition)
       .some((candidate) => matchesCommand(candidate, query));
 
