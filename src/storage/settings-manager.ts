@@ -27,10 +27,10 @@ const BUILTIN_DEFAULTS: Record<string, string> = {
   mistral:     'mistral-small-latest',
   openrouter:  'liquid/lfm-2.5-1.2b-instruct:free',
   gemini:      'gemini-1.5-flash',
-  sambanova:   'Meta-Llama-3.1-70B-Instruct',
+  sambanova:   'DeepSeek-V3.1',
   zai:          'glm-4.5',
   openai:      'gpt-4o-mini',
-  anthropic:   'claude-3-haiku-20240307',
+  anthropic:   'claude-opus-4-20250514',
 };
 
 export class SettingsManager {

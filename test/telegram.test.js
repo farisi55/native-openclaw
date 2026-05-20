@@ -82,7 +82,7 @@ async function withDeps(fn) {
 
     await fn(deps, dataDir);
   } finally {
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     global.fetch = originalFetch;
   }
 }
@@ -192,6 +192,45 @@ test('Telegram normal message replies and persists chat session mapping', async 
 
     const second = new TelegramSessionManager(dataDir);
     assert.equal(await second.getSessionId('123'), sessionId);
+  });
+});
+
+test('concurrent Telegram messages do not race on baseState init', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const sent = [];
+    const actions = [];
+    mockTelegramFetch(sent, actions);
+    const mapping = new TelegramSessionManager(dataDir);
+    for (const chatId of ['101', '102', '103']) {
+      const created = await deps.sessions.create({
+        providerId: 'fake',
+        model: 'fake-model',
+        activeSkills: [],
+      });
+      assert.equal(created.ok, true);
+      await mapping.setSessionId(chatId, created.value.id);
+    }
+
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({ allowedChatIds: new Set(), allowAll: true }),
+      dataDir
+    );
+
+    const results = await Promise.all([
+      integration.handleIncomingText('101', 'first'),
+      integration.handleIncomingText('102', 'second'),
+      integration.handleIncomingText('103', 'third'),
+    ]);
+
+    assert.deepEqual(results, [true, true, true]);
+    assert.equal(actions.length, 3);
+    const replies = sent.filter((msg) => msg.text !== 'Sedang diproses...');
+    assert.equal(replies.length, 3);
+    assert.ok(replies.every((msg) => !String(msg.text).includes('[object Object]')));
+    assert.ok(replies.some((msg) => /telegram: first/.test(msg.text)));
+    assert.ok(replies.some((msg) => /telegram: second/.test(msg.text)));
+    assert.ok(replies.some((msg) => /telegram: third/.test(msg.text)));
   });
 });
 

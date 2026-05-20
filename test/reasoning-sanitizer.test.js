@@ -30,6 +30,39 @@ assert.equal(
   'Halo, ada yang bisa saya bantu?'
 );
 
+assert.equal(
+  sanitizeFinalAnswer('Analisis: pengguna membutuhkan data real-time.\nHarga emas hari ini adalah $1,950.'),
+  'Harga emas hari ini adalah $1,950.',
+  'Harus strip "Analisis:" prefix'
+);
+
+assert.equal(
+  sanitizeFinalAnswer([
+    'Observation: user asked about time',
+    'Action: call system-time tool',
+    '',
+    'Jam sekarang adalah 14:30 WIB.',
+  ].join('\n')),
+  'Jam sekarang adalah 14:30 WIB.',
+  'Harus strip ReAct trace'
+);
+
+assert.equal(
+  sanitizeFinalAnswer('Proses pengambilan keputusan (reasoning) sangat penting dalam AI.'),
+  'Proses pengambilan keputusan (reasoning) sangat penting dalam AI.',
+  'Tidak boleh strip kalimat valid yang mengandung kata "reasoning"'
+);
+
+assert.equal(sanitizeFinalAnswer(''), '', 'Empty string harus return empty');
+
+assert.equal(sanitizeFinalAnswer('   \n\n   '), '   \n\n   ', 'Whitespace-only harus return as-is');
+
+assert.equal(
+  sanitizeFinalAnswer('Berikut hasilnya:\n<thought>internal</thought>\nFile ditemukan: 3 item.'),
+  'Berikut hasilnya:\n\nFile ditemukan: 3 item.',
+  'XML reasoning tags harus dihapus, konten sebelum dan sesudah dipertahankan'
+);
+
 const prompt = buildSystemPrompt({
   basePrompt: 'You are helpful.',
   skills: [],

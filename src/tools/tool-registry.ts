@@ -43,11 +43,12 @@ export class ToolRegistry {
   private readonly toolsDir: string;
   private readonly installedDir: string;
   private readonly registry = new Map<string, RegisteredTool>();
+  private candidatesTried: string[] = [];
   private loaded = false;
 
-  constructor(projectRoot?: string) {
+  constructor(projectRoot?: string, toolsDir?: string) {
     const root = projectRoot ?? process.cwd();
-    this.toolsDir = this.resolveToolsDir(root);
+    this.toolsDir = toolsDir ?? this.resolveToolsDir(root);
     this.installedDir = join(this.toolsDir, 'installed');
   }
 
@@ -67,8 +68,10 @@ export class ToolRegistry {
     candidates.push(resolve(projectRoot, 'tools'));
     candidates.push(resolve(process.cwd(), 'tools'));
     candidates.push(resolve(__dirname, '..', '..', 'tools'));
+    candidates.push(resolve(__dirname, '..', '..', '..', 'tools'));
 
     const unique = [...new Set(candidates.map((candidate) => resolve(candidate)))];
+    this.candidatesTried = unique;
     const found = unique.find((candidate) => existsSync(join(candidate, 'installed')));
     return found ?? unique[0] ?? resolve(projectRoot, 'tools');
   }
@@ -79,11 +82,13 @@ export class ToolRegistry {
     if (!existsSync(this.installedDir)) {
       logger.warn('No tools loaded', {
         cwd: process.cwd(),
+        __dirname,
         toolsDir: this.toolsDir,
         installedDir: this.installedDir,
         installedDirExists: false,
+        candidatesTried: this.candidatesTried,
         manifestFilesFound: 0,
-        hint: 'Run the app from the project root, set TOOLS_DIR=./tools, or ensure tools/installed contains enabled manifests.',
+        hint: 'Ensure the app is run from project root or set TOOLS_DIR env variable to absolute path.',
       });
       this.loaded = true;
       return;
@@ -95,9 +100,11 @@ export class ToolRegistry {
     } catch (e) {
       logger.warn('No tools loaded', {
         cwd: process.cwd(),
+        __dirname,
         toolsDir: this.toolsDir,
         installedDir: this.installedDir,
         installedDirExists: true,
+        candidatesTried: this.candidatesTried,
         manifestFilesFound: 0,
         error: String(e),
         hint: 'Check filesystem permissions and that tools/installed is readable.',
@@ -143,9 +150,11 @@ export class ToolRegistry {
     if (this.registry.size === 0) {
       logger.warn('No tools loaded', {
         cwd: process.cwd(),
+        __dirname,
         toolsDir: this.toolsDir,
         installedDir: this.installedDir,
         installedDirExists: true,
+        candidatesTried: this.candidatesTried,
         manifestFilesFound,
         errors,
         hint: 'Check that manifests are enabled and each tool has a loadable dist/tools/plugins/<name>.plugin.js or installed entry file.',

@@ -13,7 +13,7 @@
 
 import { join } from 'path';
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
 
@@ -184,6 +184,10 @@ export class SemanticMemory {
     return this.chunks.length;
   }
 
+  get isDirty(): boolean {
+    return this.dirty;
+  }
+
   // ── Persistence ────────────────────────────────────────────────────────────
 
   private scheduleSave(): void {
@@ -193,9 +197,14 @@ export class SemanticMemory {
       this.saveTimer = null;
       await this.save();
     }, 3000);
+    this.saveTimer.unref?.();
   }
 
   async save(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
     if (!this.dirty) return;
     try {
       await mkdir(join(this.filePath, '..'), { recursive: true });
@@ -203,6 +212,22 @@ export class SemanticMemory {
       this.dirty = false;
     } catch (e) {
       logger.debug('semantic memory save failed', { error: String(e) });
+    }
+  }
+
+  async forceSave(): Promise<void> {
+    this.dirty = true;
+    await this.save();
+  }
+
+  saveSyncBestEffort(): void {
+    if (!this.dirty) return;
+    try {
+      mkdirSync(join(this.filePath, '..'), { recursive: true });
+      writeFileSync(this.filePath, JSON.stringify({ chunks: this.chunks }, null, 2), 'utf-8');
+      this.dirty = false;
+    } catch {
+      // Process exit handlers must not throw.
     }
   }
 }

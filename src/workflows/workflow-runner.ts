@@ -381,7 +381,7 @@ async function executeAnalysis(step: WorkflowPlanStep, tool: WorkflowToolCapabil
           }),
         ],
       });
-      return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: true, output: String(response.message.content), sources: [] };
+      return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: true, output: extractText(response.message.content), sources: [] };
     } catch (err) {
       return { stepId: step.id, type: step.type, tool: null, goal: step.goal, ok: false, output: '', sources: [], error: `LLM fallback analysis failed: ${err instanceof Error ? err.message : String(err)}` };
     }

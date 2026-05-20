@@ -196,10 +196,16 @@ test('concurrent resolveStartupSession calls do not create duplicate sessions', 
     const list = await sessions.list();
     assert.ok(list.ok);
 
-    // Both resolved session IDs must be the same
-    // (one call creates, second call finds it via lastActiveSessionId)
-    // Allow max 2 sessions in case of true race, but both references must be valid
-    assert.ok(list.value.length <= 2, `expected at most 2 sessions, got ${list.value.length}`);
+    assert.equal(
+      list.value.length,
+      1,
+      `Lock mechanism should prevent duplicate sessions. Got ${list.value.length} sessions: ${list.value.map((s) => s.id.slice(0, 8)).join(', ')}`
+    );
+    assert.equal(
+      s1.id,
+      s2.id,
+      `Both concurrent calls should resolve to the same session. Got: ${s1.id.slice(0, 8)} vs ${s2.id.slice(0, 8)}`
+    );
     assert.ok(
       list.value.some((s) => s.id === s1.id),
       's1 session must exist in storage'
@@ -208,5 +214,22 @@ test('concurrent resolveStartupSession calls do not create duplicate sessions', 
       list.value.some((s) => s.id === s2.id),
       's2 session must exist in storage'
     );
+  });
+});
+
+test('concurrent resolveStartupSession with existing session resumes same session', async () => {
+  await withStore(async ({ sessions, settings }) => {
+    const existing = await createSession(sessions, 'existing');
+    await settings.setLastActiveSessionId(existing.id);
+
+    const [s1, s2, s3] = await Promise.all([
+      resolveStartupSession(sessions, settings, provider, model, []),
+      resolveStartupSession(sessions, settings, provider, model, []),
+      resolveStartupSession(sessions, settings, provider, model, []),
+    ]);
+
+    assert.equal(s1.id, existing.id);
+    assert.equal(s2.id, existing.id);
+    assert.equal(s3.id, existing.id);
   });
 });

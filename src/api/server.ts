@@ -81,8 +81,9 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
       if (settled) return;
       try {
         const raw = Buffer.concat(chunks).toString('utf-8');
+        const parsed = raw ? JSON.parse(raw) : {};
         settled = true;
-        resolve(raw ? JSON.parse(raw) : {});
+        resolve(parsed);
       } catch {
         fail(new Error('Invalid JSON request body.'));
       }

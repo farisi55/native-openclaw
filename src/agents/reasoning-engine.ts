@@ -18,7 +18,7 @@ import { createMessage, extractText } from '../types/message';
 import { normalizeToolName } from './tool-loop';
 
 const logger = createLogger('agents:reasoning');
-const CURRENT_INFO_RE = /\b(news|latest|current events?|today|current price|market update|football transfer|transfer news|search internet|web lookup)\b|berita|terbaru|hari ini|informasi terbaru|harga .*hari ini|update pasar|transfer sepakbola/i;
+const CURRENT_INFO_RE = /\b(news|latest news|current events?|today'?s? news|current\s+(\w+\s+)?price|market update|football transfer|transfer news|search internet|web lookup)\b|berita\s+(terbaru|hari ini|transfer|sepakbola|bola|pasar|harga)|harga\s+(\w+\s+)?(hari ini|sekarang|terkini|terbaru)|update\s+pasar|informasi\s+terbaru\s+tentang|berita\s+terkini|transfer\s+sepakbola/i;
 const REAL_TIME_REASON = 'Requires real-time internet access';
 
 // ─── Types ────────────────────────────────────────────────────────────────────

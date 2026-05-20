@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtemp, rm } = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
-const { join } = require('node:path');
+const { join, resolve } = require('node:path');
 
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
@@ -106,7 +106,7 @@ test('workspace path traversal is blocked', async () => {
 
 test('workspace tools are exposed through ToolRegistry', async () => {
   await withWorkspace(async () => {
-    const registry = new ToolRegistry(process.cwd());
+    const registry = new ToolRegistry(resolve(__dirname, '..'));
     await registry.loadTools();
 
     for (const name of ['workspace-list', 'workspace-read', 'workspace-write', 'workspace-append', 'workspace-mkdir']) {
@@ -126,4 +126,3 @@ test('workspace tools are exposed through ToolRegistry', async () => {
     assert.match(content, /workspace tool output/);
   });
 });
-

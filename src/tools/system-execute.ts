@@ -13,6 +13,7 @@ import { promisify } from 'util';
 import { join } from 'path';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('tool:system-execute');
@@ -21,6 +22,27 @@ const execAsync = promisify(exec);
 const TIMEOUT_MS = parseInt(process.env['SYSTEM_EXECUTE_TIMEOUT'] ?? '30000', 10);
 const ENABLED = process.env['SYSTEM_EXECUTE_ENABLED'] !== 'false';
 const REGISTRY_PATH = join(process.cwd(), 'data', 'custom-commands.json');
+const CONFIRM_TTL_MS = 5 * 60 * 1000;
+
+export const DANGEROUS_PATTERNS: RegExp[] = [
+  /\b(shutdown|reboot|restart)\b/i,
+  /\brm\s+-[a-z]*r[a-z]*f?[a-z]*\b/i,
+  /\bdel\s+\/s\b/i,
+  /\brmdir\s+\/s\b/i,
+  /\b(format|mkfs|diskpart)\b/i,
+  /\bdd\s+if=/i,
+  /\bchmod\s+-R\s+777\b/i,
+  /\bchown\s+-R\b/i,
+];
+
+export interface PendingCommand {
+  id: string;
+  command: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+const pendingCommands = new Map<string, PendingCommand>();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +61,10 @@ export interface ExecuteInput {
   saveAs?: string;
   /** Description for saved command. */
   description?: string;
+  /** Explicit confirmation for dangerous commands. */
+  confirm?: boolean;
+  /** Pending confirmation ID returned for a dangerous command. */
+  confirmId?: string;
 }
 
 export interface ExecuteResult {
@@ -54,6 +80,10 @@ export interface CustomCommand {
   command: string;
   description?: string;
   createdAt: string;
+}
+
+export function isDangerousCommand(cmd: string): boolean {
+  return DANGEROUS_PATTERNS.some((pattern) => pattern.test(cmd));
 }
 
 // ─── Custom command registry ──────────────────────────────────────────────────
@@ -129,15 +159,15 @@ export async function listCustomCommands(): Promise<string> {
 
 // ─── OS-aware shell selection ─────────────────────────────────────────────────
 
-function detectShell(): string {
+export function detectShell(): string {
   if (process.platform === 'win32') {
-    return 'cmd.exe';
+    return process.env['ComSpec'] ?? process.env['COMSPEC'] ?? 'C:\\Windows\\System32\\cmd.exe';
   }
 
   return process.env['SHELL'] ?? '/bin/sh';
 }
 
-function normalizeShell(shell?: string): string {
+export function normalizeShell(shell?: string): string {
   if (!shell || !shell.trim()) {
     return detectShell();
   }
@@ -145,9 +175,15 @@ function normalizeShell(shell?: string): string {
   const normalized = shell.trim().toLowerCase();
 
   if (process.platform === 'win32') {
-    if (normalized === 'cmd') return 'cmd.exe';
-    if (normalized === 'powershell') return 'powershell.exe';
-    if (normalized === 'pwsh') return 'pwsh.exe';
+    if (normalized === 'cmd' || normalized === 'cmd.exe') {
+      return process.env['ComSpec'] ?? process.env['COMSPEC'] ?? 'C:\\Windows\\System32\\cmd.exe';
+    }
+    if (normalized === 'powershell' || normalized === 'powershell.exe') {
+      return process.env['SystemRoot']
+        ? `${process.env['SystemRoot']}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+        : 'powershell.exe';
+    }
+    if (normalized === 'pwsh' || normalized === 'pwsh.exe') return 'pwsh.exe';
     return shell;
   }
 
@@ -226,6 +262,41 @@ export async function runSystemExecute(
     return {
       ok: false,
       content: '❌ No command provided.',
+    };
+  }
+
+  const requestedConfirmId = opts.confirmId?.trim();
+  if (requestedConfirmId) {
+    const pending = pendingCommands.get(requestedConfirmId);
+    const now = Date.now();
+
+    if (!pending || pending.expiresAt <= now || pending.command !== cmd) {
+      pendingCommands.delete(requestedConfirmId);
+      return {
+        ok: false,
+        content: 'Konfirmasi tidak valid atau sudah kedaluwarsa.',
+      };
+    }
+
+    pendingCommands.delete(requestedConfirmId);
+  } else if (isDangerousCommand(cmd) && opts.confirm !== true) {
+    const id = `cmd_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const now = Date.now();
+    pendingCommands.set(id, {
+      id,
+      command: cmd,
+      createdAt: now,
+      expiresAt: now + CONFIRM_TTL_MS,
+    });
+
+    return {
+      ok: false,
+      content:
+        `⚠️ Command ini berpotensi berbahaya dan membutuhkan konfirmasi eksplisit.\n\n` +
+        `Command: \`${cmd}\`\n\n` +
+        `Untuk mengeksekusi, kirim ulang dengan:\n` +
+        `{ "confirmId": "${id}" }\n\n` +
+        'Konfirmasi berlaku selama 5 menit.',
     };
   }
 

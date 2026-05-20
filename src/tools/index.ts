@@ -24,3 +24,6 @@ export type { ToolExecutionResult } from './tool-executor';
 
 export { installTool, uninstallTool, listAvailable } from './tool-installer';
 export type { InstallResult } from './tool-installer';
+
+export { planCommand } from './command-planner';
+export type { CommandPlanRequest, CommandPlanResult } from './command-planner';

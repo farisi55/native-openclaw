@@ -225,24 +225,14 @@ export class Orchestrator {
     }
 
     // ── 4. Natural-language capability install ────────────────────────────────
-    const capabilityResult = await this.capabilityInstaller.handle(input.userInput);
-
-    if (capabilityResult.handled) {
-      session = await this.persistExchange(
-        session.id,
-        input.userInput,
-        capabilityResult.response
-      );
-
-      return {
-        assistantText: capabilityResult.response,
-        session,
-        newSession,
-        wasAction: true,
-        flow: [{ stage: 'final', type: 'capability_action' }],
-      };
-    }
-
+    /**
+     * Turn processing priority order:
+     * 1. Memory extraction (always runs, no early return)
+     * 2. Workflow run request (explicit "jalankan workflow" trigger)
+     * 3. Action handler (session management, skill management)
+     * 4. Capability installer (natural language tool/skill install)
+     * 5. Reasoning + ToolLoop (main LLM pipeline)
+     */
     if (isWorkflowRunRequest(input.userInput)) {
       const workflowResult = await runWorkflowFromWorkspace({
         ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
@@ -313,6 +303,24 @@ export class Orchestrator {
     }
 
     // ── 6. Reasoning step, internal only ──────────────────────────────────────
+    const capabilityResult = await this.capabilityInstaller.handle(input.userInput);
+
+    if (capabilityResult.handled) {
+      session = await this.persistExchange(
+        session.id,
+        input.userInput,
+        capabilityResult.response
+      );
+
+      return {
+        assistantText: capabilityResult.response,
+        session,
+        newSession,
+        wasAction: true,
+        flow: [{ stage: 'final', type: 'capability_action' }],
+      };
+    }
+
     let reasoningHint: string | null = null;
 
     if (this.opts.useReasoning && this.toolRegistry.size > 0) {

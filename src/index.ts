@@ -79,12 +79,37 @@ async function bootstrap(): Promise<void> {
   // Graceful shutdown — flush pending semantic memory writes
   const gracefulShutdown = async (signal: string): Promise<void> => {
     process.stderr.write(`\n[shutdown] ${signal} received — flushing memory...\n`);
-    await semanticMemory.save();
+    await semanticMemory.forceSave();
     process.exit(0);
   };
 
   process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
   process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+  process.on('uncaughtException', async (err) => {
+    process.stderr.write(`\n[fatal:uncaughtException] ${err.message}\n${err.stack ?? ''}\n`);
+    try {
+      await semanticMemory.forceSave();
+      process.stderr.write('[shutdown] semantic memory flushed\n');
+    } catch (saveErr) {
+      process.stderr.write(`[shutdown] semantic memory flush failed: ${String(saveErr)}\n`);
+    }
+    process.exit(1);
+  });
+  process.on('unhandledRejection', async (reason) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    process.stderr.write(`\n[fatal:unhandledRejection] ${message}\n`);
+    try {
+      await semanticMemory.forceSave();
+    } catch {
+      // Best effort only during fatal shutdown.
+    }
+    process.exit(1);
+  });
+  process.on('exit', () => {
+    if (semanticMemory.isDirty) {
+      semanticMemory.saveSyncBestEffort();
+    }
+  });
 
   // Restore agent identity
   const agentName = await memory.getGlobalValue('agentName');

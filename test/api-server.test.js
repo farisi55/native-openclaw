@@ -193,3 +193,102 @@ test('API rejects request body exceeding 1MB', async () => {
     }
   });
 });
+
+test('GET request to chat endpoint returns 404', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, { enabled: true, host: '127.0.0.1', port: 0 });
+    try {
+      const res = await fetch(`http://${api.host}:${api.port}/native-openclaw/v1/chat`, {
+        method: 'GET',
+      });
+      assert.equal(res.status, 404);
+      const body = await res.json();
+      assert.ok(Array.isArray(body.error_detail));
+    } finally {
+      await api.close();
+    }
+  });
+});
+
+test('POST to wrong path returns 404', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, { enabled: true, host: '127.0.0.1', port: 0 });
+    try {
+      const res = await fetch(`http://${api.host}:${api.port}/wrong/path`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hello' }),
+      });
+      assert.equal(res.status, 404);
+    } finally {
+      await api.close();
+    }
+  });
+});
+
+test('empty message returns 400 with descriptive error', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, { enabled: true, host: '127.0.0.1', port: 0 });
+    try {
+      const res = await fetch(`http://${api.host}:${api.port}/native-openclaw/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '' }),
+      });
+      assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.ok(body.error_detail[0].includes('non-empty'));
+    } finally {
+      await api.close();
+    }
+  });
+});
+
+test('malformed JSON body returns 400', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, { enabled: true, host: '127.0.0.1', port: 0 });
+    try {
+      const res = await fetch(`http://${api.host}:${api.port}/native-openclaw/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{invalid json',
+      });
+      assert.equal(res.status, 400);
+    } finally {
+      await api.close();
+    }
+  });
+});
+
+test('API flow reason is sanitized before response', async () => {
+  await withDeps(async (deps) => {
+    deps.orchestrator.turn = async (input) => {
+      const session = (await deps.sessions.get(input.sessionId)).value;
+      return {
+        chatResponse: {
+          message: createMessage({ role: 'assistant', content: 'clean reply' }),
+          model: 'fake-model',
+          latencyMs: 12,
+        },
+        assistantText: 'clean reply',
+        session,
+        newSession: false,
+        wasAction: false,
+        flow: [{ stage: 'reasoning', reason: 'The user is asking from memory analysis: use tool' }],
+        toolsUsed: [],
+        toolSteps: 0,
+        usedFallback: false,
+      };
+    };
+
+    const api = await startApiServer(deps, { enabled: true, host: '127.0.0.1', port: 0 });
+    try {
+      const res = await postJson(`http://${api.host}:${api.port}`, { message: 'hello' });
+      assert.equal(res.status, 200);
+      const serializedFlow = JSON.stringify(res.body.flow).toLowerCase();
+      assert.doesNotMatch(serializedFlow, /the user is asking|from memory|analysis:/);
+    } finally {
+      await api.close();
+    }
+  });
+});

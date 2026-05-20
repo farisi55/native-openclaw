@@ -23,6 +23,8 @@ export class FallbackManager {
   private readonly health: ProviderHealthTracker;
   private readonly strategy: RoutingStrategy;
   private readonly providers: ProviderRegistry;
+  private readonly modelCache = new Map<string, string>();
+  private readonly modelCachePromises = new Map<string, Promise<string | null>>();
 
   constructor(
     providers: ProviderRegistry,
@@ -59,10 +61,20 @@ export class FallbackManager {
     if (primaryProvider && this.health.isHealthy(primaryProviderId)) {
       candidates.push({ provider: primaryProvider, model: primaryModel });
     }
-    for (const p of ranked) {
-      if (p.id !== primaryProviderId && candidates.length < maxAttempts) {
-        const fallbackModel = await this.defaultModel(p);
-        if (fallbackModel) candidates.push({ provider: p, model: fallbackModel });
+
+    const fallbackCandidates = await Promise.all(
+      ranked
+        .filter((p) => p.id !== primaryProviderId)
+        .slice(0, maxAttempts - 1)
+        .map(async (p) => {
+          const model = await this.defaultModel(p);
+          return model ? { provider: p, model } : null;
+        })
+    );
+
+    for (const candidate of fallbackCandidates) {
+      if (candidate && candidates.length < maxAttempts) {
+        candidates.push(candidate);
       }
     }
 
@@ -119,13 +131,37 @@ export class FallbackManager {
     throw lastError ?? new Error('All providers failed with no error details');
   }
 
+  clearModelCache(): void {
+    this.modelCache.clear();
+    this.modelCachePromises.clear();
+  }
+
   private async defaultModel(provider: IProvider): Promise<string | null> {
-    try {
-      const models = await provider.listModels();
-      return models[0]?.id ?? null;
-    } catch {
-      const envKey = `${provider.id.toUpperCase()}_DEFAULT_MODEL`;
-      return process.env[envKey] ?? null;
+    const cached = this.modelCache.get(provider.id);
+    if (cached) return cached;
+
+    const envKey = `${provider.id.toUpperCase()}_DEFAULT_MODEL`;
+    const envModel = process.env[envKey];
+    if (envModel) {
+      this.modelCache.set(provider.id, envModel);
+      return envModel;
     }
+
+    const existing = this.modelCachePromises.get(provider.id);
+    if (existing) return existing;
+
+    const promise = provider.listModels()
+      .then((models) => {
+        const model = models[0]?.id ?? null;
+        if (model) this.modelCache.set(provider.id, model);
+        return model;
+      })
+      .catch(() => null)
+      .finally(() => {
+        this.modelCachePromises.delete(provider.id);
+      });
+
+    this.modelCachePromises.set(provider.id, promise);
+    return promise;
   }
 }

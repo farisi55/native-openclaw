@@ -33,6 +33,8 @@ const KNOWN_MODELS: Record<string, SambaNovaMeta> = {
   'Meta-Llama-3.3-70B-Instruct':  { contextWindow: 131_072, maxOutputTokens: 16_384, supportsTools: true,  supportsVision: false },
   'Qwen2.5-72B-Instruct':         { contextWindow: 32_768,  maxOutputTokens: 8_192,  supportsTools: true,  supportsVision: false },
   'Qwen2.5-Coder-32B-Instruct':   { contextWindow: 32_768,  maxOutputTokens: 8_192,  supportsTools: true,  supportsVision: false },
+  'DeepSeek-V3.1':                 { contextWindow: 65_536,  maxOutputTokens: 16_384, supportsTools: false, supportsVision: false },
+  'DeepSeek-V3':                   { contextWindow: 65_536,  maxOutputTokens: 16_384, supportsTools: false, supportsVision: false },
   'DeepSeek-R1':                   { contextWindow: 32_768,  maxOutputTokens: 16_384, supportsTools: false, supportsVision: false },
   'DeepSeek-R1-Distill-Llama-70B':{ contextWindow: 32_768,  maxOutputTokens: 16_384, supportsTools: false, supportsVision: false },
   'Llama-4-Scout-17B-16E-Instruct':{ contextWindow: 131_072, maxOutputTokens: 16_384, supportsTools: true,  supportsVision: true },

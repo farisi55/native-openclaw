@@ -65,9 +65,9 @@ function stripMarkdownFences(text: string): string {
 }
 
 const INTERNAL_XML_BLOCK_RE = /<(reasoning|analysis|thought|plan)\b[^>]*>[\s\S]*?<\/\1>/gi;
-const INTERNAL_HEADING_RE = /^(#{1,6}\s*)?(reasoning|thought|analysis|plan|decision|observation|action|tool call|internal reasoning)\s*:?\s*$/i;
+const INTERNAL_HEADING_RE = /^(#{1,6}\s*)?(reasoning|thought|analysis|analisis|plan|decision|observation|action|tool call|internal reasoning)\s*:?\s*$/i;
 const ANSWER_HEADING_RE = /^#{1,6}\s*(final answer|answer|jawaban)\s*:?\s*$/i;
-const INTERNAL_LINE_RE = /^(?:[-*]\s*)?(?:the user is asking|user is asking|the user asks|from the memory|based on memory|i should answer|i need to answer|i need to|reasoning:|thought:|analysis:|plan:|decision:|observation:|action:|tool call:|internal reasoning:|i will use|i should use)\b/i;
+const INTERNAL_LINE_RE = /^(?:[-*]\s*)?(?:the user is asking|user is asking|the user asks|from the memory|based on memory|i should answer|i need to answer|i need to|reasoning:|thought:|analysis:|analisis:|plan:|decision:|observation:|action:|tool call:|internal reasoning:|i will use|i should use)(?:\b|\s|$)/i;
 const FINAL_LABEL_RE = /^(?:final answer|answer|jawaban)\s*:\s*/i;
 
 function removeInternalHeadingBlocks(text: string): string {
@@ -98,7 +98,7 @@ function removeInternalHeadingBlocks(text: string): string {
 
 export function sanitizeFinalAnswer(text: string): string {
   const original = text.trim();
-  if (!original) return original;
+  if (!original) return text;
 
   let cleaned = original
     .replace(INTERNAL_XML_BLOCK_RE, '')
@@ -492,6 +492,7 @@ export class ToolLoop {
     let toolSteps = 0;
     let repairAttempts = 0;
     let currentMessages = [...messages];
+    let brevoWebFetchDone = false;
 
     for (let step = 0; step <= this.opts.maxSteps; step++) {
       const isLastStep = step === this.opts.maxSteps;
@@ -577,14 +578,21 @@ export class ToolLoop {
             }
             toolsUsed.push('web-fetch');
             toolSteps++;
-            flow.push({ stage: 'tool_result', tool: 'web-fetch', ok: !webResult.startsWith('Tool execution failed:') });
+            const webFetchOk = !webResult.startsWith('Tool execution failed:');
+            if (webFetchOk) {
+              brevoWebFetchDone = true;
+            }
+            flow.push({ stage: 'tool_result', tool: 'web-fetch', ok: webFetchOk });
             currentMessages = [
               ...currentMessages,
               createMessage({
                 role: 'user',
                 content:
                   `TOOL RESULT [web-fetch]:\n\n${webResult}\n\n` +
-                  'Use this current information for the email. Now call brevo-email with subject and htmlContent only unless the user explicitly provided sender or recipient details. Do not invent recipientEmail.',
+                  'INSTRUCTION: You MUST now call brevo-email tool with the above information. ' +
+                  'Return ONLY this JSON — do NOT return a final_response:\n' +
+                  '{"type":"tool_call","tool":"brevo-email","input":{"subject":"<subject>","htmlContent":"<html>"}}\n' +
+                  'Do NOT invent recipientEmail or senderEmail. Use only subject and htmlContent.',
               }),
             ];
             continue;
@@ -686,6 +694,9 @@ export class ToolLoop {
       }
 
       if (parsed?.type === 'final_response') {
+        if (brevoWebFetchDone && availableTools.includes('brevo-email')) {
+          logger.warn('tool-loop: LLM returned final_response after brevo web-fetch pre-fetch', { step });
+        }
         logger.debug('tool-loop: structured final_response', { step, toolSteps });
         return toolLoopResult({ finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow });
       }

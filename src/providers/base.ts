@@ -145,13 +145,37 @@ export abstract class BaseProvider implements IProvider {
     );
   }
 
+  /**
+   * Combines multiple AbortSignals into one.
+   * The returned signal aborts when ANY input signal aborts.
+   * All event listeners are properly cleaned up to prevent memory leaks.
+   */
   private combineSignals(...signals: AbortSignal[]): AbortSignal {
-    const c = new AbortController();
-    for (const s of signals) {
-      if (s.aborted) { c.abort(); break; }
-      s.addEventListener('abort', () => c.abort(), { once: true });
+    const controller = new AbortController();
+
+    for (const signal of signals) {
+      if (signal.aborted) {
+        controller.abort(signal.reason);
+        return controller.signal;
+      }
     }
-    return c.signal;
+
+    const cleanup: Array<() => void> = [];
+
+    for (const signal of signals) {
+      const onAbort = (): void => {
+        controller.abort(signal.reason);
+        for (const fn of cleanup) fn();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      cleanup.push(() => signal.removeEventListener('abort', onAbort));
+    }
+
+    controller.signal.addEventListener('abort', () => {
+      for (const fn of cleanup) fn();
+    }, { once: true });
+
+    return controller.signal;
   }
 
   // ── Message mapping ─────────────────────────────────────────────────────────

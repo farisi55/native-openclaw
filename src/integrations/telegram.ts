@@ -119,7 +119,7 @@ export function loadTelegramConfig(): TelegramConfig {
 export class TelegramIntegration {
   private offset = 0;
   private stopped = true;
-  private baseState: ApiRuntimeState | null = null;
+  private baseStatePromise: Promise<ApiRuntimeState> | null = null;
   private readonly telegramSessions: TelegramSessionManager;
   private readonly runtime: TelegramRuntimeOptions;
   private readonly chatQueues = new Map<string, Promise<void>>();
@@ -150,7 +150,7 @@ export class TelegramIntegration {
       logger.warn('Telegram TELEGRAM_ALLOW_ALL=true; all chats are allowed.');
     }
 
-    this.baseState = await createApiRuntimeState(this.deps);
+    await this.getBaseState();
     this.stopped = false;
     void this.pollLoop().catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -173,14 +173,12 @@ export class TelegramIntegration {
       await this.sendText(chatId, this.runtime.ackMessage);
     }
 
-    if (!this.baseState) {
-      this.baseState = await createApiRuntimeState(this.deps);
-    }
+    const baseState = await this.getBaseState();
 
     const sessionId = await this.ensureChatSession(chatId);
     const state: ApiRuntimeState = {
-      activeProvider: this.baseState.activeProvider,
-      activeModel: this.baseState.activeModel,
+      activeProvider: baseState.activeProvider,
+      activeModel: baseState.activeModel,
       activeSessionId: sessionId,
     };
 
@@ -211,9 +209,6 @@ export class TelegramIntegration {
     if (response.body.sessionId) {
       await this.telegramSessions.setSessionId(chatId, response.body.sessionId);
     }
-
-    this.baseState.activeProvider = state.activeProvider;
-    this.baseState.activeModel = state.activeModel;
 
     const reply = response.body.error_detail.length > 0
       ? `Error: ${response.body.error_detail.join('; ')}`
@@ -251,6 +246,13 @@ export class TelegramIntegration {
     this.chatQueues.set(chatId, next);
   }
 
+  private async getBaseState(): Promise<ApiRuntimeState> {
+    if (!this.baseStatePromise) {
+      this.baseStatePromise = createApiRuntimeState(this.deps);
+    }
+    return this.baseStatePromise;
+  }
+
   private async ensureChatSession(chatId: string): Promise<string | null> {
     const mapped = await this.telegramSessions.getSessionId(chatId);
     if (mapped) {
@@ -258,11 +260,11 @@ export class TelegramIntegration {
       if (existing.ok && existing.value) return mapped;
     }
 
-    if (!this.baseState) return null;
+    const baseState = await this.getBaseState();
 
     const created = await this.deps.sessions.create({
-      providerId: this.baseState.activeProvider.id,
-      model: this.baseState.activeModel,
+      providerId: baseState.activeProvider.id,
+      model: baseState.activeModel,
       activeSkills: this.deps.skillRegistry.activeIds,
     });
     if (!created.ok) throw created.error;

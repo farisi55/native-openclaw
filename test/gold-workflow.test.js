@@ -7,12 +7,14 @@ const {
   isGoldReportWorkflowRequest,
   isWorkflowRunRequest,
   runGoldReportWorkflow,
+  runWorkflowFromDefinition,
   runWorkflowFromWorkspace,
   shouldEmailGoldReport,
 } = require('../dist/workflows');
 const { ToolRegistry } = require('../dist/tools/tool-registry');
 const { WorkspaceManager } = require('../dist/workspace');
 const { sendBrevoEmail } = require('../dist/tools/brevo-email');
+const { createMessage } = require('../dist/types/message');
 
 async function withTempWorkspace(fn) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'native-openclaw-gold-workflow-'));
@@ -123,11 +125,69 @@ async function testBrevoMissingEnvDoesNotClaimSent() {
   assert.match(result.content, /Missing/);
 }
 
+async function testAnalysisFallbackExtractsContentParts() {
+  await withTempWorkspace(async (dir) => {
+    const workspace = new WorkspaceManager({ rootDir: dir });
+    await workspace.ensureWorkspace();
+
+    const toolRegistry = {
+      listTools() {
+        return [];
+      },
+      getTool() {
+        return undefined;
+      },
+    };
+
+    const provider = {
+      id: 'mock',
+      displayName: 'Mock',
+      async listModels() {
+        return [];
+      },
+      async chat() {
+        return {
+          model: 'mock',
+          latencyMs: 1,
+          message: createMessage({
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Mock analysis result' }],
+          }),
+        };
+      },
+    };
+
+    const workflow = await runWorkflowFromDefinition({
+      title: 'Workflow: Content Parts Analysis',
+      role: 'You are an analyst.',
+      objective: 'Generate a report.',
+      topic: 'Mock topic',
+      dataRequirements: ['Use available context'],
+      toolsToUse: [],
+      analysisRequirements: ['Analyze available context'],
+      outputRequirements: ['Save report'],
+      email: { sendEmail: false },
+      safetyRules: [],
+      rawMarkdown: '',
+    }, {
+      toolRegistry,
+      workspace,
+      provider,
+      model: 'mock',
+      now: new Date('2026-05-16T00:00:00.000Z'),
+    });
+
+    assert.match(workflow.content, /Mock analysis result/);
+    assert.doesNotMatch(workflow.content, /\[object Object\]/);
+  });
+}
+
 async function run() {
   await testTriggerDetection();
   await testMissingMcpStillWritesReport();
   await testDynamicOilWorkflowDoesNotUseGoldAssumptions();
   await testBrevoMissingEnvDoesNotClaimSent();
+  await testAnalysisFallbackExtractsContentParts();
   console.log('dynamic workflow tests passed');
 }
 

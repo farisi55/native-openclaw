@@ -215,6 +215,11 @@ export function buildWorkflowFinalSummary(result: WorkflowRunResult): string {
     'Sources:',
     ...(result.sources.length > 0 ? result.sources.map((source) => `- ${source}`) : ['- None']),
     '',
+    'Result highlights:',
+    ...(result.rawResults.length > 0
+      ? result.rawResults.slice(0, 3).map((item) => `- ${truncate(item.output.replace(/\s+/g, ' '), 500)}`)
+      : ['- None']),
+    '',
     'Generated files:',
     ...(result.generatedFiles.length > 0 ? result.generatedFiles.map((file) => `- ${file.path}`) : ['- None']),
     '',

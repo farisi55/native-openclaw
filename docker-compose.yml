@@ -31,6 +31,7 @@ services:
     volumes:
       - ./data:/data
       - ./skills:/skills
+      - ./workspace:/workspace
 
     # Load all env vars from .env file
     env_file:
@@ -42,7 +43,10 @@ services:
       LOG_LEVEL: info
       APP_DATA_DIR: /data
       SKILLS_DIR: /skills
+      WORKSPACE_DIR: /workspace
+      TOOLS_DIR: /app/tools
       STORAGE_BACKEND: file
+      NODE_OPTIONS: "--enable-source-maps"
 
     # Restart on non-zero exit (e.g. config errors), but not on Ctrl-C (exit 0)
     restart: on-failure:3

@@ -27,6 +27,16 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, '');
 }
 
+function sanitizeFlowForApi(flow: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return flow.map((step) => {
+    if (typeof step['reason'] !== 'string') return step;
+    const cleaned = step['reason']
+      .replace(/(the user is asking|from memory|i should|i need to|based on|analysis:|reasoning:)/gi, '')
+      .trim();
+    return cleaned ? { ...step, reason: cleaned } : { ...step, reason: undefined };
+  });
+}
+
 function makeResponse(fields: Partial<ChatApiResponse>): ChatApiResponse {
   return {
     model: fields.model ?? null,
@@ -35,7 +45,7 @@ function makeResponse(fields: Partial<ChatApiResponse>): ChatApiResponse {
     token: fields.token ?? null,
     responseTime: fields.responseTime ?? '0 ms',
     tools: fields.tools ?? [],
-    flow: fields.flow ?? [],
+    flow: fields.flow ? sanitizeFlowForApi(fields.flow) : [],
     sessionId: fields.sessionId ?? null,
     error_detail: fields.error_detail ?? [],
   };
