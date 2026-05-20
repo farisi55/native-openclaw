@@ -6,6 +6,12 @@ const {
   getSlashCommandSuggestions,
 } = require('../dist/cli/command-registry');
 const { createSlashCommandCompleter } = require('../dist/cli/autocomplete');
+const {
+  countRenderLines,
+  countWrappedLines,
+  stripAnsi,
+  visibleLength,
+} = require('../dist/cli/autocomplete');
 
 function commands(input) {
   return getSlashCommandSuggestions(input).map((item) => item.command);
@@ -28,5 +34,16 @@ const completer = createSlashCommandCompleter();
 assert(completer('hello')[0].length === 0, 'normal chat text has no slash completion');
 assert(completer('/work r')[0].includes('/workspace read '), 'readline completer returns slash completions');
 assert(formatSlashCommandSuggestions('/session').includes('List all sessions'), 'formatter includes descriptions');
+
+assert.strictEqual(stripAnsi('\x1b[32m/session\x1b[0m'), '/session', 'stripAnsi removes color sequences');
+assert.strictEqual(visibleLength('\x1b[1myou\x1b[0m › /s'), 'you › /s'.length, 'visibleLength ignores ANSI');
+assert.strictEqual(countWrappedLines('1234567890', 20), 1, 'short line uses one row');
+assert.strictEqual(countWrappedLines('x'.repeat(21), 20), 2, 'long line wraps across rows');
+assert.strictEqual(countWrappedLines(`${'x'.repeat(20)}\n${'y'.repeat(21)}`, 20), 3, 'multiline input counts wrapped physical rows');
+assert.strictEqual(
+  countRenderLines(['you › ' + 'x'.repeat(40), '', '> /session list'], 20),
+  5,
+  'render line count includes wrapped prompt, blank line, and suggestions'
+);
 
 console.log('slash-autocomplete tests passed');

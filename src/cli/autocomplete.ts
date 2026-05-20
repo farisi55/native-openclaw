@@ -20,14 +20,48 @@ interface KeypressKey {
 
 const INPUT_HISTORY: string[] = [];
 const MAX_HISTORY = 100;
-const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
-function stripAnsi(text: string): string {
+export function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, '');
 }
 
-function visibleLength(text: string): number {
+export function visibleLength(text: string): number {
   return stripAnsi(text).length;
+}
+
+export function getTerminalColumns(): number {
+  const columns = process.stdout.columns;
+  if (typeof columns !== 'number' || !Number.isFinite(columns)) return 80;
+  return Math.max(20, columns);
+}
+
+export function countWrappedLines(text: string, columns = getTerminalColumns()): number {
+  const safeColumns = Math.max(20, columns);
+  return text.split('\n').reduce((total, line) => {
+    return total + Math.max(1, Math.ceil(visibleLength(line) / safeColumns));
+  }, 0);
+}
+
+export function countRenderLines(
+  lines: readonly string[],
+  columns = getTerminalColumns()
+): number {
+  if (lines.length === 0) return 0;
+  return lines.reduce((total, line) => total + countWrappedLines(line, columns), 0);
+}
+
+export function clearPreviousRender(
+  output: NodeJS.WriteStream,
+  lineCount: number,
+  cursorRow = Math.max(0, lineCount - 1)
+): void {
+  if (lineCount <= 0) return;
+  readline.cursorTo(output, 0);
+  if (cursorRow > 0) {
+    readline.moveCursor(output, 0, -cursorRow);
+  }
+  readline.clearScreenDown(output);
 }
 
 function rememberInput(input: string): void {
@@ -101,12 +135,12 @@ export async function readLineWithSlashAutocomplete(
 
   return new Promise((resolve) => {
     const maxSuggestions = options.maxSuggestions ?? 10;
-    const promptColumns = visibleLength(options.prompt);
     const wasRaw = stdin.isRaw === true;
     let buffer = '';
     let cursor = 0;
     let selectedIndex = 0;
-    let renderedSuggestionLines = 0;
+    let lastRenderLineCount = 0;
+    let lastCursorRow = 0;
     let suppressedForInput: string | null = null;
     let historyIndex = INPUT_HISTORY.length;
     let settled = false;
@@ -124,53 +158,55 @@ export async function readLineWithSlashAutocomplete(
       return suggestionsForBuffer().slice(0, maxSuggestions);
     };
 
-    const clearPreviousRender = (): void => {
-      stdout.write('\r\x1b[2K');
-      for (let i = 0; i < renderedSuggestionLines; i += 1) {
-        stdout.write('\x1b[1B\r\x1b[2K');
-      }
-      if (renderedSuggestionLines > 0) {
-        stdout.write(`\x1b[${renderedSuggestionLines}A`);
-      }
-      stdout.write('\r');
-      renderedSuggestionLines = 0;
-    };
-
-    const render = (): void => {
-      clearPreviousRender();
+    const buildRenderLines = (): string[] => {
       const allSuggestions = suggestionsForBuffer();
       const suggestions = allSuggestions.slice(0, maxSuggestions);
       if (selectedIndex >= suggestions.length) selectedIndex = 0;
 
-      stdout.write(`${options.prompt}${buffer}`);
+      const lines = [`${options.prompt}${buffer}`];
 
       if (suggestions.length > 0) {
+        lines.push('');
         const commandWidth = Math.max(
           ...suggestions.map((item) => applyCompletion(item).length)
         );
-        const lines = suggestions.map((item, index) => {
+        for (const [index, item] of suggestions.entries()) {
           const marker = index === selectedIndex ? '> ' : '  ';
           const command = applyCompletion(item).padEnd(commandWidth + 2);
-          return `${marker}${command}${item.description}`;
-        });
+          lines.push(`${marker}${command}${item.description}`);
+        }
         if (allSuggestions.length > maxSuggestions) {
           lines.push(`  ... and ${allSuggestions.length - maxSuggestions} more`);
         }
-
-        stdout.write(`\n${lines.join('\n')}`);
-        renderedSuggestionLines = lines.length;
-        stdout.write(`\x1b[${renderedSuggestionLines}A`);
       }
 
-      const targetColumn = promptColumns + cursor;
-      stdout.write('\r');
-      if (targetColumn > 0) {
-        stdout.write(`\x1b[${targetColumn}C`);
+      return lines;
+    };
+
+    const render = (): void => {
+      clearPreviousRender(stdout, lastRenderLineCount, lastCursorRow);
+
+      const columns = getTerminalColumns();
+      const lines = buildRenderLines();
+      stdout.write(lines.join('\n'));
+
+      lastRenderLineCount = countRenderLines(lines, columns);
+
+      const inputCursorOffset = visibleLength(options.prompt) + cursor;
+      const cursorRow = Math.floor(inputCursorOffset / columns);
+      const cursorColumn = inputCursorOffset % columns;
+      lastCursorRow = Math.min(cursorRow, Math.max(0, lastRenderLineCount - 1));
+
+      const rowsUp = Math.max(0, lastRenderLineCount - 1 - lastCursorRow);
+      if (rowsUp > 0) {
+        readline.moveCursor(stdout, 0, -rowsUp);
       }
+      readline.cursorTo(stdout, cursorColumn);
     };
 
     const restoreTerminal = (): void => {
       stdin.removeListener('keypress', onKeypress);
+      stdout.removeListener('resize', onResize);
       if (typeof stdin.setRawMode === 'function') {
         stdin.setRawMode(wasRaw);
       }
@@ -179,7 +215,7 @@ export async function readLineWithSlashAutocomplete(
     const finish = (value: string): void => {
       if (settled) return;
       settled = true;
-      clearPreviousRender();
+      clearPreviousRender(stdout, lastRenderLineCount, lastCursorRow);
       stdout.write(`${options.prompt}${value}\n`);
       restoreTerminal();
       rememberInput(value);
@@ -307,10 +343,15 @@ export async function readLineWithSlashAutocomplete(
       }
     };
 
+    const onResize = (): void => {
+      if (!settled) render();
+    };
+
     readline.emitKeypressEvents(stdin);
     stdin.setRawMode(true);
     stdin.resume();
     stdin.on('keypress', onKeypress);
+    stdout.on('resize', onResize);
     render();
   });
 }

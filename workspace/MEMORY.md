@@ -1,13 +1,1 @@
-# Curated Long-Term Memory
-
-Use this file for durable, reviewed memory. Raw activity logs belong in memory/YYYY-MM-DD.md.
-
-## Important Facts
-
-## User Preferences
-
-## Project Decisions
-
-## Environment Notes
-
-## Open Questions
+1. **AGENTS.md**: Berisi informasi tentang agen-agen yang terlibat dalam sistem, termasuk peran dan kemampuan mereka. Agen-agen ini dapat berupa asisten virtual, bot, atau lain-lain.
