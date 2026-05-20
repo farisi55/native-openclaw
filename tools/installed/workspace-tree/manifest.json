@@ -1,0 +1,25 @@
+{
+  "name": "workspace-tree",
+  "displayName": "Workspace Tree",
+  "description": "Show a compact tree of workspace files and folders.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Show workspace tree",
+    "Show reports folder tree"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Optional workspace-relative folder path."
+      },
+      "maxDepth": {
+        "type": "string",
+        "description": "Optional maximum depth, default 3."
+      }
+    }
+  }
+}

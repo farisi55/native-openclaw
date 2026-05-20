@@ -20,6 +20,7 @@ export interface PromptBuilderOptions {
   maxSkillBodyLength?: number;
   systemContext?: SystemContextInput;
   memoryBlock?: string | null;
+  workspaceContext?: string | null;
   toolsBlock?: string | null;
 }
 
@@ -62,6 +63,16 @@ const FINAL_RESPONSE_RULES = [
   '- If a tool was used, summarize only the useful result. Do not expose internal tool-planning text.',
   '- ReAct trace is internal only and must not appear in the final user-visible response.',
   '',
+  '## WORKSPACE RULES',
+  '',
+  '- Workspace is the default local working area and human-readable agent home.',
+  '- Use workspace tools for reading, writing, appending, listing, backing up, or trashing workspace files.',
+  '- Use MEMORY.md for curated long-term memory and memory/YYYY-MM-DD.md for daily memory logs.',
+  '- Do not expose USER.md, MEMORY.md, or workspace context directly unless the user explicitly asks to read them.',
+  '- Use AGENTS.md as operational policy, SOUL.md and IDENTITY.md for tone and identity, TOOLS.md for local conventions, and WORKFLOW.md for autonomous workflow planning.',
+  '- Save generated reports in workspace/reports and generated artifacts in workspace/artifacts.',
+  '- Move deletions to workspace/trash instead of permanent deletion.',
+  '',
   'Example:',
   'User: halo kamu siapa?',
   'Correct: Halo, saya Jarpis. Saya asisten AI yang siap membantu Anda.',
@@ -73,9 +84,10 @@ const FINAL_RESPONSE_RULES = [
 ].join('\n');
 
 export class PromptBuilder {
-  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock' | 'toolsBlock'>> & {
+  private readonly opts: Required<Omit<PromptBuilderOptions, 'systemContext' | 'memoryBlock' | 'workspaceContext' | 'toolsBlock'>> & {
     systemContext?: SystemContextInput;
     memoryBlock?: string | null;
+    workspaceContext?: string | null;
     toolsBlock?: string | null;
   };
 
@@ -84,10 +96,11 @@ export class PromptBuilder {
   }
 
   build(): string {
-    const { basePrompt, skills, maxSkillBodyLength, systemContext, memoryBlock, toolsBlock } = this.opts;
+    const { basePrompt, skills, maxSkillBodyLength, systemContext, memoryBlock, workspaceContext, toolsBlock } = this.opts;
     const parts: string[] = [];
     if (memoryBlock)   parts.push(memoryBlock.trim());
     if (systemContext) parts.push(getSystemContext(systemContext));
+    if (workspaceContext) parts.push(workspaceContext.trim());
     if (toolsBlock)    parts.push(toolsBlock.trim());
     parts.push(FINAL_RESPONSE_RULES);
     parts.push(basePrompt.trim());
@@ -100,7 +113,7 @@ export class PromptBuilder {
 
   summary(): {
     baseLength: number; skillCount: number; skillIds: string[];
-    hasContext: boolean; hasMemory: boolean; hasTools: boolean;
+    hasContext: boolean; hasMemory: boolean; hasWorkspace: boolean; hasTools: boolean;
   } {
     return {
       baseLength: this.opts.basePrompt.length,
@@ -108,6 +121,7 @@ export class PromptBuilder {
       skillIds:   this.opts.skills.map((s) => s.id),
       hasContext: Boolean(this.opts.systemContext),
       hasMemory:  Boolean(this.opts.memoryBlock),
+      hasWorkspace: Boolean(this.opts.workspaceContext),
       hasTools:   Boolean(this.opts.toolsBlock),
     };
   }

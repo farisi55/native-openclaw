@@ -1,0 +1,16 @@
+{
+  "name": "workspace-backup",
+  "displayName": "Workspace Backup",
+  "description": "Create a timestamped backup copy under workspace/backup.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Backup workspace now",
+    "Create a workspace backup"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}

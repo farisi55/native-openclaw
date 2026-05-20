@@ -15,7 +15,8 @@ import type { McpManager } from '../mcp';
 import { createSlashCommandCompleter } from './autocomplete';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
-  cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdNetwork, cmdMcp, cmdWorkflow,
+  cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
+  cmdNetwork, cmdMcp, cmdWorkflow,
   type CLIContext,
 } from './commands';
 
@@ -170,6 +171,8 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'settings':            await cmdSettings(ctx, args); break;
     case 'tools': case 't':     await cmdTools(ctx, args); break;
     case 'workspace': case 'w': await cmdWorkspace(ctx, args); break;
+    case 'memory': case 'mem':  await cmdMemory(ctx, args); break;
+    case 'heartbeat': case 'hb': await cmdHeartbeat(ctx, args); break;
     case 'network': case 'net': await cmdNetwork(ctx, args); break;
     case 'mcp':                 await cmdMcp(ctx, args); break;
     case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;

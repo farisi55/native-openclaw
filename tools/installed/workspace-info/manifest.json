@@ -1,0 +1,16 @@
+{
+  "name": "workspace-info",
+  "displayName": "Workspace Info",
+  "description": "Show workspace root, size, counts, and core file status.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Show workspace info",
+    "Check workspace status"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}

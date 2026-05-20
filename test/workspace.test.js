@@ -67,10 +67,12 @@ test('workspace auto-creates default structure', async () => {
     const workspace = new WorkspaceManager();
     await workspace.ensureWorkspace();
 
-    for (const file of ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'IDENTITY.md', 'SOUL.md', 'TOOLS.md', 'USER.md']) {
+    for (const file of ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'IDENTITY.md', 'SOUL.md', 'TOOLS.md', 'USER.md', 'MEMORY.md', 'WORKFLOW.md']) {
       assert.equal(existsSync(join(root, file)), true, `${file} should exist`);
     }
-    assert.equal(existsSync(join(root, 'state')), true);
+    for (const dir of ['state', 'memory', 'reports', 'artifacts', 'backup', 'trash']) {
+      assert.equal(existsSync(join(root, dir)), true, `${dir} should exist`);
+    }
   });
 });
 
@@ -92,6 +94,47 @@ test('workspace append tool can create MEMORY.md', async () => {
     const workspace = new WorkspaceManager();
     const content = await workspace.read('MEMORY.md');
     assert.match(content, /Remember this checkpoint/);
+  });
+});
+
+test('workspace tree, info, trash, and backup work', async () => {
+  await withWorkspace(async (root) => {
+    const workspace = new WorkspaceManager();
+    await workspace.write('artifacts/temp.txt', 'temporary artifact');
+
+    const tree = await workspace.tree('.');
+    assert.match(tree, /artifacts/);
+    assert.match(tree, /temp\.txt/);
+
+    const info = await workspace.info();
+    assert.ok(info.fileCount >= 9, 'core files should be counted');
+
+    const trashPath = await workspace.trash('artifacts/temp.txt');
+    assert.match(trashPath, /^trash\//);
+    assert.equal(existsSync(join(root, 'artifacts', 'temp.txt')), false);
+
+    const backupPath = await workspace.backup();
+    assert.match(backupPath, /^backup\/workspace-backup-/);
+    assert.equal(existsSync(join(root, backupPath)), true);
+  });
+});
+
+test('workspace memory helpers write daily and long-term memory', async () => {
+  await withWorkspace(async () => {
+    const workspace = new WorkspaceManager();
+    await workspace.appendLongTermMemory('User prefers concise answers.');
+    await workspace.appendDailyMemory({
+      type: 'user_preference',
+      summary: 'User prefers concise answers.',
+      source: 'chat',
+    });
+
+    const longTerm = await workspace.read('MEMORY.md');
+    assert.match(longTerm, /User prefers concise answers/);
+
+    const daily = await workspace.readDailyMemory();
+    assert.match(daily, /Daily Memory Log/);
+    assert.match(daily, /user_preference/);
   });
 });
 

@@ -93,11 +93,21 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/settings default-model <id>')}   Set default model for current provider`,
     `  ${c('yellow', '/settings default-provider <id>')}  Set default provider`,
     `  ${c('yellow', '/workspace')}                    Show workspace info`,
+    `  ${c('yellow', '/workspace info')}               Show workspace status`,
+    `  ${c('yellow', '/workspace init')}               Create missing workspace files`,
+    `  ${c('yellow', '/workspace reload')}             Reload workspace context`,
     `  ${c('yellow', '/workspace list')}               List workspace files`,
+    `  ${c('yellow', '/workspace tree')}               Show workspace tree`,
     `  ${c('yellow', '/workspace read <file>')}        Read a workspace file`,
     `  ${c('yellow', '/workspace write <file> <text>')} Write a workspace file`,
     `  ${c('yellow', '/workspace append <file> <text>')} Append to a workspace file`,
     `  ${c('yellow', '/workspace mkdir <folder>')}     Create a workspace folder`,
+    `  ${c('yellow', '/workspace trash <file>')}       Move a workspace path to trash`,
+    `  ${c('yellow', '/workspace backup')}             Create a workspace backup`,
+    `  ${c('yellow', '/memory')}                       Show workspace memory commands`,
+    `  ${c('yellow', '/memory show')}                  Read MEMORY.md`,
+    `  ${c('yellow', '/memory daily')}                 Read today's daily memory log`,
+    `  ${c('yellow', '/heartbeat')}                    Show HEARTBEAT.md checklist`,
     `  ${c('yellow', '/network')}                      Show network diagnostics help`,
     `  ${c('yellow', '/network dns')}                  Show configured DNS servers`,
     `  ${c('yellow', '/network check <host>')}         Resolve a host`,
@@ -532,15 +542,50 @@ export async function cmdWorkspace(_ctx: CLIContext, args: string[]): Promise<vo
     process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
     process.stdout.write(`  ${c('dim', 'Root')}  ${workspace.rootDir}\n\n`);
     process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /workspace info\n'));
+    process.stdout.write(c('dim', '    /workspace init\n'));
+    process.stdout.write(c('dim', '    /workspace reload\n'));
     process.stdout.write(c('dim', '    /workspace list\n'));
+    process.stdout.write(c('dim', '    /workspace tree\n'));
     process.stdout.write(c('dim', '    /workspace read <file>\n'));
     process.stdout.write(c('dim', '    /workspace write <file> <text>\n'));
     process.stdout.write(c('dim', '    /workspace append <file> <text>\n'));
-    process.stdout.write(c('dim', '    /workspace mkdir <folder>\n\n'));
+    process.stdout.write(c('dim', '    /workspace mkdir <folder>\n'));
+    process.stdout.write(c('dim', '    /workspace trash <file>\n'));
+    process.stdout.write(c('dim', '    /workspace backup\n\n'));
     return;
   }
 
   try {
+    if (action === 'info') {
+      const info = await workspace.info();
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'Workspace Info')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(`  ${c('dim', 'Root       ')} ${info.rootDir}\n`);
+      process.stdout.write(`  ${c('dim', 'Files      ')} ${info.fileCount}\n`);
+      process.stdout.write(`  ${c('dim', 'Directories')} ${info.directoryCount}\n`);
+      process.stdout.write(`  ${c('dim', 'Size       ')} ${info.totalBytes} bytes\n\n`);
+      process.stdout.write(`  ${c('bold', 'Core Files')}\n`);
+      for (const file of info.coreFiles) {
+        process.stdout.write(`  ${file.exists ? c('green', 'ok     ') : c('red', 'missing')} ${file.path}\n`);
+      }
+      process.stdout.write('\n');
+      return;
+    }
+
+    if (action === 'init') {
+      await workspace.ensureWorkspace();
+      process.stdout.write(c('green', `\n  Workspace initialized: ${workspace.rootDir}\n\n`));
+      return;
+    }
+
+    if (action === 'reload') {
+      await workspace.reloadContext();
+      process.stdout.write(c('green', '\n  Workspace context will be read from current Markdown files on the next turn.\n\n'));
+      return;
+    }
+
     if (action === 'list') {
       const entries = await workspace.list(target ?? '.');
       process.stdout.write('\n');
@@ -555,6 +600,16 @@ export async function cmdWorkspace(_ctx: CLIContext, args: string[]): Promise<vo
         process.stdout.write(`  ${marker}  ${entry.path}\n`);
       }
       process.stdout.write('\n');
+      return;
+    }
+
+    if (action === 'tree') {
+      const tree = await workspace.tree(target ?? '.');
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'Workspace Tree')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(tree.split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
       return;
     }
 
@@ -585,13 +640,137 @@ export async function cmdWorkspace(_ctx: CLIContext, args: string[]): Promise<vo
       process.stdout.write(c('green', `\n  Created workspace folder: ${target}\n\n`));
       return;
     }
+
+    if (action === 'trash' && target) {
+      const trashPath = await workspace.trash(target);
+      process.stdout.write(c('yellow', `\n  Moved to workspace trash: ${trashPath}\n\n`));
+      return;
+    }
+
+    if (action === 'backup') {
+      const backupPath = await workspace.backup();
+      process.stdout.write(c('green', `\n  Workspace backup created: ${backupPath}\n\n`));
+      return;
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stdout.write(c('red', `\n  Workspace error: ${msg}\n\n`));
     return;
   }
 
-  process.stdout.write(c('yellow', '\n  Usage: /workspace [list|read|write|append|mkdir] ...\n\n'));
+  process.stdout.write(c('yellow', '\n  Usage: /workspace [info|init|reload|list|tree|read|write|append|mkdir|trash|backup] ...\n\n'));
+}
+
+// ─── /memory ──────────────────────────────────────────────────────────────────
+
+function todayYmd(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function cmdMemory(_ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, ...rest] = args;
+  const workspace = new WorkspaceManager();
+  await workspace.ensureWorkspace();
+
+  if (!action) {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Workspace Memory')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', '  Commands:\n'));
+    process.stdout.write(c('dim', '    /memory show\n'));
+    process.stdout.write(c('dim', '    /memory append <text>\n'));
+    process.stdout.write(c('dim', '    /memory daily\n'));
+    process.stdout.write(c('dim', '    /memory daily <YYYY-MM-DD>\n'));
+    process.stdout.write(c('dim', '    /memory summarize\n\n'));
+    return;
+  }
+
+  try {
+    if (action === 'show') {
+      const content = await workspace.read('MEMORY.md');
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', 'MEMORY.md')}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(content.split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
+      return;
+    }
+
+    if (action === 'append') {
+      const text = rest.join(' ').trim();
+      if (!text) {
+        process.stdout.write(c('yellow', '\n  Usage: /memory append <text>\n\n'));
+        return;
+      }
+      await workspace.appendLongTermMemory(text);
+      await workspace.appendDailyMemory({
+        type: 'project_decision',
+        summary: text,
+        source: 'cli',
+        details: 'Appended to MEMORY.md from /memory append.',
+      });
+      process.stdout.write(c('green', '\n  Appended to workspace/MEMORY.md.\n\n'));
+      return;
+    }
+
+    if (action === 'daily') {
+      const date = rest[0] ?? todayYmd();
+      const content = await workspace.readDailyMemory(date);
+      process.stdout.write('\n');
+      process.stdout.write(`  ${c('bold', `Daily Memory - ${date}`)}\n`);
+      process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+      process.stdout.write(content.split('\n').map((line) => `  ${line}`).join('\n'));
+      process.stdout.write('\n\n');
+      return;
+    }
+
+    if (action === 'summarize') {
+      const date = todayYmd();
+      const content = await workspace.readDailyMemory(date);
+      if (content.startsWith('No daily memory log')) {
+        process.stdout.write(c('yellow', `\n  ${content}\n\n`));
+        return;
+      }
+      await workspace.updateLongTermMemory([
+        `Summary from daily log ${date}:`,
+        content.slice(0, 3000),
+      ].join('\n'));
+      process.stdout.write(c('green', `\n  Appended a summary from memory/${date}.md to MEMORY.md.\n\n`));
+      return;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stdout.write(c('red', `\n  Memory error: ${msg}\n\n`));
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /memory [show|append|daily|summarize] ...\n\n'));
+}
+
+// ─── /heartbeat ───────────────────────────────────────────────────────────────
+
+export async function cmdHeartbeat(_ctx: CLIContext, args: string[]): Promise<void> {
+  const [action] = args;
+  const workspace = new WorkspaceManager();
+  await workspace.ensureWorkspace();
+
+  if (!action || action === 'show') {
+    const content = await workspace.read('HEARTBEAT.md');
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'HEARTBEAT.md')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(content.split('\n').map((line) => `  ${line}`).join('\n'));
+    process.stdout.write('\n\n');
+    return;
+  }
+
+  if (action === 'run') {
+    process.stdout.write(c('yellow', '\n  Heartbeat execution is not automatic yet. Showing checklist instead.\n\n'));
+    await cmdHeartbeat(_ctx, ['show']);
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /heartbeat [show|run]\n\n'));
 }
 
 // ─── /network ─────────────────────────────────────────────────────────────────

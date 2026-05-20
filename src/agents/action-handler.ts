@@ -19,6 +19,7 @@ import type { SessionManager } from '../storage/session-manager';
 import type { McpManager } from '../mcp';
 import { validateMcpConfigFile } from '../mcp';
 import { loadSkillFromFile } from '../skills/loader';
+import { WorkspaceManager } from '../workspace';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -55,6 +56,15 @@ const DISABLE_SKILL  = /^(?:disable|deactivate|remove)\s+skill\s+(.+)$/i;
 const DELETE_SESSION = /^delete\s+session\s+([a-f0-9-]{4,36})$/i;
 const ADD_MCP        = /^(?:install|add|use)\s+mcp\s+(.+)$/i;
 const ADD_MCP_CONFIG = /^add\s+this\s+mcp\s+config\s*:\s*(\{[\s\S]+\})$/i;
+const WORKSPACE_LIST = /^(?:lihat|tampilkan|list|show)\s+(?:isi\s+)?workspace$/i;
+const WORKSPACE_BACKUP = /^(?:backup|cadangkan)\s+workspace(?:\s+sekarang)?$/i;
+const WORKSPACE_READ = /^(?:baca|read|lihat)\s+([A-Za-z0-9_.\-/\\]+\.md)$/i;
+const WORKSPACE_MKDIR = /^(?:buat|create|mkdir)\s+folder\s+([A-Za-z0-9_.\-/\\]+)$/i;
+const MEMORY_NOTE = /^(?:simpan\s+ini\s+ke\s+MEMORY\.md|catat\s+(?:keputusan\s+ini\s+)?sebagai\s+memory|ingat\s+bahwa)\s*:?\s+(.+)$/i;
+const USER_UPDATE = /^update\s+USER\.md\s+bahwa\s+(.+)$/i;
+const WORKSPACE_WRITE = /^(?:buat|create|tulis|write)\s+file\s+([A-Za-z0-9_.\-/\\]+)(?:\s+di\s+workspace)?\s+berisi\s+([\s\S]+)$/i;
+const WORKSPACE_WRITE_WITHOUT_CONTENT = /^(?:tulis|write)\s+file\s+([^\s]+)$/i;
+const REPORT_SAVE = /^(?:buat\s+laporan|buat\s+report)[\s\S]*?\s+simpan\s+di\s+([A-Za-z0-9_.\-/\\]+)$/i;
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -167,6 +177,102 @@ async function handleAddMcpConfig(rawJson: string, ctx: ActionContext): Promise<
   return `Added MCP server(s): ${names.map((name) => `\`${name}\``).join(', ')}. Use \`/mcp start <name>\` to start one.`;
 }
 
+function formatWorkspaceEntries(entries: Array<{ path: string; type: 'file' | 'directory' }>): string {
+  if (entries.length === 0) return '(empty)';
+  return entries.map((entry) => `${entry.type === 'directory' ? '[dir] ' : '[file]'} ${entry.path}`).join('\n');
+}
+
+async function handleWorkspaceAction(trimmed: string): Promise<ActionResult> {
+  const workspace = new WorkspaceManager();
+  await workspace.ensureWorkspace();
+
+  if (WORKSPACE_LIST.test(trimmed)) {
+    const entries = await workspace.list('.');
+    return { handled: true, response: formatWorkspaceEntries(entries) };
+  }
+
+  if (WORKSPACE_BACKUP.test(trimmed)) {
+    const backupPath = await workspace.backup();
+    await workspace.appendDailyMemory({
+      type: 'system_event',
+      summary: `Workspace backup created: ${backupPath}`,
+      source: 'chat',
+    });
+    return { handled: true, response: `Backup workspace dibuat: ${backupPath}` };
+  }
+
+  const readMatch = WORKSPACE_READ.exec(trimmed);
+  if (readMatch?.[1]) {
+    const path = readMatch[1].trim();
+    return { handled: true, response: await workspace.read(path) };
+  }
+
+  const mkdirMatch = WORKSPACE_MKDIR.exec(trimmed);
+  if (mkdirMatch?.[1]) {
+    const path = mkdirMatch[1].trim();
+    await workspace.mkdir(path);
+    return { handled: true, response: `Folder workspace dibuat: ${path}` };
+  }
+
+  const memoryMatch = MEMORY_NOTE.exec(trimmed);
+  if (memoryMatch?.[1]) {
+    const text = memoryMatch[1].trim();
+    await workspace.appendLongTermMemory(text);
+    await workspace.appendDailyMemory({
+      type: 'user_preference',
+      summary: text,
+      source: 'chat',
+      details: 'User explicitly asked to store this as workspace memory.',
+    });
+    return { handled: true, response: 'Sudah saya catat ke workspace/MEMORY.md.' };
+  }
+
+  const userMatch = USER_UPDATE.exec(trimmed);
+  if (userMatch?.[1]) {
+    const text = userMatch[1].trim();
+    await workspace.append('USER.md', `- ${text}`);
+    await workspace.appendDailyMemory({
+      type: 'user_preference',
+      summary: text,
+      source: 'chat',
+      details: 'User profile updated in USER.md.',
+    });
+    return { handled: true, response: 'USER.md sudah diperbarui.' };
+  }
+
+  const writeMatch = WORKSPACE_WRITE.exec(trimmed);
+  if (writeMatch?.[1] && writeMatch[2]) {
+    const path = writeMatch[1].trim();
+    const content = writeMatch[2].trim();
+    await workspace.write(path, content);
+    return { handled: true, response: `File workspace dibuat: ${path}` };
+  }
+
+  const writeWithoutContentMatch = WORKSPACE_WRITE_WITHOUT_CONTENT.exec(trimmed);
+  if (writeWithoutContentMatch?.[1]) {
+    const path = writeWithoutContentMatch[1].trim();
+    workspace.resolvePath(path);
+    return { handled: true, response: 'Sebutkan isi file yang ingin ditulis.' };
+  }
+
+  const reportMatch = REPORT_SAVE.exec(trimmed);
+  if (reportMatch?.[1]) {
+    const path = reportMatch[1].trim();
+    const content = [
+      '# Laporan Singkat',
+      '',
+      `Dibuat: ${new Date().toISOString()}`,
+      '',
+      trimmed,
+      '',
+    ].join('\n');
+    await workspace.write(path, content);
+    return { handled: true, response: `Laporan disimpan di workspace/${path}.` };
+  }
+
+  return { handled: false };
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 /**
@@ -178,6 +284,14 @@ export async function handleAction(
   ctx: ActionContext
 ): Promise<ActionResult> {
   const trimmed = input.trim();
+
+  try {
+    const workspaceAction = await handleWorkspaceAction(trimmed);
+    if (workspaceAction.handled) return workspaceAction;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { handled: true, response: `Workspace error: ${msg}` };
+  }
 
   // list skills
   if (LIST_SKILLS.test(trimmed)) {

@@ -1,0 +1,26 @@
+{
+  "name": "workspace-trash",
+  "displayName": "Workspace Trash",
+  "description": "Move a workspace file or folder to workspace/trash instead of deleting it permanently.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "Move NOTES.md to trash",
+    "Trash artifacts/tmp.txt"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace-relative file or folder path to move to trash."
+      },
+      "file": {
+        "type": "string",
+        "description": "Alias for path."
+      }
+    },
+    "required": ["path"]
+  }
+}

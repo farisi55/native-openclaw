@@ -15,6 +15,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
+import { WorkspaceManager } from '../workspace';
 
 const logger = createLogger('tool:system-execute');
 const execAsync = promisify(exec);
@@ -194,6 +195,19 @@ export function normalizeShell(shell?: string): string {
   return shell;
 }
 
+async function resolveExecutionCwd(explicitCwd?: string): Promise<string> {
+  if (explicitCwd?.trim()) return explicitCwd;
+
+  const mode = (process.env['SYSTEM_EXECUTE_DEFAULT_CWD'] ?? 'workspace').trim().toLowerCase();
+  if (mode === 'workspace') {
+    const workspace = new WorkspaceManager();
+    await workspace.ensureWorkspace();
+    return workspace.rootDir;
+  }
+
+  return process.cwd();
+}
+
 // ─── Execution ────────────────────────────────────────────────────────────────
 
 export async function runSystemExecute(
@@ -302,7 +316,7 @@ export async function runSystemExecute(
 
   const shell = normalizeShell(opts.shell);
   const timeout = opts.timeout ?? TIMEOUT_MS;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = await resolveExecutionCwd(opts.cwd);
 
   logger.info('system-execute', {
     command: cmd.slice(0, 80),

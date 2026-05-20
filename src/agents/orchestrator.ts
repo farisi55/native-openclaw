@@ -34,6 +34,7 @@ import { handleAction, type ActionContext } from './action-handler';
 import { extractMemory } from './memory-extractor';
 import type { SystemContextInput } from './system-context';
 import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
+import { WorkspaceManager } from '../workspace';
 import { createLogger } from '../utils/logger';
 import { getOptionalEnv } from '../config/env';
 
@@ -48,6 +49,10 @@ function sanitizeFlowReason(reason: string | undefined, fallback: string): strin
   }
 
   return cleaned.length > 140 ? `${cleaned.slice(0, 137)}...` : cleaned;
+}
+
+function shouldIncludeWorkflowContext(input: string): boolean {
+  return /\b(workflow|workflow\.md|jalankan workflow|laporan|report|autonomous|otomatis|otonom)\b/i.test(input);
 }
 
 export interface OrchestratorOptions {
@@ -224,6 +229,20 @@ export class Orchestrator {
       }
     }
 
+    const workspace = new WorkspaceManager();
+    await workspace.ensureWorkspace();
+
+    for (const update of memoryUpdates) {
+      const summary = `${update.key}: ${update.value}`;
+      await workspace.appendLongTermMemory(summary);
+      await workspace.appendDailyMemory({
+        type: 'user_preference',
+        summary,
+        source: 'chat',
+        details: `Stored as ${update.scope} memory for session ${session.id}.`,
+      });
+    }
+
     // ── 4. Natural-language capability install ────────────────────────────────
     /**
      * Turn processing priority order:
@@ -239,6 +258,14 @@ export class Orchestrator {
         toolRegistry: this.toolRegistry,
         provider: input.provider,
         model: input.model,
+        workspace,
+      });
+
+      await workspace.appendDailyMemory({
+        type: 'workflow_event',
+        summary: `Workflow executed: ${workflowResult.title}`,
+        source: 'workflow',
+        details: workflowResult.content.slice(0, 1000),
       });
 
       session = await this.persistExchange(
@@ -359,6 +386,9 @@ export class Orchestrator {
     // ── 7. Build system prompt ────────────────────────────────────────────────
     const activeSkills = this.skills.activeSkills();
     const memoryBlock = await this.memory.buildMemoryBlock(session.id);
+    const workspaceContext = await workspace.buildContext({
+      includeWorkflow: shouldIncludeWorkflowContext(input.userInput),
+    });
     const toolsBlock = this.toolRegistry.buildToolsBlock();
 
     const systemContext: SystemContextInput = {
@@ -373,6 +403,7 @@ export class Orchestrator {
       skills: activeSkills,
       systemContext,
       memoryBlock,
+      workspaceContext,
       toolsBlock,
     });
 
