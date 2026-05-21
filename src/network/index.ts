@@ -5,6 +5,7 @@ export {
   getProxyForUrl,
   maskProxyUrl,
   networkFetch,
+  setupGlobalProxy,
   shouldBypassProxy,
 } from './proxy';
 export type { ProxyConfig } from './proxy';
@@ -16,4 +17,3 @@ export {
   resolveHost,
 } from './dns';
 export type { DnsResolveResult, NetworkCheckResult } from './dns';
-

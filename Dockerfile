@@ -1,59 +1,85 @@
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy}
+
 WORKDIR /app
 
-# Install deps first (layer-cached unless package.json changes)
 COPY package.json package-lock.json* ./
-RUN npm ci --ignore-scripts
 
-# Copy source and compile
+# Configure npm proxy only when env is provided.
+RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
+ && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
+ && npm ci --ignore-scripts
+
 COPY tsconfig.json ./
 COPY src/ ./src/
-# tools/ contains installed tool manifests and plugins required at runtime.
-# Do NOT mount this as a volume — it should come from the image.
 COPY tools/ ./tools/
 COPY skills/ ./skills/
 COPY workspace/ ./workspace/
+
 RUN npm run build
 
-# Prune dev deps
 RUN npm prune --production
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
-# Non-root user for security
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy}
+
 RUN addgroup -S openclaw && adduser -S openclaw -G openclaw
 
 WORKDIR /app
 
-# Copy compiled output and production deps from builder
-COPY --from=builder --chown=openclaw:openclaw /app/dist      ./dist
+COPY --from=builder --chown=openclaw:openclaw /app/dist ./dist
 COPY --from=builder --chown=openclaw:openclaw /app/node_modules ./node_modules
 COPY --from=builder --chown=openclaw:openclaw /app/package.json ./
-COPY --from=builder --chown=openclaw:openclaw /app/tools      ./tools
-COPY --from=builder --chown=openclaw:openclaw /app/skills     ./skills
-COPY --from=builder --chown=openclaw:openclaw /app/workspace  ./workspace
+COPY --from=builder --chown=openclaw:openclaw /app/tools ./tools
+COPY --from=builder --chown=openclaw:openclaw /app/skills ./skills
+COPY --from=builder --chown=openclaw:openclaw /app/workspace ./workspace
 
-# /data  → session & settings storage (mount as volume)
-# /skills → .md skill files (mount as volume)
-RUN mkdir -p /data /skills /workspace && chown -R openclaw:openclaw /data /skills /workspace
+RUN mkdir -p /data /skills /workspace \
+ && chown -R openclaw:openclaw /data /skills /workspace
 
-# Environment defaults (override in docker-compose or -e flags)
 ENV NODE_ENV=production \
     APP_ENV=production \
     LOG_LEVEL=info \
     APP_DATA_DIR=/data \
     SKILLS_DIR=/skills \
     WORKSPACE_DIR=/workspace \
+    WORKFLOW_FILE=/workspace/WORKFLOW.md \
     TOOLS_DIR=/app/tools \
+    MCP_CONFIG_PATH=/data/mcp.json \
     STORAGE_BACKEND=file
 
 USER openclaw
 
-# Mark persistent directories
 VOLUME ["/data", "/skills", "/workspace"]
 
-# Interactive TTY required for the readline REPL
+EXPOSE 18789
+
 ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]

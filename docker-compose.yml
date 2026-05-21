@@ -1,71 +1,65 @@
 version: "3.9"
 
-# ─── native-openclaw docker-compose ───────────────────────────────────────────
-#
-# Usage:
-#   cp .env.example .env        # fill in your API keys
-#   docker compose up --build   # build and launch
-#   docker compose run openclaw # one-shot interactive session
-#
-# Volumes:
-#   ./data    → /data    (session JSON, settings)
-#   ./skills  → /skills  (.md skill files)
-# ──────────────────────────────────────────────────────────────────────────────
-
 services:
-
-  # ── Main CLI ─────────────────────────────────────────────────────────────────
   openclaw:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    image: native-openclaw:latest
-    container_name: openclaw
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
 
-    # Interactive TTY — required for the readline REPL
+    image: native-openclaw:latest
+    container_name: native-openclaw
+
     stdin_open: true
     tty: true
 
-    # Persistent storage and user-supplied skills
+    env_file:
+      - .env
+
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      APP_DATA_DIR: /data
+      SKILLS_DIR: /skills
+      WORKSPACE_DIR: /workspace
+      WORKFLOW_FILE: /workspace/WORKFLOW.md
+      TOOLS_DIR: /app/tools
+      MCP_CONFIG_PATH: /data/mcp.json
+      STORAGE_BACKEND: file
+
+      NODE_OPTIONS: "--enable-source-maps"
+
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+      http_proxy: ${HTTP_PROXY:-}
+      https_proxy: ${HTTPS_PROXY:-}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+
+      npm_config_proxy: ${HTTP_PROXY:-}
+      npm_config_https_proxy: ${HTTPS_PROXY:-}
+      npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
     volumes:
       - ./data:/data
       - ./skills:/skills
       - ./workspace:/workspace
 
-    # Load all env vars from .env file
-    env_file:
-      - .env
+    ports:
+      - "${API_PORT:-18789}:18789"
 
-    # Override specific env vars here (takes precedence over .env)
-    environment:
-      APP_ENV: production
-      LOG_LEVEL: info
-      APP_DATA_DIR: /data
-      SKILLS_DIR: /skills
-      WORKSPACE_DIR: /workspace
-      TOOLS_DIR: /app/tools
-      STORAGE_BACKEND: file
-      NODE_OPTIONS: "--enable-source-maps"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-    # Restart on non-zero exit (e.g. config errors), but not on Ctrl-C (exit 0)
-    restart: on-failure:3
-
-  # ── Ollama sidecar (optional local model server) ───────────────────────────
-  #
-  # Uncomment to run Ollama alongside openclaw.
-  # Pull a model first:
-  #   docker compose exec ollama ollama pull llama3.3
-  #
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: openclaw-ollama
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   restart: unless-stopped
-
-# ── Named volumes ─────────────────────────────────────────────────────────────
-# volumes:
-#   ollama-data:
+    restart: unless-stopped

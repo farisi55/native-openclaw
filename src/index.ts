@@ -17,12 +17,13 @@ import { startCLI } from './cli';
 import { WorkspaceManager } from './workspace';
 import { startApiServerIfEnabled } from './api';
 import { startTelegramIntegrationIfEnabled } from './integrations';
-import { configureDnsDefaults } from './network';
+import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   setRootLogLevel(config.logLevel);
+  setupGlobalProxy();
   configureDnsDefaults();
 
   const logger = createLogger('bootstrap');

@@ -3,30 +3,79 @@
  * Optional proxy-aware fetch support for Node 20 native fetch.
  */
 
-import { createRequire } from 'module';
-
-const requireFromHere = createRequire(__filename);
+import { Agent, ProxyAgent, setGlobalDispatcher } from 'undici';
+import { createLogger } from '../utils/logger';
 
 export interface ProxyConfig {
   httpProxy: string | null;
   httpsProxy: string | null;
+  proxyUrl: string | null;
   noProxy: string[];
+  noProxyRaw: string;
+  enabled: boolean;
 }
 
-type Dispatcher = unknown;
+type Dispatcher = Agent | ProxyAgent;
 
-let proxyAgentCtor: ((url: string) => Dispatcher) | null | undefined;
 const dispatcherCache = new Map<string, Dispatcher>();
+let directDispatcher: Agent | null = null;
+let globalProxyUrl: string | null = null;
+
+function proxyLogger() {
+  return createLogger('network:proxy');
+}
 
 export function getProxyConfig(): ProxyConfig {
+  const httpProxy = process.env['HTTP_PROXY'] || process.env['http_proxy'] || null;
+  const httpsProxy = process.env['HTTPS_PROXY'] || process.env['https_proxy'] || null;
+  const proxyUrl = httpsProxy || httpProxy;
+  const noProxyRaw = process.env['NO_PROXY'] || process.env['no_proxy'] || '';
+
   return {
-    httpProxy: process.env['HTTP_PROXY'] || process.env['http_proxy'] || null,
-    httpsProxy: process.env['HTTPS_PROXY'] || process.env['https_proxy'] || null,
-    noProxy: (process.env['NO_PROXY'] || process.env['no_proxy'] || '')
+    httpProxy,
+    httpsProxy,
+    proxyUrl,
+    noProxy: noProxyRaw
       .split(',')
       .map((entry) => entry.trim())
       .filter(Boolean),
+    noProxyRaw,
+    enabled: Boolean(proxyUrl),
   };
+}
+
+export function setupGlobalProxy(): void {
+  const logger = proxyLogger();
+  const cfg = getProxyConfig();
+
+  if (!cfg.proxyUrl) {
+    logger.info('No HTTP/HTTPS proxy configured');
+    return;
+  }
+
+  if (globalProxyUrl === cfg.proxyUrl) {
+    logger.debug('Global HTTP proxy already enabled', {
+      proxy: maskProxyUrl(cfg.proxyUrl),
+      noProxy: cfg.noProxyRaw,
+    });
+    return;
+  }
+
+  try {
+    const agent = new ProxyAgent(cfg.proxyUrl);
+    setGlobalDispatcher(agent);
+    globalProxyUrl = cfg.proxyUrl;
+    dispatcherCache.set(cfg.proxyUrl, agent);
+    logger.info('Global HTTP proxy enabled', {
+      proxy: maskProxyUrl(cfg.proxyUrl),
+      noProxy: cfg.noProxyRaw || '(not set)',
+    });
+  } catch (err) {
+    logger.warn('Global HTTP proxy setup failed', {
+      proxy: maskProxyUrl(cfg.proxyUrl),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function maskProxyUrl(url: string | null): string | null {
@@ -70,13 +119,10 @@ export function getDispatcherForUrl(url: string | URL): Dispatcher | null {
   const proxyUrl = getProxyForUrl(url);
   if (!proxyUrl) return null;
 
-  const ctor = loadProxyAgent();
-  if (!ctor) return null;
-
   const cached = dispatcherCache.get(proxyUrl);
   if (cached) return cached;
 
-  const dispatcher = ctor(proxyUrl);
+  const dispatcher = new ProxyAgent(proxyUrl);
   dispatcherCache.set(proxyUrl, dispatcher);
   return dispatcher;
 }
@@ -88,6 +134,14 @@ export function createFetchWithProxy(baseFetch: typeof fetch = fetch): typeof fe
   ): Promise<Response> => {
     const url = requestUrl(input);
     if (!url) return baseFetch(input, init);
+
+    if (globalProxyUrl && shouldBypassProxy(url)) {
+      directDispatcher ??= new Agent();
+      return (baseFetch as unknown as (i: unknown, init?: Record<string, unknown>) => Promise<Response>)(input, {
+        ...(init ?? {}),
+        dispatcher: directDispatcher,
+      });
+    }
 
     const dispatcher = getDispatcherForUrl(url);
     if (!dispatcher) return baseFetch(input, init);
@@ -115,19 +169,4 @@ function defaultPort(protocol: string): string {
   if (protocol === 'http:') return '80';
   if (protocol === 'https:') return '443';
   return '';
-}
-
-function loadProxyAgent(): ((url: string) => Dispatcher) | null {
-  if (proxyAgentCtor !== undefined) return proxyAgentCtor;
-
-  try {
-    const undici = requireFromHere('undici') as { ProxyAgent?: new (url: string) => Dispatcher };
-    proxyAgentCtor = undici.ProxyAgent
-      ? (url: string) => new undici.ProxyAgent!(url)
-      : null;
-  } catch {
-    proxyAgentCtor = null;
-  }
-
-  return proxyAgentCtor;
 }
