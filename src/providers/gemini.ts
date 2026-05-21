@@ -203,10 +203,15 @@ export class GeminiProvider extends BaseProvider {
   async listModels(): Promise<ModelInfo[]> {
     const url = `${this.baseUrl}/models?key=${this.apiKey}`;
 
-    const data = await this.fetchJson<GeminiModelsResponse>(url, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-    });
+    let data: GeminiModelsResponse;
+    try {
+      data = await this.fetchJson<GeminiModelsResponse>(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch {
+      return [];
+    }
 
     return (data.models ?? [])
       .filter((m) =>

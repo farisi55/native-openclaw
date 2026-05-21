@@ -54,19 +54,23 @@ export class GroqProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const raw = await this.openAiCompatListModels(this.baseUrl, this.apiKey);
-    return raw.map((m: WireModel): ModelInfo => {
-      const meta = KNOWN_MODELS[m.id] ?? DEFAULT_META;
-      const info: ModelInfo = {
-        id: m.id,
-        name: m.id,
-        contextWindow: meta.contextWindow,
-        supportsTools: meta.supportsTools,
-        supportsVision: meta.supportsVision,
-        raw: m as Record<string, unknown>,
-      };
-      if (meta.maxOutputTokens !== undefined) info.maxOutputTokens = meta.maxOutputTokens;
-      return info;
-    });
+    try {
+      const raw = await this.openAiCompatListModels(this.baseUrl, this.apiKey);
+      return raw.map((m: WireModel): ModelInfo => {
+        const meta = KNOWN_MODELS[m.id] ?? DEFAULT_META;
+        const info: ModelInfo = {
+          id: m.id,
+          name: m.id,
+          contextWindow: meta.contextWindow,
+          supportsTools: meta.supportsTools,
+          supportsVision: meta.supportsVision,
+          raw: m as Record<string, unknown>,
+        };
+        if (meta.maxOutputTokens !== undefined) info.maxOutputTokens = meta.maxOutputTokens;
+        return info;
+      });
+    } catch {
+      return [];
+    }
   }
 }

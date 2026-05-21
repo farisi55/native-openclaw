@@ -73,10 +73,15 @@ export class MistralProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const data = await this.fetchJson<MistralModelsResponse>(`${this.baseUrl}/models`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${this.apiKey}`, ...this.acceptHeader },
-    });
+    let data: MistralModelsResponse;
+    try {
+      data = await this.fetchJson<MistralModelsResponse>(`${this.baseUrl}/models`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.apiKey}`, ...this.acceptHeader },
+      });
+    } catch {
+      return [];
+    }
 
     return (data.data ?? [])
       .filter((m) => !m.deprecation)

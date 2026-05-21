@@ -124,9 +124,14 @@ export class OllamaProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const data = await this.fetchJson<OllamaTagsResponse>(`${this.baseUrl}/api/tags`, {
-      method: 'GET',
-    });
+    let data: OllamaTagsResponse;
+    try {
+      data = await this.fetchJson<OllamaTagsResponse>(`${this.baseUrl}/api/tags`, {
+        method: 'GET',
+      });
+    } catch {
+      return [];
+    }
     return (data.models ?? []).map((m): ModelInfo => ({
       id: m.name,
       name: m.name,

@@ -56,10 +56,15 @@ export class OpenRouterProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const data = await this.fetchJson<OpenRouterModelsResponse>(`${this.baseUrl}/models`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${this.apiKey}`, ...this.extraHeaders },
-    });
+    let data: OpenRouterModelsResponse;
+    try {
+      data = await this.fetchJson<OpenRouterModelsResponse>(`${this.baseUrl}/models`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.apiKey}`, ...this.extraHeaders },
+      });
+    } catch {
+      return [];
+    }
 
     return (data.data ?? []).map((m): ModelInfo => {
       const modality = m.architecture?.modality ?? '';

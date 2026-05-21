@@ -506,10 +506,14 @@ export class WorkspaceManager {
     const trimmed = path.trim();
     if (!trimmed || trimmed === '.') return this.rootDir;
     if (trimmed.includes('\0')) throw new Error('Workspace path contains an invalid character.');
-    if (isAbsolute(trimmed) || /^[a-zA-Z]:/.test(trimmed)) {
+    const normalized = trimmed.replace(/\\/g, '/');
+    if (!this.allowOutsidePaths && (normalized === '..' || normalized.startsWith('../'))) {
+      throw new Error('Workspace path traversal is not allowed.');
+    }
+    if (isAbsolute(normalized) || /^[a-zA-Z]:/.test(normalized)) {
       if (!this.allowOutsidePaths) throw new Error('Workspace paths must be relative.');
     }
-    const target = resolve(this.rootDir, trimmed);
+    const target = resolve(this.rootDir, normalized);
     const rel = relative(this.rootDir, target);
     if (!this.allowOutsidePaths && (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))) {
       throw new Error('Workspace path traversal is not allowed.');
