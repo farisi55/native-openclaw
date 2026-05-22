@@ -8,7 +8,7 @@
     "dev": "npx ts-node src/index.ts",
     "start": "node dist/index.js",
     "pretest": "npm run clean && npm run build",
-    "test": "node test/session-resume.test.js && node test/zai-provider.test.js && node test/workspace.test.js && node test/workspace-qa.test.js && node test/api-server.test.js && node test/telegram.test.js && node test/network.test.js && node test/mcp.test.js && node test/gold-workflow.test.js && node test/slash-autocomplete.test.js && node test/reasoning-sanitizer.test.js && node test/tool-alias.test.js && node test/system-execute.test.js && node test/command-planner.test.js && node test/reasoning-engine.test.js && node test/brevo-email.test.js && node test/semantic-memory.test.js && node test/context-compressor.test.js && node test/browsing.test.js && node test/api-client.test.js && node test/system-time.test.js && node test/providers.test.js",
+    "test": "node test/session-resume.test.js && node test/zai-provider.test.js && node test/validator.test.js && node test/workspace.test.js && node test/workspace-qa.test.js && node test/api-server.test.js && node test/telegram.test.js && node test/network.test.js && node test/mcp.test.js && node test/gold-workflow.test.js && node test/slash-autocomplete.test.js && node test/reasoning-sanitizer.test.js && node test/tool-alias.test.js && node test/react-loop.test.js && node test/system-execute.test.js && node test/command-planner.test.js && node test/reasoning-engine.test.js && node test/brevo-email.test.js && node test/html-sanitizer.test.js && node test/orchestrator.test.js && node test/semantic-memory.test.js && node test/context-compressor.test.js && node test/browsing.test.js && node test/api-client.test.js && node test/system-time.test.js && node test/providers.test.js && node --import tsx --test test/orchestrator.test.ts test/tool-loop.test.ts test/router.test.ts",
     "test:workspace": "npm run build && node test/workspace.test.js && node test/workspace-qa.test.js",
     "test:qa": "npm run test:workspace",
     "test:build": "npm run build && npm run test:workspace",
@@ -43,6 +43,7 @@
     "eslint": "^8.57.0",
     "rimraf": "^5.0.5",
     "ts-node": "^10.9.2",
+    "tsx": "^4.22.3",
     "typescript": "^5.4.5"
   },
   "bin": {

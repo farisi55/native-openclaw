@@ -214,6 +214,10 @@ function isAllowedCommand(cmd: string): boolean {
   });
 }
 
+export function isCommandAllowed(command: string): boolean {
+  return isAllowedCommand(command);
+}
+
 function buildSafeEnv(cwd: string): NodeJS.ProcessEnv {
   const safeEnv: NodeJS.ProcessEnv = {};
   const envEntries = Object.entries(process.env);
@@ -521,7 +525,7 @@ export async function runSystemExecute(
     };
   }
 
-  if (!isAllowedCommand(cmd)) {
+  if (!isCommandAllowed(cmd)) {
     return {
       ok: false,
       content: isDangerousCommand(cmd)

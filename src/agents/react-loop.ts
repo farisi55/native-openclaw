@@ -23,7 +23,7 @@ import type { Message }   from '../types/message';
 import { createMessage, extractText } from '../types/message';
 import type { ToolRegistry }   from '../tools/tool-registry';
 import { browse, formatBrowsingResults } from '../tools/browsing';
-import { runSystemExecute } from '../tools/system-execute';
+import { isCommandAllowed, isDangerousCommand, runSystemExecute } from '../tools/system-execute';
 import { createLogger } from '../utils/logger';
 import { sanitizeFinalAnswer } from './tool-loop';
 
@@ -208,8 +208,26 @@ export class ReActLoop {
       }
 
       if (decision.action === 'execute' && decision.command) {
-        const result   = await runSystemExecute({ command: decision.command });
-        observation    = result.content;
+        if (isDangerousCommand(decision.command)) {
+          observation = 'Command rejected: matched dangerous pattern.';
+          observations.push(observation);
+          logger.warn('react: execute rejected dangerous command', {
+            command: decision.command.slice(0, 60),
+          });
+          continue;
+        }
+
+        if (!isCommandAllowed(decision.command)) {
+          observation = 'Command rejected: not in allowed command list.';
+          observations.push(observation);
+          logger.warn('react: execute rejected command outside allowlist', {
+            command: decision.command.slice(0, 60),
+          });
+          continue;
+        }
+
+        const result = await runSystemExecute({ command: decision.command });
+        observation = result.content;
         observations.push(observation);
         logger.info('react: execute complete', { command: decision.command.slice(0, 60) });
         break;

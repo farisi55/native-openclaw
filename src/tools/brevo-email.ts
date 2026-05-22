@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { networkFetch } from '../network';
+import { sanitizeHtml } from '../utils/html-sanitizer';
 
 export interface BrevoAttachmentInput {
   path: string;
@@ -105,7 +106,9 @@ async function buildAttachments(attachments: BrevoAttachmentInput[] | undefined)
 export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> {
   const parsed = readInput(input);
   const subject = parsed.subject?.trim();
-  const htmlContent = parsed.htmlContent?.trim();
+  const htmlContent = parsed.htmlContent
+    ? sanitizeHtml(parsed.htmlContent.trim())
+    : undefined;
   const apiKey = cleanString(process.env['BREVO_API_KEY']);
   const senderEmail = resolveEmail(parsed.senderEmail, process.env['BREVO_SENDER_EMAIL']);
   const recipientEmail = resolveEmail(parsed.recipientEmail, process.env['BREVO_RECIPIENT_EMAIL']);

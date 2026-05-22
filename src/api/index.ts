@@ -1,5 +1,7 @@
 export {
+  clearRateLimitMap,
   loadApiConfig,
+  requestIp,
   startApiServer,
   startApiServerIfEnabled,
 } from './server';

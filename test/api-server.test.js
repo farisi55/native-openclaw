@@ -7,7 +7,7 @@ const { join } = require('node:path');
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
 
-const { startApiServer, startApiServerIfEnabled } = require('../dist/api');
+const { clearRateLimitMap, startApiServer, startApiServerIfEnabled } = require('../dist/api');
 const { SessionManager } = require('../dist/storage/session-manager');
 const { SettingsManager } = require('../dist/storage/settings-manager');
 const { createMessage } = require('../dist/types/message');
@@ -84,6 +84,27 @@ async function postJson(baseUrl, body, token) {
     status: response.status,
     body: await response.json(),
   };
+}
+
+function withEnv(overrides, fn) {
+  const snapshot = {};
+  for (const key of Object.keys(overrides)) {
+    snapshot[key] = process.env[key];
+    const value = overrides[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  clearRateLimitMap();
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const key of Object.keys(overrides)) {
+        if (snapshot[key] === undefined) delete process.env[key];
+        else process.env[key] = snapshot[key];
+      }
+      clearRateLimitMap();
+    });
 }
 
 test('API_ENABLED=false does not start server', async () => {
@@ -164,6 +185,49 @@ test('API_AUTH_TOKEN is enforced when configured', async () => {
     } finally {
       await api.close();
     }
+  });
+});
+
+test('rate limit is active by default (no env override)', async () => {
+  await withEnv({ RATE_LIMIT_ENABLED: undefined, RATE_LIMIT_MAX: '2' }, async () => {
+    await withDeps(async (deps) => {
+      const api = await startApiServer(deps, {
+        enabled: true,
+        host: '127.0.0.1',
+        port: 0,
+      });
+
+      try {
+        const baseUrl = `http://${api.host}:${api.port}`;
+        assert.equal((await postJson(baseUrl, { message: 'one' })).status, 200);
+        assert.equal((await postJson(baseUrl, { message: 'two' })).status, 200);
+        assert.equal((await postJson(baseUrl, { message: 'three' })).status, 429);
+      } finally {
+        await api.close();
+      }
+    });
+  });
+});
+
+test('rate limit can be disabled via RATE_LIMIT_ENABLED=false', async () => {
+  await withEnv({ RATE_LIMIT_ENABLED: 'false', RATE_LIMIT_MAX: '2' }, async () => {
+    await withDeps(async (deps) => {
+      const api = await startApiServer(deps, {
+        enabled: true,
+        host: '127.0.0.1',
+        port: 0,
+      });
+
+      try {
+        const baseUrl = `http://${api.host}:${api.port}`;
+        for (const message of ['one', 'two', 'three']) {
+          const response = await postJson(baseUrl, { message });
+          assert.notEqual(response.status, 429);
+        }
+      } finally {
+        await api.close();
+      }
+    });
   });
 });
 
@@ -291,4 +355,47 @@ test('API flow reason is sanitized before response', async () => {
       await api.close();
     }
   });
+});
+
+function loadServerModuleWithTrustedProxyEnv(value) {
+  const modulePath = require.resolve('../dist/api/server');
+  const previous = process.env.TRUSTED_PROXY_IPS;
+  if (value === undefined) delete process.env.TRUSTED_PROXY_IPS;
+  else process.env.TRUSTED_PROXY_IPS = value;
+  delete require.cache[modulePath];
+  const mod = require('../dist/api/server');
+  if (previous === undefined) delete process.env.TRUSTED_PROXY_IPS;
+  else process.env.TRUSTED_PROXY_IPS = previous;
+  return mod;
+}
+
+function mockReq(remoteAddress, forwardedFor) {
+  return {
+    socket: { remoteAddress },
+    headers: forwardedFor === undefined ? {} : { 'x-forwarded-for': forwardedFor },
+  };
+}
+
+test('requestIp ignores X-Forwarded-For when no trusted proxy configured', () => {
+  const { requestIp } = loadServerModuleWithTrustedProxyEnv(undefined);
+  assert.equal(
+    requestIp(mockReq('203.0.113.10', '127.0.0.1')),
+    '203.0.113.10'
+  );
+});
+
+test('requestIp uses X-Forwarded-For last entry when remoteAddress is trusted proxy', () => {
+  const { requestIp } = loadServerModuleWithTrustedProxyEnv('10.0.0.1');
+  assert.equal(
+    requestIp(mockReq('::ffff:10.0.0.1', '198.51.100.7, 203.0.113.9')),
+    '203.0.113.9'
+  );
+});
+
+test('requestIp returns unknown when remoteAddress is undefined and no trusted proxy', () => {
+  const { requestIp } = loadServerModuleWithTrustedProxyEnv(undefined);
+  assert.equal(
+    requestIp(mockReq(undefined, '127.0.0.1')),
+    'unknown'
+  );
 });

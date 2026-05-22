@@ -158,6 +158,7 @@ async function bootstrap(): Promise<void> {
     toolRegistry,
     router,
     contextCompressor,
+    workspace,
     {
       baseSystemPrompt: config.agent.systemPrompt,
       maxTurns: config.agent.maxTurns,

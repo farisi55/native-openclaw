@@ -10,6 +10,7 @@ const CHAT_PATH = '/native-openclaw/v1/chat';
 const MAX_BODY_BYTES = 1_000_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_CLEANUP_MS = 5 * 60_000;
+const TRUSTED_PROXY_IPS = parseTrustedProxyIps(process.env['TRUSTED_PROXY_IPS'] ?? '');
 
 interface RateLimitBucket {
   count: number;
@@ -97,25 +98,50 @@ function isAuthorized(req: IncomingMessage, cfg: ApiConfig): boolean {
 }
 
 function rateLimitMax(): number {
-  return Math.max(1, getEnvInt('RATE_LIMIT_MAX', 30));
+  return Math.max(1, getEnvInt('RATE_LIMIT_MAX', 10));
 }
 
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
 function isRateLimitEnabled(cfg: ApiConfig): boolean {
-  if (getEnvBool('RATE_LIMIT_ENABLED', false)) return true;
-  return !isLoopbackHost(cfg.host);
+  void isLoopbackHost(cfg.host);
+  return getEnvBool('RATE_LIMIT_ENABLED', true);
 }
 
-function requestIp(req: IncomingMessage): string {
-  const remote = req.socket.remoteAddress;
-  if (remote) return remote;
+function parseTrustedProxyIps(raw: string): Set<string> {
+  return new Set(
+    raw
+      .split(',')
+      .map((ip) => normalizeIp(ip.trim()))
+      .filter(Boolean)
+  );
+}
+
+function normalizeIp(ip: string): string {
+  return ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip;
+}
+
+function forwardedForLast(req: IncomingMessage): string | null {
   const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() || 'unknown';
-  if (Array.isArray(forwarded)) return forwarded[0]?.split(',')[0]?.trim() || 'unknown';
-  return 'unknown';
+  const raw = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  if (typeof raw !== 'string') return null;
+  const parts = raw.split(',').map((item) => item.trim()).filter(Boolean);
+  const last = parts.at(-1);
+  return last ? normalizeIp(last) : null;
+}
+
+export function requestIp(req: IncomingMessage): string {
+  const remote = req.socket.remoteAddress;
+  if (!remote) return 'unknown';
+  const normalizedRemote = normalizeIp(remote);
+
+  if (TRUSTED_PROXY_IPS.size > 0 && TRUSTED_PROXY_IPS.has(normalizedRemote)) {
+    return forwardedForLast(req) ?? normalizedRemote;
+  }
+
+  return normalizedRemote;
 }
 
 function consumeRateLimit(req: IncomingMessage): boolean {
@@ -241,6 +267,7 @@ export async function startApiServer(
     port,
     close: () => new Promise((resolve, reject) => {
       if (cleanupTimer) clearInterval(cleanupTimer);
+      clearRateLimitMap();
       server.close((err) => err ? reject(err) : resolve());
     }),
   };

@@ -138,7 +138,7 @@ export class Orchestrator {
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
-  private readonly workspace: WorkspaceManager; // PERF [E1]
+  readonly workspace: WorkspaceManager; // PERF [E1]
   private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager'>>;
 
   private _activeSessionId: string | null = null;
@@ -151,6 +151,7 @@ export class Orchestrator {
     toolRegistry: ToolRegistry,
     router: ProviderRouter,
     contextCompressor: ContextCompressor,
+    workspace: WorkspaceManager,
     opts: OrchestratorOptions = {}
   ) {
     this.sessions = sessions;
@@ -160,7 +161,7 @@ export class Orchestrator {
     this.router = router;
     this.contextCompressor = contextCompressor;
     this.mcpManager = opts.mcpManager;
-    this.workspace = new WorkspaceManager();
+    this.workspace = workspace;
 
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
