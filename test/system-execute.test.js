@@ -29,18 +29,20 @@ test('non-dangerous command is not blocked by dangerous guard', async () => {
 });
 
 test('valid confirmation id allows command execution', async () => {
-  const command = 'echo restart-test';
+  // Command ini mengandung kata 'shutdown' yang match DANGEROUS_PATTERNS.
+  // Test ini memverifikasi flow konfirmasi, bukan memverifikasi command blocking.
+  const command = 'echo shutdown-sequence-test';
   const blocked = await runSystemExecute({ command });
   assert.equal(blocked.ok, false);
   const confirmId = extractConfirmId(blocked.content);
 
   const executed = await runSystemExecute({ command, confirmId });
   assert.doesNotMatch(executed.content, /berbahaya|kedaluwarsa|tidak valid/i);
-  assert.match(executed.content, /restart-test/);
+  assert.match(executed.content, /shutdown-sequence-test/);
 });
 
 test('expired confirmation id is rejected', async () => {
-  const command = 'echo restart-expired';
+  const command = 'echo shutdown-expired';
   const blocked = await runSystemExecute({ command });
   const confirmId = extractConfirmId(blocked.content);
   const originalNow = Date.now;
@@ -53,6 +55,11 @@ test('expired confirmation id is rejected', async () => {
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('regex tidak memblokir kata serupa yang bukan perintah berbahaya', () => {
+  assert.equal(isDangerousCommand('./scripts/restart-app.sh'), false);
+  assert.equal(isDangerousCommand('echo reboot-complete'), false);
 });
 
 test('detectShell uses COMSPEC on Windows (mocked)', () => {

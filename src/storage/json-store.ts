@@ -54,12 +54,36 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/**
+ * CONCURRENCY FIX [D1]: serializes async critical sections per store instance.
+ *
+ * 1. `this._queue = this._queue.then(fn)` is not enough by itself because a rejected
+ *    `fn()` would make `_queue` reject forever. The continuation below always
+ *    resolves, so later writes still run after a failed write.
+ *
+ * 2. Ten simultaneous writes create ten pending Promise continuations at peak. That
+ *    is acceptable for this local JSON store and prevents lost load-modify-save writes.
+ */
+class AsyncMutex {
+  private _queue: Promise<void> = Promise.resolve();
+
+  acquire<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this._queue.then(fn, fn);
+    this._queue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+}
+
 // ─── JsonStore ────────────────────────────────────────────────────────────────
 
 /** Single-file collection store. File format: `{ records: { [id]: T } }` */
 export class JsonStore<T extends StoreRecord> {
   private readonly filePath: string;
   private readonly pretty: boolean;
+  private readonly mutex = new AsyncMutex(); // CONCURRENCY FIX [D2]
 
   constructor(collectionName: string, { dataDir, pretty = true }: JsonStoreOptions) {
     this.filePath = join(dataDir, `${collectionName}.json`);
@@ -100,49 +124,57 @@ export class JsonStore<T extends StoreRecord> {
   }
 
   async set(record: T): Promise<Result<T>> {
-    try {
-      const records = await this.load();
-      records.set(record.id, record);
-      await this.save(records);
-      logger.debug('set', { id: record.id });
-      return { ok: true, value: record };
-    } catch (cause) {
-      return { ok: false, error: new Error(`set(${record.id}): ${String(cause)}`) };
-    }
+    return this.mutex.acquire(async () => {
+      try {
+        const records = await this.load();
+        records.set(record.id, record);
+        await this.save(records);
+        logger.debug('set', { id: record.id });
+        return { ok: true, value: record };
+      } catch (cause) {
+        return { ok: false, error: new Error(`set(${record.id}): ${String(cause)}`) };
+      }
+    });
   }
 
   async patch(id: string, partial: Partial<Omit<T, 'id'>>): Promise<Result<T>> {
-    try {
-      const records = await this.load();
-      const existing = records.get(id);
-      if (!existing) return { ok: false, error: new Error(`patch: "${id}" not found`) };
-      const updated = { ...existing, ...partial } as T;
-      records.set(id, updated);
-      await this.save(records);
-      return { ok: true, value: updated };
-    } catch (cause) {
-      return { ok: false, error: new Error(`patch(${id}): ${String(cause)}`) };
-    }
+    return this.mutex.acquire(async () => {
+      try {
+        const records = await this.load();
+        const existing = records.get(id);
+        if (!existing) return { ok: false, error: new Error(`patch: "${id}" not found`) };
+        const updated = { ...existing, ...partial } as T;
+        records.set(id, updated);
+        await this.save(records);
+        return { ok: true, value: updated };
+      } catch (cause) {
+        return { ok: false, error: new Error(`patch(${id}): ${String(cause)}`) };
+      }
+    });
   }
 
   async delete(id: string): Promise<Result<boolean>> {
-    try {
-      const records = await this.load();
-      const existed = records.delete(id);
-      if (existed) await this.save(records);
-      return { ok: true, value: existed };
-    } catch (cause) {
-      return { ok: false, error: new Error(`delete(${id}): ${String(cause)}`) };
-    }
+    return this.mutex.acquire(async () => {
+      try {
+        const records = await this.load();
+        const existed = records.delete(id);
+        if (existed) await this.save(records);
+        return { ok: true, value: existed };
+      } catch (cause) {
+        return { ok: false, error: new Error(`delete(${id}): ${String(cause)}`) };
+      }
+    });
   }
 
   async clear(): Promise<Result<void>> {
-    try {
-      await this.save(new Map());
-      return { ok: true, value: undefined };
-    } catch (cause) {
-      return { ok: false, error: new Error(`clear(): ${String(cause)}`) };
-    }
+    return this.mutex.acquire(async () => {
+      try {
+        await this.save(new Map());
+        return { ok: true, value: undefined };
+      } catch (cause) {
+        return { ok: false, error: new Error(`clear(): ${String(cause)}`) };
+      }
+    });
   }
 
   async count(): Promise<Result<number>> {
@@ -165,6 +197,7 @@ export class JsonStore<T extends StoreRecord> {
 export class KVStore {
   private readonly filePath: string;
   private readonly pretty: boolean;
+  private readonly mutex = new AsyncMutex(); // CONCURRENCY FIX [D3]
 
   constructor({ dataDir, fileName = 'settings', pretty = true }: KVStoreOptions) {
     this.filePath = join(dataDir, `${fileName}.json`);
@@ -191,28 +224,32 @@ export class KVStore {
   }
 
   async set(key: string, value: JsonValue): Promise<Result<void>> {
-    try {
-      const data = await this.load();
-      data[key] = value;
-      await this.save(data);
-      return { ok: true, value: undefined };
-    } catch (cause) {
-      return { ok: false, error: new Error(`kv.set(${key}): ${String(cause)}`) };
-    }
+    return this.mutex.acquire(async () => {
+      try {
+        const data = await this.load();
+        data[key] = value;
+        await this.save(data);
+        return { ok: true, value: undefined };
+      } catch (cause) {
+        return { ok: false, error: new Error(`kv.set(${key}): ${String(cause)}`) };
+      }
+    });
   }
 
   async delete(key: string): Promise<Result<boolean>> {
-    try {
-      const data = await this.load();
-      const existed = key in data;
-      if (existed) {
-        delete data[key];
-        await this.save(data);
+    return this.mutex.acquire(async () => {
+      try {
+        const data = await this.load();
+        const existed = key in data;
+        if (existed) {
+          delete data[key];
+          await this.save(data);
+        }
+        return { ok: true, value: existed };
+      } catch (cause) {
+        return { ok: false, error: new Error(`kv.delete(${key}): ${String(cause)}`) };
       }
-      return { ok: true, value: existed };
-    } catch (cause) {
-      return { ok: false, error: new Error(`kv.delete(${key}): ${String(cause)}`) };
-    }
+    });
   }
 
   async all(): Promise<Result<Record<string, JsonValue>>> {

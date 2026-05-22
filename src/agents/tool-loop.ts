@@ -9,6 +9,7 @@ import { createMessage, extractText } from '../types/message';
 import type { ToolRegistry, RegisteredTool } from '../tools/tool-registry';
 import { parseLLMResponse, validateToolCall } from './tool-parser';
 import { createLogger } from '../utils/logger';
+import { z } from 'zod';
 
 const logger = createLogger('agents:tool-loop');
 
@@ -31,6 +32,13 @@ const NO_TOOLS_MESSAGE =
 
 const CURRENT_INFO_EMAIL_RE = /(hari ini|terbaru|current|latest|today|news|berita|harga|price|emas|gold|market|pasar)/i;
 const EMAIL_INTENT_RE = /\b(email|mail)\b|kirim\s+email|send\s+email/i;
+
+// SECURITY [B1]: network results must not be chained into privileged local execution.
+// Inserted after alias normalization so aliases are judged by the real registered tool name.
+// Reverse order is also blocked because command output followed by web/API fetch can exfiltrate data.
+// No current tool is in both sets; if that changes, treat it as privileged.
+const NETWORK_TOOLS = new Set(['web-fetch', 'browsing', 'api-client']);
+const PRIVILEGED_TOOLS = new Set(['system-execute', 'command-planner']);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,11 +72,13 @@ function stripMarkdownFences(text: string): string {
   return text.replace(/```json/gi, '').replace(/```/g, '').trim();
 }
 
-const INTERNAL_XML_BLOCK_RE = /<(reasoning|analysis|thought|plan)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const INTERNAL_XML_BLOCK_RE = /<(reasoning|analysis|thought|plan)\b[^>]*>([^]*?)<\/\1>/gi; // SECURITY [B2]
 const INTERNAL_HEADING_RE = /^(#{1,6}\s*)?(reasoning|thought|analysis|analisis|plan|decision|observation|action|tool call|internal reasoning)\s*:?\s*$/i;
 const ANSWER_HEADING_RE = /^#{1,6}\s*(final answer|answer|jawaban)\s*:?\s*$/i;
 const INTERNAL_LINE_RE = /^(?:[-*]\s*)?(?:the user is asking|user is asking|the user asks|from the memory|based on memory|i should answer|i need to answer|i need to|reasoning:|thought:|analysis:|analisis:|plan:|decision:|observation:|action:|tool call:|internal reasoning:|i will use|i should use)(?:\b|\s|$)/i;
 const FINAL_LABEL_RE = /^(?:final answer|answer|jawaban)\s*:\s*/i;
+const MAX_SANITIZE_CHARS = 100_000;
+const MAX_INTERNAL_XML_BODY_CHARS = 1_000;
 
 function removeInternalHeadingBlocks(text: string): string {
   const lines = text.split(/\r?\n/);
@@ -96,12 +106,23 @@ function removeInternalHeadingBlocks(text: string): string {
   return kept.join('\n');
 }
 
+function truncateForSanitization(text: string): string {
+  if (text.length <= MAX_SANITIZE_CHARS) return text;
+  logger.debug('tool-loop: truncating final answer before sanitization', {
+    length: text.length,
+    max: MAX_SANITIZE_CHARS,
+  });
+  return text.slice(0, MAX_SANITIZE_CHARS);
+}
+
 export function sanitizeFinalAnswer(text: string): string {
-  const original = text.trim();
+  const original = truncateForSanitization(text).trim();
   if (!original) return text;
 
   let cleaned = original
-    .replace(INTERNAL_XML_BLOCK_RE, '')
+    .replace(INTERNAL_XML_BLOCK_RE, (match, _tag: string, body: string) =>
+      body.length <= MAX_INTERNAL_XML_BODY_CHARS ? '' : match
+    )
     .trim();
 
   cleaned = removeInternalHeadingBlocks(cleaned).trim();
@@ -236,6 +257,52 @@ function normalizeToolCallInput(
 ): { type: 'tool_call'; tool: string; input: unknown } {
   if (toolCall.tool !== 'brevo-email') return toolCall;
   return { ...toolCall, input: normalizeBrevoToolInput(toolCall.input) };
+}
+
+function violatesToolChainIsolation(toolName: string, toolsUsed: string[]): boolean {
+  const isPrivileged = PRIVILEGED_TOOLS.has(toolName);
+  const isNetwork = NETWORK_TOOLS.has(toolName);
+  const usedNetwork = toolsUsed.some((tool) => NETWORK_TOOLS.has(tool));
+  const usedPrivileged = toolsUsed.some((tool) => PRIVILEGED_TOOLS.has(tool));
+  return (isPrivileged && usedNetwork) || (isNetwork && usedPrivileged);
+}
+
+function validateToolInput(tool: RegisteredTool, input: unknown): string | null {
+  try {
+    const schema = tool.manifest.inputSchema;
+    if (!schema || typeof schema !== 'object') return null;
+
+    const properties = schema.properties ?? {};
+    const required = Array.isArray(schema.required) ? schema.required : [];
+
+    if (required.length > 0 && !isPlainObject(input)) {
+      return `Tool "${tool.manifest.name}" requires object input.`;
+    }
+
+    if (isPlainObject(input)) {
+      for (const key of required) {
+        if (!(key in input)) return `Missing required field "${key}" for tool "${tool.manifest.name}".`;
+      }
+    }
+
+    const shape: Record<string, z.ZodType<unknown>> = {};
+    for (const key of Object.keys(properties)) {
+      shape[key] = z.unknown();
+    }
+
+    if (Object.keys(shape).length === 0) return null;
+    z.object(shape).passthrough().parse(input);
+    return null;
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return error.issues.map((issue) => issue.message).join('; ');
+    }
+    logger.debug('tool-loop: skipped invalid tool input schema', {
+      tool: tool.manifest.name,
+      error: String(error),
+    });
+    return null;
+  }
 }
 
 function originalUserText(messages: Message[]): string {
@@ -560,6 +627,20 @@ export class ToolLoop {
 
         const toolCall = normalizeToolCallInput(normalizeParsedToolCall(parsed, availableTools));
 
+        if (violatesToolChainIsolation(toolCall.tool, toolsUsed)) {
+          logger.warn('tool-loop: blocked unsafe network/privileged tool chain', {
+            requestedTool: toolCall.tool,
+            toolsUsed,
+          });
+          return toolLoopResult({
+            finalText: 'Eksekusi perintah sistem tidak diizinkan setelah operasi jaringan dalam satu sesi untuk alasan keamanan.',
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          });
+        }
+
         if (
           toolCall.tool === 'brevo-email' &&
           shouldFetchBeforeBrevoEmail(messages, availableTools, toolsUsed)
@@ -618,6 +699,17 @@ export class ToolLoop {
             });
           }
 
+          const inputError = validateToolInput(tool, toolCall.input);
+          if (inputError) {
+            return toolLoopResult({
+              finalText: `Input tool tidak valid: ${inputError}`,
+              toolSteps,
+              toolsUsed,
+              stepMessages,
+              flow,
+            });
+          }
+
           let toolResult: string;
           try {
             flow.push({ stage: 'tool_call', tool: toolCall.tool, input: toolCall.input ?? {} });
@@ -661,6 +753,17 @@ export class ToolLoop {
             continue;
           }
           return toolLoopResult({ finalText: errMsg, toolSteps, toolsUsed, stepMessages, flow });
+        }
+
+        const inputError = validateToolInput(tool, toolCall.input);
+        if (inputError) {
+          return toolLoopResult({
+            finalText: `Input tool tidak valid: ${inputError}`,
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          });
         }
 
         logger.info('tool-loop: executing tool', { tool: toolCall.tool, input: toolCall.input, step });

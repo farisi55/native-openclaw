@@ -44,7 +44,11 @@ function sanitizeFlowReason(reason: string | undefined, fallback: string): strin
   const cleaned = (reason ?? '').replace(/\s+/g, ' ').trim();
   if (!cleaned) return fallback;
 
-  if (/(the user is asking|user is asking|from the memory|based on memory|i should|i need to|reasoning:|thought:|analysis:|plan:|decision:|observation:|internal reasoning)/i.test(cleaned)) {
+  // FIX [E2]: preserve valid operational reasons such as:
+  // "I need to use web-fetch for current data" and
+  // "Based on memory, user prefers bahasa Indonesia".
+  // Filter only obvious internal labels at the beginning, e.g. "Reasoning: tool needed".
+  if (/^(reasoning:?|thought:?|analysis:?|analisis:?|plan:?|decision:?|observation:?|internal reasoning:?|the user is asking|user is asking)\b/i.test(cleaned)) {
     return fallback;
   }
 
@@ -134,9 +138,11 @@ export class Orchestrator {
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
+  private readonly workspace: WorkspaceManager; // PERF [E1]
   private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager'>>;
 
   private _activeSessionId: string | null = null;
+  private _workspaceReady = false;
 
   constructor(
     sessions: SessionManager,
@@ -154,6 +160,7 @@ export class Orchestrator {
     this.router = router;
     this.contextCompressor = contextCompressor;
     this.mcpManager = opts.mcpManager;
+    this.workspace = new WorkspaceManager();
 
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
@@ -168,6 +175,12 @@ export class Orchestrator {
 
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
+  }
+
+  private async ensureWorkspaceReady(): Promise<void> {
+    if (this._workspaceReady) return;
+    await this.workspace.ensureWorkspace();
+    this._workspaceReady = true;
   }
 
   async turn(input: TurnInput): Promise<TurnResult> {
@@ -229,13 +242,12 @@ export class Orchestrator {
       }
     }
 
-    const workspace = new WorkspaceManager();
-    await workspace.ensureWorkspace();
+    await this.ensureWorkspaceReady();
 
     for (const update of memoryUpdates) {
       const summary = `${update.key}: ${update.value}`;
-      await workspace.appendLongTermMemory(summary);
-      await workspace.appendDailyMemory({
+      await this.workspace.appendLongTermMemory(summary);
+      await this.workspace.appendDailyMemory({
         type: 'user_preference',
         summary,
         source: 'chat',
@@ -258,10 +270,10 @@ export class Orchestrator {
         toolRegistry: this.toolRegistry,
         provider: input.provider,
         model: input.model,
-        workspace,
+        workspace: this.workspace,
       });
 
-      await workspace.appendDailyMemory({
+      await this.workspace.appendDailyMemory({
         type: 'workflow_event',
         summary: `Workflow executed: ${workflowResult.title}`,
         source: 'workflow',
@@ -386,7 +398,7 @@ export class Orchestrator {
     // ── 7. Build system prompt ────────────────────────────────────────────────
     const activeSkills = this.skills.activeSkills();
     const memoryBlock = await this.memory.buildMemoryBlock(session.id);
-    const workspaceContext = await workspace.buildContext({
+    const workspaceContext = await this.workspace.buildContext({
       includeWorkflow: shouldIncludeWorkflowContext(input.userInput),
     });
     const toolsBlock = this.toolRegistry.buildToolsBlock();
