@@ -188,8 +188,8 @@ test('API_AUTH_TOKEN is enforced when configured', async () => {
   });
 });
 
-test('rate limit is active by default (no env override)', async () => {
-  await withEnv({ RATE_LIMIT_ENABLED: undefined, RATE_LIMIT_MAX: '2' }, async () => {
+test('rate limit can be explicitly enabled on loopback', async () => {
+  await withEnv({ RATE_LIMIT_ENABLED: 'true', RATE_LIMIT_MAX: '2' }, async () => {
     await withDeps(async (deps) => {
       const api = await startApiServer(deps, {
         enabled: true,

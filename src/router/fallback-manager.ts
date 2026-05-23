@@ -83,6 +83,7 @@ export class FallbackManager {
 
     for (const { provider, model } of candidates) {
       attemptCount++;
+      await this.withBackoff(attemptCount);
       const opts: ChatOptions = { ...options, model };
 
       try {
@@ -134,6 +135,14 @@ export class FallbackManager {
   clearModelCache(): void {
     this.modelCache.clear();
     this.modelCachePromises.clear();
+  }
+
+  private async withBackoff(attempt: number): Promise<void> {
+    if (attempt <= 1) return;
+
+    const delay = Math.min(150 * 2 ** (attempt - 2), 5000);
+    logger.debug('router: backoff before retry', { attempt, delayMs: delay });
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, delay));
   }
 
   private async defaultModel(provider: IProvider): Promise<string | null> {

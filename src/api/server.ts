@@ -89,7 +89,11 @@ function errorBody(error: string): ChatApiResponse {
 }
 
 function isAuthorized(req: IncomingMessage, cfg: ApiConfig): boolean {
-  if (!cfg.authToken) return true;
+  if (!cfg.authToken) {
+    const ip = requestIp(req);
+    return ip === '127.0.0.1' || ip === '::1';
+  }
+
   const actual = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
   const expected = `Bearer ${cfg.authToken}`;
   const actualHash = createHash('sha256').update(actual, 'utf8').digest();
@@ -105,8 +109,20 @@ export function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === '::1' || host === 'localhost';
 }
 
+/**
+ * Rate limiting is bypassed for loopback-only API hosts by default.
+ * Set RATE_LIMIT_ENABLED=true to explicitly enable it on loopback, or false to disable it elsewhere.
+ */
 function isRateLimitEnabled(cfg: ApiConfig): boolean {
-  void isLoopbackHost(cfg.host);
+  const configured = getOptionalEnv('RATE_LIMIT_ENABLED');
+  if (configured !== undefined) {
+    return getEnvBool('RATE_LIMIT_ENABLED', true);
+  }
+
+  if (isLoopbackHost(cfg.host)) {
+    return false;
+  }
+
   return getEnvBool('RATE_LIMIT_ENABLED', true);
 }
 
@@ -209,6 +225,12 @@ export async function startApiServer(
 ): Promise<StartedApiServer> {
   const state: ApiRuntimeState = await createApiRuntimeState(deps);
   const rateLimitEnabled = isRateLimitEnabled(cfg);
+  if (!cfg.authToken && !isLoopbackHost(cfg.host)) {
+    logger.warn('API_AUTH_TOKEN not set; API will only authorize loopback clients', {
+      host: cfg.host,
+    });
+  }
+
   const cleanupTimer = rateLimitEnabled
     ? setInterval(cleanupRateLimitMap, RATE_LIMIT_CLEANUP_MS)
     : null;

@@ -23,7 +23,6 @@ const logger = createLogger('tool:system-execute');
 const execAsync = promisify(exec);
 
 const TIMEOUT_MS = parseInt(process.env['SYSTEM_EXECUTE_TIMEOUT'] ?? '30000', 10);
-const ENABLED = process.env['SYSTEM_EXECUTE_ENABLED'] !== 'false';
 const REGISTRY_PATH = join(process.cwd(), 'data', 'custom-commands.json');
 const CONFIRM_TTL_MS = 5 * 60 * 1000;
 const CONFIRM_STORE_KEY_PREFIX = 'confirm:';
@@ -86,6 +85,12 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bchown\s+-R\b/i,
 ];
 
+export const SUBSHELL_PATTERNS: RegExp[] = [
+  /\$\(/m,
+  /`/m,
+  /\$\{[\s\S]*/m,
+];
+
 export interface PendingCommand {
   id: string;
   command: string;
@@ -94,6 +99,16 @@ export interface PendingCommand {
 }
 
 const fallbackPendingCommands = new Map<string, PendingCommand>();
+
+let _workspace: WorkspaceManager | undefined;
+
+async function getWorkspace(): Promise<WorkspaceManager> {
+  if (!_workspace) {
+    _workspace = new WorkspaceManager();
+    await _workspace.ensureWorkspace();
+  }
+  return _workspace;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,7 +148,15 @@ export interface CustomCommand {
   createdAt: string;
 }
 
+function isSystemExecuteEnabled(): boolean {
+  return process.env['SYSTEM_EXECUTE_ENABLED'] !== 'false';
+}
+
 export function isDangerousCommand(cmd: string): boolean {
+  if (SUBSHELL_PATTERNS.some((pattern) => pattern.test(cmd))) {
+    return true;
+  }
+
   // SECURITY FIX [C1]: secondary guard is intentionally narrower for restart/reboot tokens.
   if (/\b(rm\s+-[a-z]*r[a-z]*f?[a-z]*|del\s+\/s|rmdir\s+\/s|format|mkfs|diskpart|dd\s+if=|chmod\s+-R\s+777|chown\s+-R)\b/i.test(cmd)) {
     return true;
@@ -339,6 +362,14 @@ export async function saveCustomCommand(
   command: string,
   description?: string
 ): Promise<string> {
+  if (!isCommandAllowed(command)) {
+    throw new Error(`Command "${command}" is not permitted by the allowlist and cannot be saved.`);
+  }
+
+  if (isDangerousCommand(command)) {
+    throw new Error(`Command "${command}" is dangerous and cannot be saved.`);
+  }
+
   const registry = await loadRegistry();
   const existing = registry.findIndex((c) => c.alias === alias);
 
@@ -421,8 +452,7 @@ type CwdResolution =
   | { ok: false; content: string };
 
 async function resolveExecutionCwd(explicitCwd?: string): Promise<CwdResolution> {
-  const workspace = new WorkspaceManager();
-  await workspace.ensureWorkspace();
+  const workspace = await getWorkspace();
   const workspaceRoot = resolve(workspace.rootDir);
 
   if (explicitCwd?.trim()) {
@@ -459,7 +489,7 @@ async function resolveExecutionCwd(explicitCwd?: string): Promise<CwdResolution>
 export async function runSystemExecute(
   input: ExecuteInput | string | Record<string, unknown>
 ): Promise<ExecuteResult> {
-  if (!ENABLED) {
+  if (!isSystemExecuteEnabled()) {
     return {
       ok: false,
       content: '❌ System execution is disabled. Set SYSTEM_EXECUTE_ENABLED=true.',
@@ -510,6 +540,20 @@ export async function runSystemExecute(
         alias: opts.alias,
         command: cmd,
       });
+
+      const aliasAllowed = isCommandAllowed(cmd);
+      const aliasDangerous = isDangerousCommand(cmd);
+      if (!aliasAllowed || aliasDangerous) {
+        const dangerousNote = aliasDangerous
+          ? ' The resolved command also matches a dangerous command pattern.'
+          : '';
+        return {
+          ok: false,
+          content: aliasAllowed
+            ? `Alias "${opts.alias}" resolved to a dangerous command and cannot be executed.`
+            : `Alias "${opts.alias}" resolved to a command that is not permitted by the allowlist.${dangerousNote}`,
+        };
+      }
     } else {
       return {
         ok: false,

@@ -554,11 +554,18 @@ export class Orchestrator {
 
     // ── 12. Store semantic memory ─────────────────────────────────────────────
     if (this.opts.useSemanticCompression) {
-      this.contextCompressor.storeExchange(
-        session.id,
-        input.userInput,
-        loopResult.finalText
-      );
+      Promise.resolve(
+        this.contextCompressor.storeExchange(
+          session.id,
+          input.userInput,
+          loopResult.finalText
+        )
+      ).catch((err: unknown) => {
+        logger.warn('orchestrator: storeExchange failed', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     const result: TurnResult = {

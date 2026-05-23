@@ -16,13 +16,20 @@ function getString(input: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function manager(): WorkspaceManager {
-  return new WorkspaceManager();
+let _manager: WorkspaceManager | undefined;
+
+function getManager(): WorkspaceManager {
+  if (!_manager) _manager = new WorkspaceManager();
+  return _manager;
+}
+
+export function resetManagerForTesting(): void {
+  _manager = undefined;
 }
 
 export async function workspaceList(input: unknown): Promise<WorkspaceToolResult> {
   const path = getString(input, 'path') ?? '.';
-  const entries = await manager().list(path);
+  const entries = await getManager().list(path);
   const lines = entries.map((entry) => `${entry.type === 'directory' ? '[dir] ' : '[file]'} ${entry.path}`);
   return {
     ok: true,
@@ -36,7 +43,7 @@ export async function workspaceTree(input: unknown): Promise<WorkspaceToolResult
   const maxDepth = depthText ? Number.parseInt(depthText, 10) : 3;
   return {
     ok: true,
-    content: await manager().tree(path, Number.isFinite(maxDepth) ? maxDepth : 3),
+    content: await getManager().tree(path, Number.isFinite(maxDepth) ? maxDepth : 3),
   };
 }
 
@@ -45,14 +52,14 @@ export async function workspaceRead(input: unknown): Promise<WorkspaceToolResult
   if (!path) throw new Error('workspace-read requires "path".');
   return {
     ok: true,
-    content: await manager().read(path),
+    content: await getManager().read(path),
   };
 }
 
 export async function workspaceTrash(input: unknown): Promise<WorkspaceToolResult> {
   const path = getString(input, 'path') ?? getString(input, 'file');
   if (!path) throw new Error('workspace-trash requires "path".');
-  const trashPath = await manager().trash(path);
+  const trashPath = await getManager().trash(path);
   return {
     ok: true,
     content: `Moved workspace path to trash: ${trashPath}`,
@@ -60,7 +67,7 @@ export async function workspaceTrash(input: unknown): Promise<WorkspaceToolResul
 }
 
 export async function workspaceBackup(_input: unknown): Promise<WorkspaceToolResult> {
-  const backupPath = await manager().backup();
+  const backupPath = await getManager().backup();
   return {
     ok: true,
     content: `Created workspace backup: ${backupPath}`,
@@ -68,7 +75,7 @@ export async function workspaceBackup(_input: unknown): Promise<WorkspaceToolRes
 }
 
 export async function workspaceInfo(_input: unknown): Promise<WorkspaceToolResult> {
-  const info = await manager().info();
+  const info = await getManager().info();
   const core = info.coreFiles
     .map((entry) => `${entry.exists ? '[ok] ' : '[missing]'} ${entry.path}`)
     .join('\n');
@@ -91,7 +98,7 @@ export async function workspaceWrite(input: unknown): Promise<WorkspaceToolResul
   const content = getString(input, 'content') ?? getString(input, 'text');
   if (!path) throw new Error('workspace-write requires "path".');
   if (content === undefined) throw new Error('workspace-write requires "content".');
-  await manager().write(path, content);
+  await getManager().write(path, content);
   return {
     ok: true,
     content: `Wrote workspace file: ${path}`,
@@ -103,7 +110,7 @@ export async function workspaceAppend(input: unknown): Promise<WorkspaceToolResu
   const content = getString(input, 'content') ?? getString(input, 'text');
   if (!path) throw new Error('workspace-append requires "path".');
   if (content === undefined) throw new Error('workspace-append requires "content".');
-  await manager().append(path, content);
+  await getManager().append(path, content);
   return {
     ok: true,
     content: `Appended to workspace file: ${path}`,
@@ -113,7 +120,7 @@ export async function workspaceAppend(input: unknown): Promise<WorkspaceToolResu
 export async function workspaceMkdir(input: unknown): Promise<WorkspaceToolResult> {
   const path = getString(input, 'path') ?? getString(input, 'folder');
   if (!path) throw new Error('workspace-mkdir requires "path".');
-  await manager().mkdir(path);
+  await getManager().mkdir(path);
   return {
     ok: true,
     content: `Created workspace folder: ${path}`,
