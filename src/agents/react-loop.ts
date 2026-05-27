@@ -111,7 +111,19 @@ function extractDecisionJSON(raw: string): ReActDecision | null {
 
 // ─── ReAct Loop ───────────────────────────────────────────────────────────────
 
-const MAX_STEPS = parseInt(process.env['REACT_MAX_STEPS'] ?? '4', 10);
+const REACT_MAX_STEPS_DEFAULT = 4;
+const REACT_MAX_STEPS_MIN = 1;
+const REACT_MAX_STEPS_MAX = 20;
+
+export function resolveMaxSteps(): number {
+  const raw = parseInt(process.env['REACT_MAX_STEPS'] ?? '', 10);
+  if (!Number.isFinite(raw) || raw < REACT_MAX_STEPS_MIN) {
+    return REACT_MAX_STEPS_DEFAULT;
+  }
+  return Math.min(raw, REACT_MAX_STEPS_MAX);
+}
+
+const MAX_STEPS = resolveMaxSteps();
 
 export class ReActLoop {
   private readonly registry: ToolRegistry;

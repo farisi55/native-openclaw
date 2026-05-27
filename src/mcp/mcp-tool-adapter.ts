@@ -5,7 +5,27 @@ export interface McpToolCaller {
   callTool(serverName: string, toolName: string, input: unknown): Promise<unknown>;
 }
 
-const DANGEROUS_TOOL_RE = /(execute|shell|command|terminal|run_code|run-code|eval)/i;
+const DANGEROUS_TOOL_KEYWORDS = [
+  'execute',
+  'exec',
+  'shell',
+  'command',
+  'terminal',
+  'run_code',
+  'run-code',
+  'eval',
+  'invoke',
+  'dispatch',
+  'syscall',
+  'process',
+  'spawn',
+  'subprocess',
+] as const;
+
+const DANGEROUS_TOOL_RE = new RegExp(
+  `(?:^|[^a-z0-9])(?:${DANGEROUS_TOOL_KEYWORDS.join('|')})(?:[^a-z0-9]|$)`,
+  'i'
+);
 
 export function makeMcpToolName(serverName: string, toolName: string): string {
   return `mcp:${serverName}:${toolName}`;
@@ -84,7 +104,10 @@ export function createMcpRegisteredTool(
   caller: McpToolCaller
 ): RegisteredTool {
   const runtimeName = makeMcpToolName(serverName, tool.name);
-  const dangerous = DANGEROUS_TOOL_RE.test(tool.name);
+  const nameDangerous = DANGEROUS_TOOL_RE.test(tool.name);
+  const descDangerous = typeof tool.description === 'string'
+    && DANGEROUS_TOOL_RE.test(tool.description);
+  const dangerous = nameDangerous || descDangerous;
 
   const manifest: ToolManifest = {
     name: runtimeName,
@@ -110,3 +133,5 @@ export function createMcpRegisteredTool(
     },
   };
 }
+
+export { DANGEROUS_TOOL_KEYWORDS };

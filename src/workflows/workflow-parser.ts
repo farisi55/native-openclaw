@@ -1,6 +1,15 @@
+import { createLogger } from '../utils/logger';
 import type { WorkflowDefinition, WorkflowEmailConfig } from './workflow-types';
 
+const logger = createLogger('workflow:parser');
 const REQUIRED_SECTIONS = ['Topic', 'Data Requirements', 'Analysis Requirements', 'Output Requirements'];
+
+export const WORKFLOW_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
+  'WORKFLOW_RECIPIENT',
+  'WORKFLOW_SENDER',
+  'WORKFLOW_SUBJECT',
+  'WORKFLOW_TOPIC',
+]);
 
 function sectionTitle(line: string): string | null {
   const match = /^##\s+(.+?)\s*$/.exec(line.trim());
@@ -46,7 +55,13 @@ function bulletList(text: string): string[] {
 }
 
 function replaceEnvTemplates(value: string): string {
-  return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, key: string) => process.env[key] ?? '');
+  return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, key: string) => {
+    if (!WORKFLOW_ENV_ALLOWLIST.has(key)) {
+      logger.warn('workflow-parser: blocked expansion of non-allowlisted env var', { key });
+      return `\${${key}}`;
+    }
+    return process.env[key] ?? '';
+  });
 }
 
 function parseEmail(text: string): WorkflowEmailConfig {

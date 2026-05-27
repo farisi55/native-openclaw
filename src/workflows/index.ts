@@ -15,6 +15,7 @@ export {
 export {
   parseWorkflowMarkdown,
   validateWorkflowDefinition,
+  WORKFLOW_ENV_ALLOWLIST,
   workflowSummary,
 } from './workflow-parser';
 

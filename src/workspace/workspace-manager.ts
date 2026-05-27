@@ -354,11 +354,15 @@ export class WorkspaceManager {
     return readFile(target, 'utf-8');
   }
 
-  async write(path: string, content: string): Promise<void> {
+  async write(path: string, content: string | Buffer): Promise<void> {
     await this.ensureWorkspace();
     const target = this.resolvePath(path);
     await mkdir(resolve(target, '..'), { recursive: true });
-    await writeFile(target, content, 'utf-8');
+    if (Buffer.isBuffer(content)) {
+      await writeFile(target, content);
+    } else {
+      await writeFile(target, content, 'utf-8');
+    }
   }
 
   async append(path: string, content: string): Promise<void> {

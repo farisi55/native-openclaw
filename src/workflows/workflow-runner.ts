@@ -1,4 +1,3 @@
-import { writeFile } from 'fs/promises';
 import { WorkspaceManager } from '../workspace';
 import { sendBrevoEmail } from '../tools/brevo-email';
 import type {
@@ -501,7 +500,7 @@ export async function runWorkflowFromDefinition(
         errors.push(`${step.id}: chart skipped because numeric historical data was incomplete.`);
         continue;
       }
-      await writeFile(workspace.resolvePath(chartFile), createTrendPng(series));
+      await workspace.write(chartFile, createTrendPng(series));
       chartPath = chartFile;
       generatedFiles.push({ path: chartFile, type: 'png' });
       results.push({ stepId: step.id, type: step.type, tool: tool.runtimeName, goal: step.goal, ok: true, output: `Chart generated from ${series.length} numeric observations.`, sources: [] });

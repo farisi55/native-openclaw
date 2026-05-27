@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { isAbsolute } from 'path';
-import type { McpServerConfig } from './mcp-config';
+import { assertMcpCommandAllowed, type McpServerConfig } from './mcp-config';
 
 export interface McpTool {
   name: string;
@@ -53,6 +53,14 @@ export class McpClient {
 
   async start(): Promise<void> {
     if (this.isRunning) return;
+
+    try {
+      assertMcpCommandAllowed(this.config.command);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.rejectAll(error);
+      return;
+    }
 
     this.process = spawn(this.config.command, this.config.args ?? [], {
       env: { ...process.env, ...(this.config.env ?? {}) },
