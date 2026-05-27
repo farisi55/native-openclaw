@@ -25,6 +25,7 @@ import {
   validateWorkflowDefinition,
   workflowSummary,
 } from '../workflows';
+import { handleCronCommand, type SchedulerActionContext } from '../scheduler';
 
 const C = {
   reset:   '\x1b[0m',
@@ -56,6 +57,7 @@ export interface CLIContext {
   settings: SettingsManager;
   toolRegistry: ToolRegistry;
   mcpManager?: McpManager;
+  scheduler?: SchedulerActionContext;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -122,6 +124,10 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/workflow show')}                Show WORKFLOW.md summary`,
     `  ${c('yellow', '/workflow run')}                 Execute WORKFLOW.md`,
     `  ${c('yellow', '/workflow validate')}            Validate WORKFLOW.md`,
+    `  ${c('yellow', '/cron')}                         Show cronjob commands`,
+    `  ${c('yellow', '/cron list')}                    List cronjobs`,
+    `  ${c('yellow', '/cron create <text>')}           Create cronjob from natural language`,
+    `  ${c('yellow', '/cron run <id-or-name>')}        Run a cronjob now`,
     `  ${c('yellow', '/tools')}                         List all installed tools`,
     `  ${c('yellow', '/tools install <name>')}          Install a tool from tools/available/`,
     `  ${c('yellow', '/tools enable <name>')}           Enable a disabled tool`,
@@ -774,6 +780,20 @@ export async function cmdHeartbeat(_ctx: CLIContext, args: string[]): Promise<vo
 }
 
 // ─── /network ─────────────────────────────────────────────────────────────────
+
+// --- /cron -----------------------------------------------------------------
+
+export async function cmdCron(ctx: CLIContext, args: string[]): Promise<void> {
+  if (!ctx.scheduler) {
+    process.stdout.write(c('yellow', '\n  Scheduler is not initialized.\n\n'));
+    return;
+  }
+
+  const outputText = await handleCronCommand(args, ctx.scheduler, 'cli');
+  process.stdout.write('\n');
+  process.stdout.write(outputText.split('\n').map((line) => `  ${line}`).join('\n'));
+  process.stdout.write('\n\n');
+}
 
 export async function cmdNetwork(_ctx: CLIContext, args: string[]): Promise<void> {
   const [action, target] = args;

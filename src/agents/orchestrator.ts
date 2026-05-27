@@ -24,7 +24,7 @@ import type { MemoryManager } from '../storage/memory-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { ProviderRouter } from '../router/provider-router';
 import type { McpManager } from '../mcp';
-import { ToolLoop } from './tool-loop';
+import { ToolLoop, type ToolLoopToolResult } from './tool-loop';
 import { ReasoningEngine } from './reasoning-engine';
 import { CapabilityInstaller } from './capability-installer';
 import { ContextCompressor } from '../memory/context-compressor';
@@ -35,6 +35,7 @@ import { extractMemory } from './memory-extractor';
 import type { SystemContextInput } from './system-context';
 import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { WorkspaceManager } from '../workspace';
+import type { SchedulerActionContext } from '../scheduler';
 import { createLogger } from '../utils/logger';
 import { getOptionalEnv } from '../config/env';
 
@@ -103,6 +104,11 @@ export interface OrchestratorOptions {
    * Optional MCP manager for natural-language MCP management actions.
    */
   mcpManager?: McpManager;
+
+  /**
+   * Optional scheduler action context for cronjob management actions.
+   */
+  scheduler?: SchedulerActionContext;
 }
 
 export interface TurnInput {
@@ -123,6 +129,7 @@ export interface TurnResult {
   flow: Array<Record<string, unknown>>;
   toolName?: string | undefined;
   toolsUsed?: string[];
+  toolResults?: ToolLoopToolResult[];
   toolSteps?: number;
   usedFallback?: boolean;
   fallbackProvider?: string;
@@ -135,11 +142,12 @@ export class Orchestrator {
   private readonly toolRegistry: ToolRegistry;
   private readonly router: ProviderRouter;
   private readonly mcpManager: McpManager | undefined;
+  private readonly scheduler: SchedulerActionContext | undefined;
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
   readonly workspace: WorkspaceManager; // PERF [E1]
-  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager'>>;
+  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler'>>;
 
   private _activeSessionId: string | null = null;
   private _workspaceReady = false;
@@ -161,6 +169,7 @@ export class Orchestrator {
     this.router = router;
     this.contextCompressor = contextCompressor;
     this.mcpManager = opts.mcpManager;
+    this.scheduler = opts.scheduler;
     this.workspace = workspace;
 
     this.opts = {
@@ -313,6 +322,7 @@ export class Orchestrator {
       skillsDir,
       activeSessionId: this._activeSessionId,
       ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
+      ...(this.scheduler ? { scheduler: this.scheduler } : {}),
       onSessionCleared: () => {
         this._activeSessionId = null;
       },
@@ -576,6 +586,7 @@ export class Orchestrator {
       flow: [...flow, { stage: 'final' }],
       toolSteps: loopResult.toolSteps,
       toolsUsed: loopResult.toolsUsed,
+      ...(loopResult.toolResults ? { toolResults: loopResult.toolResults } : {}),
       usedFallback,
     };
 

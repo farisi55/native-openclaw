@@ -20,11 +20,13 @@ export interface BrevoEmailInput {
 
 export interface BrevoEmailResult {
   ok: boolean;
+  provider: 'brevo';
   status?: number;
   messageId?: string;
   content: string;
   missingEnv?: string[];
   error?: string;
+  details?: string;
   senderEmail?: string;
   recipientEmail?: string;
 }
@@ -127,6 +129,7 @@ export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> 
   if (missing.length > 0) {
     const result: BrevoEmailResult = {
       ok: false,
+      provider: 'brevo',
       content: `Brevo email not sent. Missing: ${missing.join(', ')}`,
       missingEnv: missing,
     };
@@ -138,6 +141,7 @@ export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> 
   if (!apiKey || !senderEmail || !recipientEmail) {
     return {
       ok: false,
+      provider: 'brevo',
       content: 'Brevo email not sent. Missing resolved Brevo configuration.',
       missingEnv: ['BREVO_API_KEY', 'BREVO_SENDER_EMAIL', 'BREVO_RECIPIENT_EMAIL'],
     };
@@ -179,9 +183,11 @@ export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> 
       const message = detail || `Brevo HTTP ${response.status}`;
       return {
         ok: false,
+        provider: 'brevo',
         status: response.status,
         content: `Brevo email not sent to ${recipientEmail} from ${senderEmail}. HTTP ${response.status}. ${message}`,
         error: message,
+        details: detail,
         senderEmail,
         recipientEmail,
       };
@@ -189,6 +195,7 @@ export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> 
 
     const result: BrevoEmailResult = {
       ok: true,
+      provider: 'brevo',
       status: response.status,
       content: `Brevo email sent to ${recipientEmail} from ${senderEmail}${body.messageId ? `: ${body.messageId}` : '.'}`,
       senderEmail,
@@ -200,6 +207,7 @@ export async function sendBrevoEmail(input: unknown): Promise<BrevoEmailResult> 
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
+      provider: 'brevo',
       content: `Brevo email not sent to ${recipientEmail} from ${senderEmail}. ${message}`,
       error: message,
       senderEmail,

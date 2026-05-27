@@ -11,12 +11,13 @@ import type { ToolRegistry } from '../tools/tool-registry';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { Orchestrator } from '../agents/orchestrator';
 import type { McpManager } from '../mcp';
+import type { SchedulerActionContext } from '../scheduler';
 import { readLineWithSlashAutocomplete } from './autocomplete';
 import { SLASH_COMMANDS } from './command-registry';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
   cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
-  cmdNetwork, cmdMcp, cmdWorkflow,
+  cmdCron, cmdNetwork, cmdMcp, cmdWorkflow,
   type CLIContext,
 } from './commands';
 
@@ -173,6 +174,7 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'workspace': case 'w': await cmdWorkspace(ctx, args); break;
     case 'memory': case 'mem':  await cmdMemory(ctx, args); break;
     case 'heartbeat': case 'hb': await cmdHeartbeat(ctx, args); break;
+    case 'cron': case 'jobs': case 'schedule': await cmdCron(ctx, args); break;
     case 'network': case 'net': await cmdNetwork(ctx, args); break;
     case 'mcp':                 await cmdMcp(ctx, args); break;
     case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;
@@ -193,6 +195,7 @@ export interface CLIRunnerOptions {
   toolRegistry: ToolRegistry;
   orchestrator: Orchestrator;
   mcpManager?: McpManager;
+  scheduler?: SchedulerActionContext;
 }
 
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
@@ -260,6 +263,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     settings,
     toolRegistry,
     ...(mcpManager ? { mcpManager } : {}),
+    ...(opts.scheduler ? { scheduler: opts.scheduler } : {}),
     get activeProvider()  { return activeProvider!; },
     get activeModel()     { return activeModel; },
     get activeSessionId() { return activeSessionId; },

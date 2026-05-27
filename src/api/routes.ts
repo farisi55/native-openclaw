@@ -10,6 +10,7 @@ import {
   cmdWorkspace,
   cmdMemory,
   cmdHeartbeat,
+  cmdCron,
   cmdNetwork,
   cmdMcp,
   cmdWorkflow,
@@ -103,6 +104,7 @@ function createCommandContext(deps: ApiDependencies, state: ApiRuntimeState): CL
     settings: deps.settings,
     toolRegistry: deps.toolRegistry,
     ...(deps.mcpManager ? { mcpManager: deps.mcpManager } : {}),
+    ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
     get activeProvider() { return state.activeProvider; },
     get activeModel() { return state.activeModel; },
     get activeSessionId() { return state.activeSessionId; },
@@ -180,6 +182,7 @@ async function handleCommand(
       case 'workspace': case 'w': await cmdWorkspace(ctx, args); break;
       case 'memory': case 'mem': await cmdMemory(ctx, args); break;
       case 'heartbeat': case 'hb': await cmdHeartbeat(ctx, args); break;
+      case 'cron': case 'jobs': case 'schedule': await cmdCron(ctx, args); break;
       case 'network': case 'net': await cmdNetwork(ctx, args); break;
       case 'mcp': await cmdMcp(ctx, args); break;
       case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;

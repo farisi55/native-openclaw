@@ -1,1 +1,7 @@
 1. **AGENTS.md**: Berisi informasi tentang agen-agen yang terlibat dalam sistem, termasuk peran dan kemampuan mereka. Agen-agen ini dapat berupa asisten virtual, bot, atau lain-lain.
+- userName: email
+- userName: berita
+- userName: ke
+- userName: atau
+- userName: sekarang
+- userName: success

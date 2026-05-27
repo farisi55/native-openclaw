@@ -51,10 +51,20 @@ export interface ToolLoopOptions {
   maxRepairAttempts?: number;
 }
 
+export interface ToolLoopToolResult {
+  tool: string;
+  input?: unknown;
+  rawResult?: string;
+  parsedResult?: unknown;
+  ok?: boolean;
+  error?: string;
+}
+
 export interface ToolLoopResult {
   finalText: string;
   toolSteps: number;
   toolsUsed: string[];
+  toolResults?: ToolLoopToolResult[];
   stepMessages: Message[];
   flow: Array<Record<string, unknown>>;
 }
@@ -356,6 +366,34 @@ function toolResultOk(toolName: string, toolResult: string): boolean {
   return /^Brevo email sent/i.test(toolResult);
 }
 
+function toolResultError(parsed: unknown, rawResult: string): string | undefined {
+  if (isPlainObject(parsed)) {
+    const error = parsed['error'];
+    if (typeof error === 'string' && error.trim()) return error.trim();
+    const content = parsed['content'];
+    if (typeof content === 'string' && /failed|error|not sent/i.test(content)) return content.trim();
+  }
+  return rawResult.startsWith('Tool execution failed:') ? rawResult : undefined;
+}
+
+function rawResultExcerpt(rawResult: string): string {
+  return rawResult.length > 10_000 ? `${rawResult.slice(0, 10_000)}\n[tool result truncated]` : rawResult;
+}
+
+function buildToolResultTrace(tool: string, input: unknown, rawResult: string): ToolLoopToolResult {
+  const parsed = safeJsonParse(rawResult);
+  const trace: ToolLoopToolResult = {
+    tool,
+    input,
+    rawResult: rawResultExcerpt(rawResult),
+    ok: toolResultOk(tool, rawResult),
+  };
+  if (parsed !== null) trace.parsedResult = parsed;
+  const error = toolResultError(parsed, rawResult);
+  if (error) trace.error = error;
+  return trace;
+}
+
 function normalizeStructuredResponse(raw: unknown, availableTools: string[]): ParsedStructuredResponse {
   if (!isPlainObject(raw)) return null;
 
@@ -555,11 +593,17 @@ export class ToolLoop {
     const availableTools = toolEntries.map((t) => t.name);
     const stepMessages: Message[] = [];
     const toolsUsed: string[] = [];
+    const toolResults: ToolLoopToolResult[] = [];
     const flow: Array<Record<string, unknown>> = [];
     let toolSteps = 0;
     let repairAttempts = 0;
     let currentMessages = [...messages];
     let brevoWebFetchDone = false;
+    const finish = (result: ToolLoopResult): ToolLoopResult =>
+      toolLoopResult({
+        ...result,
+        ...(toolResults.length > 0 ? { toolResults: [...toolResults] } : {}),
+      });
 
     for (let step = 0; step <= this.opts.maxSteps; step++) {
       const isLastStep = step === this.opts.maxSteps;
@@ -605,7 +649,7 @@ export class ToolLoop {
       } catch (e) {
         const errMsg = `LLM call failed at step ${step}: ${String(e)}`;
         logger.warn(errMsg);
-        return toolLoopResult({ finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow });
+        return finish({ finalText: `❌ ${errMsg}`, toolSteps, toolsUsed, stepMessages, flow });
       }
 
       stepMessages.push(createMessage({ role: 'assistant', content: llmText }));
@@ -616,7 +660,7 @@ export class ToolLoop {
           logger.warn('tool-loop: no tools available for requested tool call', {
             requestedTool: parsed.tool,
           });
-          return toolLoopResult({
+          return finish({
             finalText: NO_TOOLS_MESSAGE,
             toolSteps,
             toolsUsed,
@@ -632,7 +676,7 @@ export class ToolLoop {
             requestedTool: toolCall.tool,
             toolsUsed,
           });
-          return toolLoopResult({
+          return finish({
             finalText: 'Eksekusi perintah sistem tidak diizinkan setelah operasi jaringan dalam satu sesi untuk alasan keamanan.',
             toolSteps,
             toolsUsed,
@@ -658,6 +702,7 @@ export class ToolLoop {
               logger.warn('tool-loop: web-fetch before email failed', { error: String(e) });
             }
             toolsUsed.push('web-fetch');
+            toolResults.push(buildToolResultTrace('web-fetch', { query }, webResult));
             toolSteps++;
             const webFetchOk = !webResult.startsWith('Tool execution failed:');
             if (webFetchOk) {
@@ -684,13 +729,13 @@ export class ToolLoop {
           const validationError = validateToolCall(toolCall, availableTools);
           if (validationError) {
             logger.warn('tool-loop: invalid tool call at max step', { error: validationError, modelOutput: llmText });
-            return toolLoopResult({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
+            return finish({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
           }
 
           // FIX: getTool returns RegisteredTool | undefined — no 'as any'
           const tool: RegisteredTool | undefined = this.registry.getTool(toolCall.tool);
           if (!tool) {
-            return toolLoopResult({
+            return finish({
               finalText: `Tool "${toolCall.tool}" was requested but is not available.`,
               toolSteps,
               toolsUsed,
@@ -701,7 +746,7 @@ export class ToolLoop {
 
           const inputError = validateToolInput(tool, toolCall.input);
           if (inputError) {
-            return toolLoopResult({
+            return finish({
               finalText: `Input tool tidak valid: ${inputError}`,
               toolSteps,
               toolsUsed,
@@ -719,9 +764,10 @@ export class ToolLoop {
             logger.warn('tool-loop: tool error on final step', { tool: toolCall.tool, error: String(e) });
           }
           toolsUsed.push(toolCall.tool);
+          toolResults.push(buildToolResultTrace(toolCall.tool, toolCall.input ?? {}, toolResult));
           toolSteps++;
           flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: toolResultOk(toolCall.tool, toolResult) });
-          return toolLoopResult({
+          return finish({
             finalText: toolCall.tool === 'brevo-email' ? brevoFinalAnswer(toolResult) : toolResult,
             toolSteps,
             toolsUsed,
@@ -739,7 +785,7 @@ export class ToolLoop {
             logger.debug('tool-loop: repair retry queued', { repairAttempts, step });
             continue;
           }
-          return toolLoopResult({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
+          return finish({ finalText: `Tool execution failed: ${validationError}`, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         // FIX: no 'as any' — proper type
@@ -752,12 +798,12 @@ export class ToolLoop {
             currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(`Requested unavailable tool: ${toolCall.tool}\n\n${llmText}`, availableTools) })];
             continue;
           }
-          return toolLoopResult({ finalText: errMsg, toolSteps, toolsUsed, stepMessages, flow });
+          return finish({ finalText: errMsg, toolSteps, toolsUsed, stepMessages, flow });
         }
 
         const inputError = validateToolInput(tool, toolCall.input);
         if (inputError) {
-          return toolLoopResult({
+          return finish({
             finalText: `Input tool tidak valid: ${inputError}`,
             toolSteps,
             toolsUsed,
@@ -776,11 +822,12 @@ export class ToolLoop {
           logger.warn('tool-loop: tool error', { tool: toolCall.tool, error: String(e) });
         }
         toolsUsed.push(toolCall.tool);
+        toolResults.push(buildToolResultTrace(toolCall.tool, toolCall.input ?? {}, toolResult));
         toolSteps++;
         flow.push({ stage: 'tool_result', tool: toolCall.tool, ok: toolResultOk(toolCall.tool, toolResult) });
 
         if (toolCall.tool === 'brevo-email') {
-          return toolLoopResult({
+          return finish({
             finalText: brevoFinalAnswer(toolResult),
             toolSteps,
             toolsUsed,
@@ -801,7 +848,7 @@ export class ToolLoop {
           logger.warn('tool-loop: LLM returned final_response after brevo web-fetch pre-fetch', { step });
         }
         logger.debug('tool-loop: structured final_response', { step, toolSteps });
-        return toolLoopResult({ finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow });
+        return finish({ finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow });
       }
 
       if (looksLikeStructuredToolCall(llmText, availableTools)) {
@@ -811,16 +858,16 @@ export class ToolLoop {
           currentMessages = [...currentMessages, createMessage({ role: 'user', content: buildRepairPrompt(llmText, availableTools) })];
           continue;
         }
-        return toolLoopResult({
+        return finish({
           finalText: '❌ The model produced a tool-call-like response, but it could not be parsed safely.',
           toolSteps, toolsUsed, stepMessages, flow,
         });
       }
 
       logger.debug('tool-loop: plain text final response', { step, toolSteps });
-      return toolLoopResult({ finalText: llmText, toolSteps, toolsUsed, stepMessages, flow });
+      return finish({ finalText: llmText, toolSteps, toolsUsed, stepMessages, flow });
     }
 
-    return toolLoopResult({ finalText: '', toolSteps, toolsUsed, stepMessages, flow });
+    return finish({ finalText: '', toolSteps, toolsUsed, stepMessages, flow });
   }
 }

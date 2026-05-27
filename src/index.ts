@@ -15,10 +15,11 @@ import { ContextCompressor } from './memory/context-compressor';
 import { Orchestrator } from './agents';
 import { startCLI } from './cli';
 import { WorkspaceManager } from './workspace';
-import { startApiServerIfEnabled } from './api';
+import { createApiRuntimeState, startApiServerIfEnabled } from './api';
 import { startTelegramIntegrationIfEnabled } from './integrations';
 import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
+import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -77,9 +78,12 @@ async function bootstrap(): Promise<void> {
 
   logger.info(`Semantic memory: ${semanticMemory.size()} chunks loaded`);
 
+  let schedulerEngine: SchedulerEngine | undefined;
+
   // Graceful shutdown — flush pending semantic memory writes
   const gracefulShutdown = async (signal: string): Promise<void> => {
     process.stderr.write(`\n[shutdown] ${signal} received — flushing memory...\n`);
+    schedulerEngine?.stop();
     await semanticMemory.forceSave();
     process.exit(0);
   };
@@ -150,6 +154,15 @@ async function bootstrap(): Promise<void> {
     installedDir: toolRegistry.installedToolsDir,
   });
 
+  const schedulerStore = new SchedulerStore(config.storage.dataDir);
+  const scheduler: SchedulerActionContext = {
+    store: schedulerStore,
+    runJobNow: async (idOrName: string) => {
+      if (!schedulerEngine) throw new Error('Scheduler engine is not initialized.');
+      return schedulerEngine.runNow(idOrName);
+    },
+  };
+
   // Orchestrator
   const orchestrator = new Orchestrator(
     sessions,
@@ -167,8 +180,56 @@ async function bootstrap(): Promise<void> {
       useReasoning: process.env['REASONING_ENABLED'] !== 'false',
       useSemanticCompression: process.env['SEMANTIC_MEMORY'] !== 'false',
       ...(mcpManager ? { mcpManager } : {}),
+      scheduler,
     }
   );
+
+  schedulerEngine = new SchedulerEngine({
+    store: schedulerStore,
+    workspace,
+    executor: async (job, context) => {
+      const state = await createApiRuntimeState({
+        providers,
+        skillRegistry,
+        sessions,
+        settings,
+        toolRegistry,
+        orchestrator,
+        ...(mcpManager ? { mcpManager } : {}),
+        scheduler,
+      });
+
+      let sessionId = context.sessionMode === 'last_active'
+        ? state.activeSessionId ?? undefined
+        : context.sessionId;
+
+      if (context.sessionMode === 'new_each_run' || (context.sessionMode === 'dedicated' && !sessionId)) {
+        const created = await sessions.create({
+          providerId: state.activeProvider.id,
+          model: state.activeModel,
+          activeSkills: skillRegistry.activeIds,
+          metadata: { scheduledJobId: job.id, scheduledJobName: job.name },
+        });
+        if (!created.ok) throw created.error;
+        sessionId = created.value.id;
+      }
+
+      const result = await orchestrator.turn({
+        userInput: `[Scheduled job: ${job.name}]\n${job.prompt}`,
+        provider: state.activeProvider,
+        model: state.activeModel,
+        ...(sessionId ? { sessionId } : {}),
+      });
+
+      return {
+        output: result.assistantText,
+        ...(result.toolsUsed ? { toolsUsed: result.toolsUsed } : {}),
+        ...(result.toolResults ? { toolResults: result.toolResults } : {}),
+        sessionId: result.session.id,
+      };
+    },
+  });
+  await schedulerEngine.start();
 
   await startApiServerIfEnabled({
     providers,
@@ -178,6 +239,7 @@ async function bootstrap(): Promise<void> {
     toolRegistry,
     orchestrator,
     ...(mcpManager ? { mcpManager } : {}),
+    scheduler,
   });
 
   await startTelegramIntegrationIfEnabled({
@@ -188,6 +250,7 @@ async function bootstrap(): Promise<void> {
     toolRegistry,
     orchestrator,
     ...(mcpManager ? { mcpManager } : {}),
+    scheduler,
   }, config.storage.dataDir);
 
   // CLI
@@ -199,6 +262,7 @@ async function bootstrap(): Promise<void> {
     toolRegistry,
     orchestrator,
     ...(mcpManager ? { mcpManager } : {}),
+    scheduler,
   });
 }
 

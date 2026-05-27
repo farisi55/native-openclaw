@@ -5,6 +5,7 @@ import type { SessionManager } from '../storage/session-manager';
 import type { SettingsManager } from '../storage/settings-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { McpManager } from '../mcp';
+import type { SchedulerActionContext } from '../scheduler';
 
 export interface ApiConfig {
   enabled: boolean;
@@ -21,6 +22,7 @@ export interface ApiDependencies {
   toolRegistry: ToolRegistry;
   orchestrator: Orchestrator;
   mcpManager?: McpManager;
+  scheduler?: SchedulerActionContext;
 }
 
 export interface ApiRuntimeState {

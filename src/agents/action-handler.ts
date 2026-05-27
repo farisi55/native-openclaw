@@ -20,6 +20,7 @@ import type { McpManager } from '../mcp';
 import { validateMcpConfigFile } from '../mcp';
 import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
+import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -36,6 +37,8 @@ export interface ActionContext {
   activeSessionId: string | null;
   /** Optional MCP manager for MCP install/add natural-language actions. */
   mcpManager?: McpManager;
+  /** Optional scheduler action context for natural-language cronjob management. */
+  scheduler?: SchedulerActionContext;
   /** Called when the active session must be cleared (e.g. after delete). */
   onSessionCleared: () => void;
 }
@@ -284,6 +287,11 @@ export async function handleAction(
   ctx: ActionContext
 ): Promise<ActionResult> {
   const trimmed = input.trim();
+
+  if (ctx.scheduler) {
+    const schedulerAction = await handleSchedulerText(trimmed, ctx.scheduler, 'system');
+    if (schedulerAction.handled) return schedulerAction;
+  }
 
   try {
     const workspaceAction = await handleWorkspaceAction(trimmed);
