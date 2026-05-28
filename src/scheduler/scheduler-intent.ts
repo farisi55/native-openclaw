@@ -63,7 +63,9 @@ function nameFromInput(input: string, scheduleType: ScheduleType): string {
   if (lower.includes('berita') && lower.includes('arsenal')) {
     return lower.includes('email') ? 'berita-arsenal-email' : 'berita-arsenal';
   }
-  if (lower.includes('harga emas')) return `report-harga-emas-${scheduleType === 'daily' ? 'daily' : scheduleType}`;
+  if (lower.includes('harga emas') || lower.includes('gold price')) {
+    return `report-harga-emas-${scheduleType === 'daily' ? 'daily' : scheduleType}`;
+  }
 
   const reminderFor = /(?:meeting|rapat)(?:\s+dengan\s+([a-z0-9 _-]+))?/i.exec(input);
   if (lower.includes('reminder') || lower.includes('ingatkan')) {
@@ -90,8 +92,11 @@ function promptFromInput(input: string): string {
     return `Kirim email reminder bahwa ${reminder[1].trim().replace(/[.。]+$/, '')}.`;
   }
 
-  if (lower.includes('harga emas') && /report|laporan/i.test(input)) {
-    return 'Kirim report harga emas hari ini melalui email menggunakan data terbaru.';
+  if (lower.includes('harga emas') || lower.includes('gold price')) {
+    if (asksEmail) {
+      return 'Cari harga emas terbaru menggunakan web-fetch dari sumber terpercaya. Ringkas data harga, trend, dan informasi relevan dalam bahasa Indonesia. Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit. Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.';
+    }
+    return 'Cari harga emas terbaru menggunakan web-fetch dari sumber terpercaya. Tampilkan data harga, trend, dan informasi relevan dalam bahasa Indonesia.';
   }
 
   if (lower.includes('berita ai')) {
@@ -174,7 +179,7 @@ function intervalMetadata(input: string): { intervalMs: number; description: str
 
 function relativeDelay(input: string): { delayMs: number; description: string } | null {
   const match =
-    /\b(\d+)\s*(menit|jam)\s+(?:lagi|dari\s+sekarang)\b/i.exec(input) ??
+    /\b(\d+)\s*(menit|minute|minutes|jam|hour|hours)\s+(?:lagi|dari\s+sekarang)\b/i.exec(input) ??
     /\bin\s+(\d+)\s*(minutes?|hours?)\b/i.exec(input);
   if (!match?.[1] || !match[2]) return null;
 
@@ -191,7 +196,7 @@ function taskSummaryFromInput(input: string): string | undefined {
   if (lower.includes('berita') && lower.includes('arsenal') && /\b(?:email|e-mail|mail)\b/i.test(input)) {
     return 'cari berita terbaru Arsenal dan kirim ke email default Anda';
   }
-  if (lower.includes('harga emas') && /\b(?:email|e-mail|mail)\b/i.test(input)) {
+  if ((lower.includes('harga emas') || lower.includes('gold price')) && /\b(?:email|e-mail|mail)\b/i.test(input)) {
     return 'kirim report harga emas ke email default Anda';
   }
   if (lower.includes('reminder')) {
@@ -201,7 +206,13 @@ function taskSummaryFromInput(input: string): string | undefined {
 }
 
 export function looksLikeSchedulerRequest(input: string): boolean {
-  return /\b(cronjob|cron|job|jobs|jadwal|jadwalkan|schedule|scheduler|reminder|ingatkan\s+saya|kirimkan\s+saya|setiap\s+jam|setiap\s+hari|menit\s+lagi|jam\s+lagi|hapus\s+cronjob|lihat\s+(?:semua\s+)?cronjob|list\s+cronjob|disable\s+cronjob|enable\s+cronjob)\b/i.test(input);
+  if (/\b(cronjob|cron|jadwal|jadwalkan|schedule|scheduler|reminder|ingatkan\s+saya)\b/i.test(input)) return true;
+  if (/\b(setiap\s+jam|setiap\s+hari|menit\s+lagi|jam\s+lagi|hapus\s+cronjob|lihat\s+(?:semua\s+)?cronjob|list\s+cronjob|disable\s+cronjob|enable\s+cronjob)\b/i.test(input)) return true;
+  if (/\b\d+\s*(?:menit|jam|minutes?|hours?)\s+(?:lagi|dari\s+sekarang|from\s+now)\b/i.test(input)) return true;
+  if (/\bin\s+\d+\s*(?:minutes?|hours?)\b/i.test(input)) return true;
+  if (/\b(?:di)?kirimkan?\b/i.test(input) && /\b(?:nanti|lagi|dari\s+sekarang|in\s+\d+|menit|jam)\b/i.test(input)) return true;
+  if (/\bsend\s+me\b/i.test(input) && /\b(?:in\s+\d+|later|nanti)\b/i.test(input)) return true;
+  return false;
 }
 
 function listFilter(input: string): SchedulerListFilter {
@@ -223,6 +234,7 @@ function isListIntent(input: string): boolean {
 
 function isCreateIntent(input: string): boolean {
   return (
+    /\b(?:lihat|list|daftar|tampilkan|show|apa\s+saja)\b/i.test(input) ? false :
     /\b(?:buat|buatkan|tambahkan|create|add)\s+(?:cronjob|cron|job|schedule|reminder)\b/i.test(input) ||
     /\b(?:buat\s+job\s+baru|cronjob\s+baru|new\s+cronjob|new\s+job)\b/i.test(input) ||
     /\bitu\s+(?:akan\s+)?jadi\s+cronjob\b/i.test(input) ||
@@ -233,7 +245,10 @@ function isCreateIntent(input: string): boolean {
     /\bingatkan\s+saya\b/i.test(input) ||
     /\b(?:kirim|kirimkan|send)\s+(?:setiap|every)\b/i.test(input) ||
     /\b(?:kirim|kirimkan|send)\s+(?:email\s+)?reminder\b/i.test(input) ||
-    /\b(?:kirimkan\s+saya|send\s+me)\b[\s\S]*\b(?:nanti|\d+\s*(?:menit|jam)\s+lagi|in\s+\d+\s*(?:minutes?|hours?))\b/i.test(input) ||
+    /\b(?:(?:di)?kirimkan?|send\s+me)\b[\s\S]{0,60}\b(?:nanti|\d+\s*(?:menit|jam)\s+(?:lagi|dari\s+sekarang)|in\s+\d+\s*(?:minutes?|hours?))\b/i.test(input) ||
+    /\bsaya\s+ingin\s+di(?:kirim|kirimkan)\b[\s\S]*\b\d+\s*(?:menit|jam)\b/i.test(input) ||
+    /\bdi(?:kirim|kirimkan)\b[\s\S]*\b\d+\s*(?:menit|jam)\s+(?:lagi|dari\s+sekarang)\b/i.test(input) ||
+    /\bsend\s+(?:email|me)\s+in\s+\d+\s*(?:minutes?|hours?)\b/i.test(input) ||
     /\bsend\s+email\s+(?:at|in)\b/i.test(input) ||
     /\bsetiap\s+hari\s+jam\s+\d{1,2}(?:[.:]\d{2})?\b/i.test(input) ||
     /\bhari\s+ini\s+jam\s+\d{1,2}(?:[.:]\d{2})?\b[\s\S]*\b(?:mengingatkan|reminder|meeting|rapat)\b/i.test(input)

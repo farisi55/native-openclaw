@@ -91,13 +91,12 @@ function filterJobs(jobs: ScheduledJob[], filter: SchedulerListFilter): Schedule
 }
 
 function numberedJobLine(job: ScheduledJob, index: number, includeStatus: boolean): string {
-  const next = job.nextRunAt ?? '-';
   const status = includeStatus ? `   Status: ${job.enabled ? 'enabled' : 'disabled'}\n` : '';
   return [
     `${index + 1}. ${job.name}`,
     status.trimEnd(),
     `   Jadwal: ${scheduleDescription(job)}`,
-    `   Next run: ${next}`,
+    `   Next run: ${formatNextRun(job)}`,
   ].filter(Boolean).join('\n');
 }
 
@@ -169,7 +168,7 @@ export function formatJobDetails(job: ScheduledJob, lastRun?: ScheduledJobRun): 
     `ID: ${job.id}`,
     `Status: ${job.enabled ? 'enabled' : 'disabled'}`,
     `Jadwal: ${scheduleDescription(job)}`,
-    `Next run: ${job.nextRunAt ?? '-'}`,
+    `Next run: ${formatNextRun(job)}`,
     `Run count: ${job.runCount}`,
     `Failure count: ${job.failureCount}`,
     `Prompt: ${job.prompt}`,

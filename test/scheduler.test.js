@@ -14,6 +14,7 @@ const {
   SchedulerStore,
   handleCronCommand,
   handleSchedulerText,
+  looksLikeSchedulerRequest,
   parseSchedulerIntent,
 } = require('../dist/scheduler');
 
@@ -105,6 +106,32 @@ test('parses relative time email reminder cronjob', () => {
   assert.equal(intent.scheduleType, 'once');
   assert.ok(intent.runAt);
   assert.ok(Math.abs(new Date(intent.runAt).getTime() - (now.getTime() + 10 * 60_000)) < 1000);
+});
+
+test('parses passive relative-time harga emas email cronjob requests', () => {
+  const now = new Date('2026-05-27T08:00:00.000Z');
+  const cases = [
+    ['saya ingin dikirimkan harga emas 5 menit dari sekarang ke email', 5],
+    ['saya ingin dikirimkan harga emas 5 menit dari sekarang, ke email', 5],
+    ['dikirimkan harga emas 10 menit dari sekarang ke email', 10],
+    ['tolong kirimkan harga emas 5 menit lagi ke email', 5],
+    ['kirimkan saya harga emas 5 menit lagi ke email', 5],
+    ['send me gold price in 5 minutes to email', 5],
+  ];
+
+  for (const [input, minutes] of cases) {
+    assert.equal(looksLikeSchedulerRequest(input), true, input);
+    const intent = parseSchedulerIntent(input, { now, timezone: 'Asia/Jakarta' });
+    assert.equal(intent.intent, 'create', input);
+    assert.equal(intent.scheduleType, 'once', input);
+    assert.ok(intent.runAt, input);
+    assert.ok(
+      Math.abs(new Date(intent.runAt).getTime() - (now.getTime() + minutes * 60_000)) < 1000,
+      input
+    );
+    assert.match(intent.prompt ?? '', /harga emas/i, input);
+    assert.match(intent.prompt ?? '', /brevo-email/i, input);
+  }
 });
 
 test('parses daily email report cronjob', () => {
@@ -221,6 +248,27 @@ test('lists stored cronjobs', async () => {
   });
 });
 
+test('/cron list and get format next run in scheduler timezone', async () => {
+  await withStore(async (store) => {
+    await store.createJob({
+      name: 'report-harga-emas-once',
+      scheduleType: 'once',
+      runAt: '2026-05-28T03:59:53.766Z',
+      timezone: 'Asia/Jakarta',
+      prompt: 'Kirim report harga emas.',
+      source: 'cli',
+    });
+
+    const list = await handleCronCommand(['list'], { store }, 'cli');
+    assert.match(list, /Next run: 2026-05-28 10:59 Asia\/Jakarta/);
+    assert.doesNotMatch(list, /2026-05-28T03:59:53\.766Z/);
+
+    const details = await handleCronCommand(['get', 'report-harga-emas-once'], { store }, 'cli');
+    assert.match(details, /Next run: 2026-05-28 10:59 Asia\/Jakarta/);
+    assert.doesNotMatch(details, /2026-05-28T03:59:53\.766Z/);
+  });
+});
+
 test('updates cronjob schedule time', async () => {
   await withStore(async (store) => {
     await store.createJob({
@@ -302,6 +350,93 @@ test('executes due job and records run history', async () => {
     assert.equal(runs.length, 1);
     assert.equal(runs[0].status, 'success');
     assert.equal(runs[0].output, 'done');
+  });
+});
+
+test('startup skip policy runs missed once job that never executed', async () => {
+  await withStore(async (store) => {
+    const job = await store.createJob({
+      name: 'startup-once-job',
+      scheduleType: 'once',
+      runAt: new Date(Date.now() - 1000).toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'run after restart',
+      source: 'system',
+    });
+
+    let executed = false;
+    const engine = new SchedulerEngine({
+      store,
+      misfirePolicy: 'skip',
+      tickMs: 60_000,
+      executor: async () => {
+        executed = true;
+        return { output: 'done' };
+      },
+    });
+
+    await engine.start();
+    engine.stop();
+
+    const runs = await store.listRuns(job.id);
+    const updated = await store.getJob(job.id);
+    assert.equal(executed, true);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].status, 'success');
+    assert.equal(updated.runCount, 1);
+  });
+});
+
+test('tick can start newly due job while another job is running', async () => {
+  await withStore(async (store) => {
+    await store.createJob({
+      name: 'slow-job',
+      scheduleType: 'once',
+      runAt: new Date(Date.now() - 1000).toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'slow',
+      source: 'system',
+    });
+
+    let release;
+    let slowStarted = false;
+    let fastRan = false;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const engine = new SchedulerEngine({
+      store,
+      maxConcurrentJobs: 2,
+      executor: async (job) => {
+        if (job.name === 'slow-job') {
+          slowStarted = true;
+          await gate;
+          return { output: 'slow done' };
+        }
+        if (job.name === 'fast-job') {
+          fastRan = true;
+          return { output: 'fast done' };
+        }
+        return { output: 'done' };
+      },
+    });
+
+    const firstTick = engine.tick(new Date());
+    await delay(25);
+    assert.equal(slowStarted, true);
+
+    await store.createJob({
+      name: 'fast-job',
+      scheduleType: 'once',
+      runAt: new Date(Date.now() - 1000).toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'fast',
+      source: 'system',
+    });
+
+    await engine.tick(new Date());
+    assert.equal(fastRan, true);
+
+    release();
+    await firstTick;
   });
 });
 

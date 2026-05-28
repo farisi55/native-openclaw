@@ -129,7 +129,6 @@ export class SchedulerEngine {
   private readonly maxConcurrentJobs: number;
   private readonly runningJobIds = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
-  private ticking = false;
 
   constructor(options: SchedulerEngineOptions) {
     this.store = options.store;
@@ -182,21 +181,32 @@ export class SchedulerEngine {
   }
 
   async tick(now = new Date()): Promise<void> {
-    if (!this.enabled || this.ticking) return;
-    this.ticking = true;
+    if (!this.enabled) return;
+
+    let due: ScheduledJob[];
     try {
-      const due = await this.store.getDueJobs(now);
-      const runs: Array<Promise<ScheduledJobRun>> = [];
-      for (const job of due) {
-        if (this.runningJobIds.size >= this.maxConcurrentJobs) {
-          await this.recordSkipped(job, 'Scheduler concurrency limit reached.');
-          continue;
-        }
-        runs.push(this.runJob(job));
+      due = await this.store.getDueJobs(now);
+    } catch (err) {
+      logger.warn('scheduler: getDueJobs failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const runs: Array<Promise<ScheduledJobRun>> = [];
+    for (const job of due) {
+      if (this.runningJobIds.has(job.id)) {
+        continue;
       }
+      if (this.runningJobIds.size >= this.maxConcurrentJobs) {
+        await this.recordSkipped(job, 'Scheduler concurrency limit reached.');
+        continue;
+      }
+      runs.push(this.runJob(job));
+    }
+
+    if (runs.length > 0) {
       await Promise.all(runs);
-    } finally {
-      this.ticking = false;
     }
   }
 
@@ -207,10 +217,35 @@ export class SchedulerEngine {
   }
 
   private async handleStartupMisfires(): Promise<void> {
-    if (this.misfirePolicy === 'disabled' || this.misfirePolicy === 'run_once') return;
+    if (this.misfirePolicy === 'disabled') return;
     const now = new Date();
     const due = await this.store.getDueJobs(now);
     for (const job of due) {
+      if (this.misfirePolicy === 'run_once') {
+        await this.runJob(job).catch((err) => {
+          logger.warn('startup misfire run failed', {
+            jobId: job.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        continue;
+      }
+
+      if (this.misfirePolicy === 'skip' && job.scheduleType === 'once' && job.runCount === 0) {
+        logger.info('startup: running missed once-job (never executed before)', {
+          jobId: job.id,
+          name: job.name,
+          scheduledFor: job.runAt,
+        });
+        await this.runJob(job).catch((err) => {
+          logger.warn('startup missed once-job failed', {
+            jobId: job.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        continue;
+      }
+
       await this.recordSkipped(job, 'Missed while scheduler was offline.');
     }
   }
