@@ -88,3 +88,9 @@ export function getEnvBool(key: string, fallback?: boolean): boolean {
   }
   return ['true', '1', 'yes'].includes(raw.trim().toLowerCase());
 }
+
+export const SELF_IMPROVING = getOptionalEnv('SELF_IMPROVING') === 'true';
+export const SELF_IMPROVING_EVAL_THRESHOLD = parseInt(
+  getOptionalEnv('SELF_IMPROVING_EVAL_THRESHOLD') ?? '10',
+  10
+);

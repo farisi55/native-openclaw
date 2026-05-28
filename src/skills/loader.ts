@@ -48,6 +48,22 @@ function fileToId(fileName: string): string {
     .replace(/[^a-z0-9-_]/g, '');
 }
 
+async function listMarkdownFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listMarkdownFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && extname(entry.name).toLowerCase() === '.md') {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 /**
@@ -65,9 +81,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<Resul
     return { ok: true, value: [] };
   }
 
-  let entries: string[];
+  let mdFiles: string[];
   try {
-    entries = await readdir(skillsDir);
+    mdFiles = await listMarkdownFiles(skillsDir);
   } catch (cause) {
     return {
       ok: false,
@@ -75,7 +91,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<Resul
     };
   }
 
-  const mdFiles = entries.filter((e) => extname(e).toLowerCase() === '.md');
   if (mdFiles.length === 0) {
     logger.debug('no .md skill files found', { skillsDir });
     return { ok: true, value: [] };
@@ -85,17 +100,18 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<Resul
   const errors: string[] = [];
 
   for (const fileName of mdFiles) {
-    const filePath = join(skillsDir, fileName);
+    const filePath = fileName;
+    const displayName = basename(filePath);
     let source: string;
 
     try {
       source = await readFile(filePath, 'utf-8');
     } catch (cause) {
-      errors.push(`Cannot read "${fileName}": ${String(cause)}`);
+      errors.push(`Cannot read "${displayName}": ${String(cause)}`);
       continue;
     }
 
-    const parsed = parseSkillFile(source, fileName);
+    const parsed = parseSkillFile(source, displayName);
     if (!parsed.ok) {
       errors.push(parsed.error.message);
       continue;

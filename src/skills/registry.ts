@@ -49,6 +49,18 @@ export class SkillRegistry {
     logger.debug('skill registered', { id: skill.id });
   }
 
+  /**
+   * Register a skill dynamically and activate it immediately.
+   * Existing skills with the same id are overwritten.
+   */
+  registerAndActivate(skill: Skill): void {
+    this._skills.set(skill.id, skill);
+    if (!this._activeIds.includes(skill.id)) {
+      this._activeIds.push(skill.id);
+    }
+    logger.info('skill hot-registered', { id: skill.id, name: skill.name });
+  }
+
   // ── Read ───────────────────────────────────────────────────────────────────
 
   all(): Skill[] {

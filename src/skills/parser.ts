@@ -27,6 +27,10 @@ export interface SkillFrontmatter {
   priority: number;
   /** Whether the skill is active. Default: true. */
   enabled: boolean;
+  auto_generated?: boolean;
+  created_at?: string;
+  usage_count?: number;
+  success_rate?: number;
   /** Raw key→string pairs from the frontmatter block. */
   raw: Record<string, string>;
 }
@@ -97,8 +101,10 @@ function buildFrontmatter(raw: Record<string, string>, fileStem: string): SkillF
 
   const enabledRaw = raw['enabled'];
   const enabled = enabledRaw !== undefined ? parseScalar(enabledRaw) !== false : true;
+  const usageCount = raw['usage_count'] !== undefined ? Number(raw['usage_count']) : undefined;
+  const successRate = raw['success_rate'] !== undefined ? Number(raw['success_rate']) : undefined;
 
-  return {
+  const frontmatter: SkillFrontmatter = {
     name,
     description,
     version,
@@ -107,6 +113,11 @@ function buildFrontmatter(raw: Record<string, string>, fileStem: string): SkillF
     enabled: Boolean(enabled),
     raw,
   };
+  if (raw['auto_generated'] !== undefined) frontmatter.auto_generated = parseScalar(raw['auto_generated']) === true;
+  if (raw['created_at']) frontmatter.created_at = raw['created_at'];
+  if (usageCount !== undefined && !isNaN(usageCount)) frontmatter.usage_count = usageCount;
+  if (successRate !== undefined && !isNaN(successRate)) frontmatter.success_rate = successRate;
+  return frontmatter;
 }
 
 // ─── Main parser ──────────────────────────────────────────────────────────────

@@ -32,6 +32,13 @@ import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
 import { extractMemory } from './memory-extractor';
+import {
+  SelfImprovingEngine,
+  SkillEvaluator,
+  SkillExtractor,
+  SkillQualityTracker,
+  SkillWriter,
+} from '../skills';
 import type { SystemContextInput } from './system-context';
 import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { WorkspaceManager } from '../workspace';
@@ -109,6 +116,16 @@ export interface OrchestratorOptions {
    * Optional scheduler action context for cronjob management actions.
    */
   scheduler?: SchedulerActionContext;
+
+  /**
+   * Enable Self-Improving Skill Loop (Hermes-style).
+   */
+  selfImproving?: boolean;
+
+  /**
+   * How many tasks between self-evaluation passes. Default: 10.
+   */
+  selfImprovingEvalThreshold?: number;
 }
 
 export interface TurnInput {
@@ -146,6 +163,7 @@ export class Orchestrator {
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
+  private readonly selfImprovingEngine?: SelfImprovingEngine;
   readonly workspace: WorkspaceManager; // PERF [E1]
   private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler'>>;
 
@@ -181,10 +199,28 @@ export class Orchestrator {
       maxToolSteps: opts.maxToolSteps ?? 3,
       useReasoning: opts.useReasoning ?? true,
       useSemanticCompression: opts.useSemanticCompression ?? true,
+      selfImproving: opts.selfImproving ?? false,
+      selfImprovingEvalThreshold: opts.selfImprovingEvalThreshold ?? 10,
     };
 
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
+
+    if (opts.selfImproving) {
+      const primaryProvider = this.router.bestProvider?.() ?? null;
+      if (primaryProvider) {
+        const extractor = new SkillExtractor(primaryProvider);
+        const writer = new SkillWriter('skills/auto-generated');
+        const tracker = new SkillQualityTracker('data', opts.selfImprovingEvalThreshold ?? 10);
+        const evaluator = new SkillEvaluator(primaryProvider, writer, tracker);
+        this.selfImprovingEngine = new SelfImprovingEngine(extractor, writer, tracker, evaluator, skills);
+        tracker.load().catch((err: unknown) => {
+          logger.warn('tracker load error', { error: err instanceof Error ? err.message : String(err) });
+        });
+      } else {
+        logger.warn('self-improving disabled: no provider available for extraction');
+      }
+    }
   }
 
   private async ensureWorkspaceReady(): Promise<void> {
@@ -589,6 +625,22 @@ export class Orchestrator {
       ...(loopResult.toolResults ? { toolResults: loopResult.toolResults } : {}),
       usedFallback,
     };
+
+    if (this.opts.selfImproving && this.selfImprovingEngine) {
+      this.selfImprovingEngine
+        .processCompletedTurn({
+          userInput: input.userInput,
+          agentResponse: loopResult.finalText,
+          toolsUsed: loopResult.toolsUsed ?? [],
+          stepCount: loopResult.toolSteps ?? 0,
+          sessionId: session.id,
+        })
+        .catch((err: unknown) => {
+          logger.warn('self-improving error (non-fatal)', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
 
     if (usedFallback) {
       result.fallbackProvider = routedProviderId;

@@ -3,6 +3,7 @@ dist/
 .data/
 data/
 .env
+skills/auto-generated/
 *.js.map
 *.d.ts.map
 *.zip

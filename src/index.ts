@@ -4,6 +4,7 @@
  */
 
 import { loadConfig } from './config';
+import { SELF_IMPROVING, SELF_IMPROVING_EVAL_THRESHOLD } from './config/env';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
 import { SkillRegistry } from './skills';
@@ -179,6 +180,8 @@ async function bootstrap(): Promise<void> {
       maxTokens: config.agent.maxTokens,
       useReasoning: process.env['REASONING_ENABLED'] !== 'false',
       useSemanticCompression: process.env['SEMANTIC_MEMORY'] !== 'false',
+      selfImproving: SELF_IMPROVING,
+      selfImprovingEvalThreshold: SELF_IMPROVING_EVAL_THRESHOLD,
       ...(mcpManager ? { mcpManager } : {}),
       scheduler,
     }
