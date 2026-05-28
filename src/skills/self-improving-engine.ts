@@ -20,7 +20,8 @@ export class SelfImprovingEngine {
     private readonly writer: SkillWriter,
     private readonly tracker: SkillQualityTracker,
     private readonly evaluator: SkillEvaluator,
-    private readonly registry: SkillRegistry
+    private readonly registry: SkillRegistry,
+    private readonly skillsBaseDir = 'skills'
   ) {}
 
   async processCompletedTurn(input: SkillExtractionInput): Promise<void> {
@@ -35,6 +36,7 @@ export class SelfImprovingEngine {
           if (loaded.ok) {
             this.registry.registerAndActivate(loaded.value);
             skillId = loaded.value.id;
+            await this.tracker.registerSkill(loaded.value.id, loaded.value.name, filePath);
             logger.info('new skill extracted and registered', {
               id: loaded.value.id,
               name: loaded.value.name,
@@ -54,7 +56,7 @@ export class SelfImprovingEngine {
       if (await this.tracker.shouldRunEvaluation()) {
         logger.info('running self-evaluation pass');
         await this.evaluator.evaluate(this.registry.all());
-        await this.registry.load({ skillsDir: 'skills' });
+        await this.registry.load({ skillsDir: this.skillsBaseDir });
         await this.tracker.resetEvaluationCounter();
       }
     } catch (err) {

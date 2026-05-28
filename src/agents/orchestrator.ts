@@ -44,7 +44,7 @@ import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { WorkspaceManager } from '../workspace';
 import type { SchedulerActionContext } from '../scheduler';
 import { createLogger } from '../utils/logger';
-import { getOptionalEnv } from '../config/env';
+import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 
 const logger = createLogger('agent:orchestrator');
 
@@ -189,6 +189,8 @@ export class Orchestrator {
     this.mcpManager = opts.mcpManager;
     this.scheduler = opts.scheduler;
     this.workspace = workspace;
+    const selfImproving = opts.selfImproving ?? getEnvBool('SELF_IMPROVING', false);
+    const selfImprovingEvalThreshold = opts.selfImprovingEvalThreshold ?? getEnvInt('SELF_IMPROVING_EVAL_THRESHOLD', 10);
 
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
@@ -199,19 +201,19 @@ export class Orchestrator {
       maxToolSteps: opts.maxToolSteps ?? 3,
       useReasoning: opts.useReasoning ?? true,
       useSemanticCompression: opts.useSemanticCompression ?? true,
-      selfImproving: opts.selfImproving ?? false,
-      selfImprovingEvalThreshold: opts.selfImprovingEvalThreshold ?? 10,
+      selfImproving,
+      selfImprovingEvalThreshold,
     };
 
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
 
-    if (opts.selfImproving) {
+    if (selfImproving) {
       const primaryProvider = this.router.bestProvider?.() ?? null;
       if (primaryProvider) {
         const extractor = new SkillExtractor(primaryProvider);
         const writer = new SkillWriter('skills/auto-generated');
-        const tracker = new SkillQualityTracker('data', opts.selfImprovingEvalThreshold ?? 10);
+        const tracker = new SkillQualityTracker('data', selfImprovingEvalThreshold);
         const evaluator = new SkillEvaluator(primaryProvider, writer, tracker);
         this.selfImprovingEngine = new SelfImprovingEngine(extractor, writer, tracker, evaluator, skills);
         tracker.load().catch((err: unknown) => {

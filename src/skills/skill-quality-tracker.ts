@@ -93,6 +93,23 @@ export class SkillQualityTracker {
     logger.debug('skill quality task recorded', { skillId, success, taskCounter: this.store.taskCounter });
   }
 
+  async registerSkill(id: string, name: string, filePath: string): Promise<void> {
+    await this.load();
+    if (!this.store.skills[id]) {
+      const now = new Date().toISOString();
+      this.store.skills[id] = {
+        name,
+        filePath,
+        usageCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        lastUsed: now,
+        createdAt: now,
+      };
+      await this.save();
+    }
+  }
+
   async shouldRunEvaluation(): Promise<boolean> {
     await this.load();
     const threshold = Math.max(1, this.evaluationThreshold);

@@ -193,6 +193,8 @@ export class SchedulerEngine {
       return;
     }
 
+    if (due.length === 0) return;
+
     const runs: Array<Promise<ScheduledJobRun>> = [];
     for (const job of due) {
       if (this.runningJobIds.has(job.id)) {
@@ -206,7 +208,7 @@ export class SchedulerEngine {
     }
 
     if (runs.length > 0) {
-      await Promise.all(runs);
+      await Promise.allSettled(runs);
     }
   }
 
@@ -231,8 +233,8 @@ export class SchedulerEngine {
         continue;
       }
 
-      if (this.misfirePolicy === 'skip' && job.scheduleType === 'once' && job.runCount === 0) {
-        logger.info('startup: running missed once-job (never executed before)', {
+      if (this.misfirePolicy === 'skip' && job.scheduleType === 'once' && (job.runCount ?? 0) === 0) {
+        logger.info('startup: running missed once-job (never executed)', {
           jobId: job.id,
           name: job.name,
           scheduledFor: job.runAt,

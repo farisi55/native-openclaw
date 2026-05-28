@@ -3,6 +3,7 @@ dist/
 workspace/
 .data/
 data/
+data/skill-quality.json
 .env
 skills/auto-generated/
 *.js.map

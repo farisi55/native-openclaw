@@ -27,7 +27,9 @@ If the interaction is NOT worth extracting (simple Q&A, single-step, no reusable
 Extraction criteria - extract ONLY if ALL are true:
 - The task required more than one reasoning step OR used at least one tool
 - The workflow could be reused for similar future tasks
-- The skill adds value beyond what the agent already knows from training`;
+- The skill adds value beyond what the agent already knows from training
+
+Special focus: If the user used an unusual or informal phrase to trigger a scheduled task (for example, "nanti kamu kirim ya", "bangunkan saya", "balas email nanti"), extract a skill that documents this phrase pattern so the agent can recognize it in future sessions.`;
 
 export interface SkillExtractionInput {
   userInput: string;
