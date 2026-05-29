@@ -80,7 +80,9 @@ function requiresCurrentData(input: string, topic: string | undefined): boolean 
 }
 
 function schedulerMetadataFromInput(input: string): Record<string, unknown> {
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = {
+    originalUserInput: input.trim(),
+  };
   const recipientEmail = extractEmailAddress(input);
   const emailRequired = asksForEmail(input);
   const topic = topicFromInput(input);

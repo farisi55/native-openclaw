@@ -48,13 +48,44 @@ Respond with ONLY valid JSON (no markdown fences, no explanation):
 Only respond with { "shouldExtract": false } if the user used an already-standard phrase like "jadwalkan", "kirimkan saya", "ingatkan saya", or "schedule".
 Always extract for informal phrases like "nanti kamu kirim ya", "bangunkan saya", "balas nanti", "kabari saya", "follow up besok", etc.`;
 
+const SCHEDULED_JOB_EXTRACTION_PROMPT = `You are a scheduled workflow extraction engine for an AI agent.
+
+The completed interaction came from Native OpenClaw's internal scheduler. Analyze it and extract a reusable scheduler/workflow skill ONLY if the job completed successfully and represents a repeatable procedure.
+
+If YES, respond with ONLY valid JSON (no markdown fences, no explanation):
+{
+  "shouldExtract": true,
+  "name": "<concise skill name, max 50 chars>",
+  "description": "<one sentence describing when to use this scheduled workflow, max 120 chars>",
+  "tags": ["scheduler", "<workflow-type>"],
+  "body": "<markdown body, max 800 chars>"
+}
+
+If not reusable, respond ONLY with:
+{ "shouldExtract": false }
+
+For successful scheduled email/news jobs, include:
+- Trigger phrase and schedule intent
+- Data gathering tool usage such as web-fetch
+- Email content generation
+- brevo-email delivery
+- Verification rule: never claim email sent unless Brevo confirms success.`;
+
 export interface SkillExtractionInput {
   userInput: string;
   agentResponse: string;
   toolsUsed: string[];
   stepCount: number;
-  sessionId: string;
+  sessionId?: string;
+  success?: boolean;
+  source?: 'chat' | 'api' | 'telegram' | 'scheduler';
   wasSchedulerAction?: boolean;
+  scheduledJobId?: string;
+  scheduledJobName?: string;
+  emailRequired?: boolean;
+  emailSent?: boolean;
+  error?: string;
+  metadata?: Record<string, unknown>;
   /**
    * Skills that were active and injected before this turn completed.
    * These are tracked for usage quality, but are not sent to the extractor.
@@ -95,8 +126,12 @@ export class SkillExtractor {
 
   async extract(input: SkillExtractionInput): Promise<ExtractedSkill | null> {
     const isComplex = input.toolsUsed.length > 0 || input.stepCount > 1;
-    const isSchedulerAction = input.wasSchedulerAction === true;
-    if (!isComplex && !isSchedulerAction) {
+    const isScheduledRun = input.source === 'scheduler';
+    const isSchedulerAction = input.wasSchedulerAction === true && !isScheduledRun;
+    const shouldExtractScheduledRun =
+      isScheduledRun && input.success !== false && (input.emailRequired === true || input.toolsUsed.length > 0);
+
+    if (!isComplex && !isSchedulerAction && !shouldExtractScheduledRun) {
       logger.debug('skipping extraction: interaction too simple', {
         sessionId: input.sessionId,
         toolsUsed: input.toolsUsed.length,
@@ -107,9 +142,14 @@ export class SkillExtractor {
 
     try {
       const model = await this.resolveModel();
+      const systemPrompt = shouldExtractScheduledRun
+        ? SCHEDULED_JOB_EXTRACTION_PROMPT
+        : isSchedulerAction
+          ? SCHEDULER_PHRASE_EXTRACTION_PROMPT
+          : EXTRACTION_SYSTEM_PROMPT;
       const response = await this.provider.chat({
         model,
-        systemPrompt: isSchedulerAction ? SCHEDULER_PHRASE_EXTRACTION_PROMPT : EXTRACTION_SYSTEM_PROMPT,
+        systemPrompt,
         temperature: 0,
         maxTokens: 512,
         messages: [
@@ -120,7 +160,15 @@ export class SkillExtractor {
               `Agent response:\n${input.agentResponse}`,
               `Tools used: ${input.toolsUsed.join(', ') || 'none'}`,
               `Step count: ${input.stepCount}`,
-              `Session id: ${input.sessionId}`,
+              `Session id: ${input.sessionId ?? 'unknown'}`,
+              `Source: ${input.source ?? 'chat'}`,
+              `Success: ${input.success ?? true}`,
+              input.scheduledJobId ? `Scheduled job id: ${input.scheduledJobId}` : '',
+              input.scheduledJobName ? `Scheduled job name: ${input.scheduledJobName}` : '',
+              input.emailRequired !== undefined ? `Email required: ${input.emailRequired}` : '',
+              input.emailSent !== undefined ? `Email sent: ${input.emailSent}` : '',
+              input.error ? `Error: ${input.error}` : '',
+              input.metadata ? `Metadata: ${JSON.stringify(input.metadata)}` : '',
             ].join('\n\n'),
           }),
         ],

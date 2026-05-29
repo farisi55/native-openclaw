@@ -181,6 +181,32 @@ test('scheduler action phrase can be extracted even with no tools', async () => 
   });
 });
 
+test('failed scheduled job records task but does not extract success skill', async () => {
+  await withTemp(async (root) => {
+    const parts = await createParts(root, providerReturning(extractionJson('Should Not Be Written')));
+
+    await parts.engine.processCompletedTurn({
+      userInput: 'kirimkan saya berita arsenal ke email saya',
+      agentResponse: 'Email was not sent.',
+      toolsUsed: ['web-fetch', 'brevo-email'],
+      stepCount: 2,
+      source: 'scheduler',
+      success: false,
+      wasSchedulerAction: true,
+      scheduledJobId: 'job-1',
+      scheduledJobName: 'berita-arsenal-email',
+      emailRequired: true,
+      emailSent: false,
+      error: 'fetch failed',
+    });
+
+    assert.equal((await parts.writer.listAutoSkills()).length, 0);
+    const quality = JSON.parse(await readFile(join(parts.dataDir, 'skill-quality.json'), 'utf-8'));
+    assert.equal(quality.taskCounter, 1);
+    assert.equal(Object.keys(quality.skills).length, 0);
+  });
+});
+
 test('invalid extractor JSON does not crash or write skills', async () => {
   await withTemp(async (root) => {
     const parts = await createParts(root, providerReturning('not valid json'));

@@ -31,7 +31,7 @@ const NO_TOOLS_MESSAGE =
   'Tool execution is currently unavailable because no tools are loaded. Please check that the app is running from the project root and that tools/installed contains enabled tool manifests.';
 
 const CURRENT_INFO_EMAIL_RE = /(hari ini|terbaru|current|latest|today|news|berita|harga|price|emas|gold|market|pasar)/i;
-const EMAIL_INTENT_RE = /\b(email|mail)\b|kirim\s+email|send\s+email/i;
+const EMAIL_ADDRESS_RE = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
 
 // SECURITY [B1]: network results must not be chained into privileged local execution.
 // Inserted after alias normalization so aliases are judged by the real registered tool name.
@@ -206,6 +206,87 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function extractRecipientEmail(input: string): string | undefined {
+  const matches = input.match(EMAIL_ADDRESS_RE) ?? [];
+  for (const match of matches) {
+    const normalized = match.trim().toLowerCase();
+    if (!isPlaceholderEmail(normalized)) return normalized;
+  }
+  return undefined;
+}
+
+export function userRequiresEmail(input: string): boolean {
+  const text = input.trim();
+  if (!text) return false;
+
+  const asksOnlyForDraft =
+    /\b(?:buat|bikin|tulis|create|write)\b[\s\S]{0,40}\bdraft\s+email\b/i.test(text) &&
+    !/\b(?:kirim|kirimkan|send|deliver|forward|teruskan)\b/i.test(text);
+  if (asksOnlyForDraft) return false;
+
+  if (/\bemail\s+it\s+to\s+me\b/i.test(text)) return true;
+  if (/\b(?:kirim|kirimkan|send|deliver|forward|teruskan)\s+(?:an?\s+)?email\b/i.test(text)) return true;
+  if (/\b(?:kirim|kirimkan|send|deliver|forward|teruskan)\b[\s\S]{0,120}\b(?:ke|to)\s+(?:my\s+)?(?:e-?mail|mail)\b/i.test(text)) return true;
+  if (/\b(?:kirim|kirimkan|send|deliver|forward|teruskan)\b[\s\S]{0,120}\b(?:email\s+saya|my\s+email)\b/i.test(text)) return true;
+  if (/\b(?:send|deliver|forward)\b[\s\S]{0,120}\bto\s+my\s+email\b/i.test(text)) return true;
+  if (/\b(?:kirim|kirimkan|send|deliver|forward|teruskan)\b[\s\S]{0,120}/i.test(text) && extractRecipientEmail(text)) return true;
+
+  return false;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function htmlFromPlainText(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph.trim()).replace(/\n/g, '<br>')}</p>`)
+    .join('\n');
+}
+
+export function extractEmailPayloadFromDraft(text: string): { subject: string; htmlContent: string } | null {
+  const parsed = safeJsonParse(text);
+  if (isPlainObject(parsed)) {
+    const subject = asString(parsed['subject']);
+    const htmlContent =
+      asString(parsed['htmlContent']) ??
+      asString(parsed['html']) ??
+      asString(parsed['bodyHtml']);
+    if (subject && htmlContent) return { subject, htmlContent };
+
+    const content = asString(parsed['content']) ?? asString(parsed['body']);
+    if (content) return extractEmailPayloadFromDraft(content);
+  }
+
+  const subjectMatch = /(?:^|\n)\s*(?:subject|subjek|judul)\s*:\s*(.+)$/im.exec(text);
+  const subject = subjectMatch?.[1]?.trim();
+  if (!subject) return null;
+  const subjectLine = subjectMatch?.[0] ?? '';
+
+  const fencedHtml = /```html\s*([\s\S]*?)```/i.exec(text)?.[1]?.trim();
+  if (fencedHtml) return { subject, htmlContent: fencedHtml };
+
+  const htmlLabel = /(?:isi\s*email\s*(?:\(html\))?|html\s*content|htmlContent|body\s*html)\s*:\s*([\s\S]+)/i.exec(text)?.[1]?.trim();
+  if (htmlLabel) {
+    const withoutFence = htmlLabel.replace(/^```(?:html)?/i, '').replace(/```$/i, '').trim();
+    return { subject, htmlContent: withoutFence };
+  }
+
+  const body = text
+    .replace(subjectLine, '')
+    .replace(/(?:^|\n)\s*(?:isi\s*email|body|konten)\s*:\s*/i, '\n')
+    .trim();
+  if (body.length >= 20) return { subject, htmlContent: htmlFromPlainText(body) };
+
+  return null;
+}
+
 export function normalizeToolName(toolName: string, availableTools: string[]): string {
   const trimmed = toolName.trim();
   if (availableTools.includes(trimmed)) return trimmed;
@@ -332,7 +413,7 @@ function shouldFetchBeforeBrevoEmail(messages: Message[], availableTools: string
   if (!availableTools.includes('web-fetch')) return false;
   if (toolsUsed.includes('web-fetch')) return false;
   const text = originalUserText(messages);
-  return EMAIL_INTENT_RE.test(text) && CURRENT_INFO_EMAIL_RE.test(text);
+  return userRequiresEmail(text) && CURRENT_INFO_EMAIL_RE.test(text);
 }
 
 function brevoFinalAnswer(toolResult: string): string {
@@ -469,15 +550,26 @@ function looksLikeStructuredToolCall(text: string, availableTools: string[]): bo
 function buildToolResultMessage(
   toolName: string,
   result: string,
-  options: { isScheduledEmailJob?: boolean; toolsUsed?: string[] } = {}
+  options: {
+    isScheduledEmailJob?: boolean;
+    emailRequired?: boolean;
+    recipientEmail?: string;
+    toolsUsed?: string[];
+  } = {}
 ): Message {
-  const { isScheduledEmailJob, toolsUsed = [] } = options;
+  const { isScheduledEmailJob, emailRequired, recipientEmail, toolsUsed = [] } = options;
 
   if (
-    isScheduledEmailJob &&
+    (isScheduledEmailJob || emailRequired) &&
     toolName === 'web-fetch' &&
     !toolsUsed.includes('brevo-email')
   ) {
+    const recipientRule = recipientEmail
+      ? `Use recipientEmail exactly: ${recipientEmail}.\n`
+      : 'Do NOT invent recipientEmail or senderEmail. Use only subject and htmlContent.\n';
+    const toolCallExample = recipientEmail
+      ? `{"type":"tool_call","tool":"brevo-email","input":{"subject":"<subject>","htmlContent":"<html content using the data above>","recipientEmail":"${recipientEmail}"}}\n`
+      : '{"type":"tool_call","tool":"brevo-email","input":{"subject":"<subject>","htmlContent":"<html content using the data above>"}}\n';
     return createMessage({
       role: 'user',
       content:
@@ -485,8 +577,8 @@ function buildToolResultMessage(
         'MANDATORY NEXT ACTION: You MUST now call the brevo-email tool.\n' +
         'Do NOT write a final_response. Do NOT summarize. Call brevo-email immediately.\n' +
         'Return ONLY this JSON:\n' +
-        '{"type":"tool_call","tool":"brevo-email","input":{"subject":"<subject>","htmlContent":"<html content using the data above>"}}\n' +
-        'Rules: Do NOT invent recipientEmail or senderEmail. Use only subject and htmlContent.',
+        toolCallExample +
+        `Rules: ${recipientRule}`,
     });
   }
 
@@ -585,6 +677,30 @@ function buildRepairPrompt(invalidText: string, availableTools: string[]): strin
   ].join('\n');
 }
 
+function buildBrevoToolCallPrompt(draftText: string, recipientEmail: string | undefined): string {
+  const recipientRule = recipientEmail
+    ? `- Include recipientEmail exactly: ${recipientEmail}.`
+    : '- Do not include recipientEmail; brevo-email will use BREVO_RECIPIENT_EMAIL.';
+
+  return [
+    'The user explicitly requested email delivery.',
+    'Your previous response did not execute brevo-email, so the email is NOT sent yet.',
+    'Convert the draft/content below into a brevo-email tool call.',
+    '',
+    'Return ONLY valid JSON in this exact shape:',
+    '{ "type": "tool_call", "tool": "brevo-email", "input": { "subject": "<subject>", "htmlContent": "<html content>" } }',
+    '',
+    'Rules:',
+    recipientRule,
+    '- Do not invent senderEmail, senderName, recipientName, or placeholder recipients.',
+    '- Do not write final_response.',
+    '- Do not claim the email has been sent.',
+    '',
+    'Draft/content to send:',
+    draftText,
+  ].join('\n');
+}
+
 // ─── Tool Loop ────────────────────────────────────────────────────────────────
 
 export class ToolLoop {
@@ -628,11 +744,122 @@ export class ToolLoop {
     let repairAttempts = 0;
     let currentMessages = [...messages];
     let brevoWebFetchDone = false;
+    const originalInput = originalUserText(messages);
+    const emailRequired = this.opts.isScheduledEmailJob || userRequiresEmail(originalInput);
+    const recipientEmail = extractRecipientEmail(originalInput);
     const finish = (result: ToolLoopResult): ToolLoopResult =>
       toolLoopResult({
         ...result,
         ...(toolResults.length > 0 ? { toolResults: [...toolResults] } : {}),
       });
+
+    const executeBrevoPayload = async (
+      payload: { subject: string; htmlContent: string },
+      source: 'draft' | 'model_tool_call'
+    ): Promise<ToolLoopResult> => {
+      const tool = this.registry.getTool('brevo-email');
+      if (!tool) {
+        return finish({
+          finalText: 'Email belum terkirim karena tool brevo-email tidak tersedia.',
+          toolSteps,
+          toolsUsed,
+          stepMessages,
+          flow,
+        });
+      }
+
+      const inputPayload: Record<string, unknown> = {
+        subject: payload.subject,
+        htmlContent: payload.htmlContent,
+      };
+      if (recipientEmail) inputPayload['recipientEmail'] = recipientEmail;
+      const normalizedInput = normalizeBrevoToolInput(inputPayload);
+
+      const inputError = validateToolInput(tool, normalizedInput);
+      if (inputError) {
+        return finish({
+          finalText: `Email belum terkirim karena payload brevo-email tidak valid: ${inputError}`,
+          toolSteps,
+          toolsUsed,
+          stepMessages,
+          flow,
+        });
+      }
+
+      logger.info('tool-loop: executing tool', {
+        tool: 'brevo-email',
+        input: normalizedInput,
+        source,
+      });
+
+      let toolResult: string;
+      try {
+        flow.push({ stage: 'tool_call', tool: 'brevo-email', input: normalizedInput, source });
+        toolResult = await tool.run(normalizedInput);
+      } catch (e) {
+        toolResult = `Tool execution failed: ${String(e)}`;
+        logger.warn('tool-loop: brevo-email error', { error: String(e), source });
+      }
+
+      toolsUsed.push('brevo-email');
+      toolResults.push(buildToolResultTrace('brevo-email', normalizedInput, toolResult));
+      toolSteps++;
+      flow.push({ stage: 'tool_result', tool: 'brevo-email', ok: toolResultOk('brevo-email', toolResult) });
+
+      return finish({
+        finalText: brevoFinalAnswer(toolResult),
+        toolSteps,
+        toolsUsed,
+        stepMessages,
+        flow,
+      });
+    };
+
+    const guardEmailFinal = async (
+      text: string,
+      step: number
+    ): Promise<{ type: 'allow' } | { type: 'continue' } | { type: 'finish'; result: ToolLoopResult }> => {
+      if (!emailRequired || toolsUsed.includes('brevo-email')) return { type: 'allow' };
+
+      if (!availableTools.includes('brevo-email')) {
+        return {
+          type: 'finish',
+          result: finish({
+            finalText: 'Email belum terkirim karena tool brevo-email tidak tersedia.',
+            toolSteps,
+            toolsUsed,
+            stepMessages,
+            flow,
+          }),
+        };
+      }
+
+      const payload = extractEmailPayloadFromDraft(text);
+      if (payload) {
+        return { type: 'finish', result: await executeBrevoPayload(payload, 'draft') };
+      }
+
+      if (step < this.opts.maxSteps) {
+        logger.warn('tool-loop: rejected final response before brevo-email execution', { step });
+        currentMessages = [
+          ...currentMessages,
+          createMessage({ role: 'assistant', content: text }),
+          createMessage({ role: 'user', content: buildBrevoToolCallPrompt(text, recipientEmail) }),
+        ];
+        return { type: 'continue' };
+      }
+
+      return {
+        type: 'finish',
+        result: finish({
+          finalText: 'Email belum terkirim karena sistem tidak berhasil membentuk payload brevo-email.',
+          toolSteps,
+          toolsUsed,
+          stepMessages,
+          flow,
+        }),
+      };
+    };
 
     for (let step = 0; step <= this.opts.maxSteps; step++) {
       const isLastStep = step === this.opts.maxSteps;
@@ -698,7 +925,14 @@ export class ToolLoop {
           });
         }
 
-        const toolCall = normalizeToolCallInput(normalizeParsedToolCall(parsed, availableTools));
+        let toolCall = normalizeToolCallInput(normalizeParsedToolCall(parsed, availableTools));
+        if (toolCall.tool === 'brevo-email' && recipientEmail) {
+          const inputObject = isPlainObject(toolCall.input) ? { ...toolCall.input } : {};
+          if (typeof inputObject['recipientEmail'] !== 'string' || !inputObject['recipientEmail'].trim()) {
+            inputObject['recipientEmail'] = recipientEmail;
+            toolCall = { ...toolCall, input: inputObject };
+          }
+        }
 
         if (violatesToolChainIsolation(toolCall.tool, toolsUsed)) {
           logger.warn('tool-loop: blocked unsafe network/privileged tool chain', {
@@ -868,6 +1102,8 @@ export class ToolLoop {
         const assistantMsg = createMessage({ role: 'assistant', content: llmText });
         const toolResultMsg = buildToolResultMessage(toolCall.tool, toolResult, {
           isScheduledEmailJob: this.opts.isScheduledEmailJob,
+          emailRequired,
+          ...(recipientEmail ? { recipientEmail } : {}),
           toolsUsed: [...toolsUsed],
         });
         currentMessages = [...currentMessages, assistantMsg, toolResultMsg];
@@ -879,8 +1115,12 @@ export class ToolLoop {
         if (brevoWebFetchDone && availableTools.includes('brevo-email')) {
           logger.warn('tool-loop: LLM returned final_response after brevo web-fetch pre-fetch', { step });
         }
+        const candidateFinal = parsed.content.trim() || llmText;
+        const emailGuard = await guardEmailFinal(candidateFinal, step);
+        if (emailGuard.type === 'finish') return emailGuard.result;
+        if (emailGuard.type === 'continue') continue;
         logger.debug('tool-loop: structured final_response', { step, toolSteps });
-        return finish({ finalText: parsed.content.trim() || llmText, toolSteps, toolsUsed, stepMessages, flow });
+        return finish({ finalText: candidateFinal, toolSteps, toolsUsed, stepMessages, flow });
       }
 
       if (looksLikeStructuredToolCall(llmText, availableTools)) {
@@ -897,6 +1137,9 @@ export class ToolLoop {
       }
 
       logger.debug('tool-loop: plain text final response', { step, toolSteps });
+      const emailGuard = await guardEmailFinal(llmText, step);
+      if (emailGuard.type === 'finish') return emailGuard.result;
+      if (emailGuard.type === 'continue') continue;
       return finish({ finalText: llmText, toolSteps, toolsUsed, stepMessages, flow });
     }
 

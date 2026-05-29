@@ -74,6 +74,12 @@ interface SelfImprovingProviderSelection {
   model: string;
 }
 
+interface RouterProviderAccess {
+  bestProvider?: (hint?: unknown) => IProvider | null;
+  getProvider?: (providerId: string) => IProvider | undefined;
+  allProviders?: () => IProvider[];
+}
+
 function parseSelfImprovingModel(value: string): { providerId?: string; modelId: string } | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -104,8 +110,50 @@ function modelInfo(modelId: string): ModelInfo {
   };
 }
 
+function routerProviderAccess(router: ProviderRouter): RouterProviderAccess {
+  return router as unknown as RouterProviderAccess;
+}
+
+function routerAllProviders(router: ProviderRouter): IProvider[] {
+  const access = routerProviderAccess(router);
+  try {
+    return access.allProviders?.() ?? [];
+  } catch (err) {
+    logger.debug('self-improving provider list unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
+function routerBestProvider(router: ProviderRouter): IProvider | null {
+  const access = routerProviderAccess(router);
+  try {
+    const best = access.bestProvider?.();
+    if (best) return best;
+  } catch (err) {
+    logger.debug('self-improving best provider unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return routerAllProviders(router)[0] ?? null;
+}
+
+function routerGetProvider(router: ProviderRouter, providerId: string): IProvider | undefined {
+  const access = routerProviderAccess(router);
+  try {
+    return access.getProvider?.(providerId) ?? routerAllProviders(router).find((provider) => provider.id === providerId);
+  } catch (err) {
+    logger.debug('self-improving provider lookup unavailable', {
+      providerId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 function createSelfImprovingProvider(router: ProviderRouter): IProvider | null {
-  const fallbackProvider = router.bestProvider() ?? router.allProviders()[0] ?? null;
+  const fallbackProvider = routerBestProvider(router);
   if (!fallbackProvider) return null;
 
   let selectionPromise: Promise<SelfImprovingProviderSelection> | null = null;
@@ -120,7 +168,7 @@ function createSelfImprovingProvider(router: ProviderRouter): IProvider | null {
     if (!configured) return fallbackSelection();
 
     if (configured.providerId) {
-      const provider = router.getProvider(configured.providerId);
+      const provider = routerGetProvider(router, configured.providerId);
       if (!provider) {
         logger.warn('SELF_IMPROVING_MODEL provider not found; using default router', {
           configuredProvider: configured.providerId,
@@ -131,7 +179,7 @@ function createSelfImprovingProvider(router: ProviderRouter): IProvider | null {
     }
 
     const matches: IProvider[] = [];
-    for (const provider of router.allProviders()) {
+    for (const provider of routerAllProviders(router)) {
       try {
         const models = await provider.listModels();
         if (models.some((model) => model.id === configured.modelId)) {

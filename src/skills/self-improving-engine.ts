@@ -52,7 +52,17 @@ export class SelfImprovingEngine {
 
   async processCompletedTurn(input: SkillExtractionInput): Promise<void> {
     try {
-      const extracted = await this.extractor.extract(input);
+      const success = input.success ?? true;
+      const isFailedScheduledJob = input.source === 'scheduler' && success === false;
+      const extracted = success ? await this.extractor.extract(input) : null;
+
+      if (isFailedScheduledJob) {
+        logger.info('self-improvement skipped extraction for failed scheduled job', {
+          scheduledJobId: input.scheduledJobId,
+          scheduledJobName: input.scheduledJobName,
+          error: input.error,
+        });
+      }
 
       if (extracted) {
         const filePath = await this.writer.write(extracted);
@@ -75,7 +85,7 @@ export class SelfImprovingEngine {
         }
       }
 
-      await this.tracker.recordTaskCompletion(input.activeSkillsUsed ?? [], true);
+      await this.tracker.recordTaskCompletion(input.activeSkillsUsed ?? [], success);
 
       if (await this.tracker.shouldRunEvaluation()) {
         logger.info('running self-evaluation pass');

@@ -45,6 +45,7 @@ export interface ScheduledJobRun {
   status: ScheduledJobLastStatus;
   output?: string;
   error?: string;
+  sessionId?: string;
   toolsUsed?: string[];
   toolResults?: ScheduledJobToolResult[];
   emailRequired?: boolean;
@@ -136,4 +137,25 @@ export type SchedulerSessionMode = 'dedicated' | 'last_active' | 'new_each_run';
 export type JobOutputNotifier = (
   job: ScheduledJob,
   run: ScheduledJobRun
+) => Promise<void> | void;
+
+export interface ScheduledSelfImprovementInput {
+  userInput: string;
+  agentResponse: string;
+  toolsUsed: string[];
+  stepCount: number;
+  sessionId?: string;
+  success: boolean;
+  source: 'scheduler';
+  wasSchedulerAction: true;
+  scheduledJobId: string;
+  scheduledJobName: string;
+  emailRequired?: boolean;
+  emailSent?: boolean;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type ScheduledSelfImprovementNotifier = (
+  input: ScheduledSelfImprovementInput
 ) => Promise<void> | void;

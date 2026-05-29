@@ -13,6 +13,8 @@ import type {
   ScheduledJob,
   ScheduledJobExecutor,
   ScheduledJobRun,
+  ScheduledSelfImprovementInput,
+  ScheduledSelfImprovementNotifier,
   ScheduledJobToolResult,
   SchedulerMisfirePolicy,
   SchedulerSessionMode,
@@ -52,6 +54,8 @@ export interface SchedulerEngineOptions {
   maxConcurrentJobs?: number;
   /** Called after a non-email job completes successfully. Delivers output to user. */
   onJobComplete?: JobOutputNotifier;
+  /** Called after any scheduled job run to feed self-improvement. Must not affect run status. */
+  selfImprovement?: ScheduledSelfImprovementNotifier;
 }
 
 function envMisfirePolicy(): SchedulerMisfirePolicy {
@@ -281,6 +285,7 @@ export class SchedulerEngine {
   private readonly sessionMode: SchedulerSessionMode;
   private readonly maxConcurrentJobs: number;
   private readonly onJobComplete: JobOutputNotifier | undefined;
+  private readonly selfImprovement: ScheduledSelfImprovementNotifier | undefined;
   private readonly runningJobIds = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
 
@@ -299,6 +304,7 @@ export class SchedulerEngine {
       options.maxConcurrentJobs ?? getEnvInt('SCHEDULER_MAX_CONCURRENT_JOBS', 2)
     );
     this.onJobComplete = options.onJobComplete;
+    this.selfImprovement = options.selfImprovement;
   }
 
   async start(): Promise<void> {
@@ -481,6 +487,7 @@ export class SchedulerEngine {
         ...(recipientEmail ? { recipientEmail } : {}),
         ...(result.toolsUsed ? { toolsUsed: result.toolsUsed } : {}),
         ...(result.toolResults ? { toolResults: result.toolResults } : {}),
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
         ...(email.brevoMessageId ? { brevoMessageId: email.brevoMessageId } : {}),
         ...(email.error ? { error: email.error } : {}),
       };
@@ -501,6 +508,7 @@ export class SchedulerEngine {
         }
       );
       await this.writeWorkspaceRunLog(job, completed);
+      this.notifySelfImprovement(job, completed);
       if (status === 'success') {
         logger.info('scheduled job completed', { jobId: job.id, name: job.name });
         if (!email.emailRequired && this.onJobComplete && completed.output) {
@@ -536,6 +544,7 @@ export class SchedulerEngine {
         lastRunDurationMs: finishedAt.getTime() - startedAt.getTime(),
       });
       await this.writeWorkspaceRunLog(job, failed);
+      this.notifySelfImprovement(job, failed);
       logger.warn('scheduled job failed', { jobId: job.id, name: job.name, error: message });
       return failed;
     } finally {
@@ -753,7 +762,83 @@ export class SchedulerEngine {
       lastRunDurationMs: durationMs,
     });
     await this.writeWorkspaceRunLog(job, completed);
+    this.notifySelfImprovement(job, completed);
     return completed;
+  }
+
+  private selfImprovementInput(job: ScheduledJob, run: ScheduledJobRun): ScheduledSelfImprovementInput {
+    const originalUserInput = metadataString(job, 'originalUserInput');
+    const recipientEmail = metadataString(job, 'recipientEmail') ?? run.recipientEmail;
+    const metadata: Record<string, unknown> = {
+      scheduleType: job.scheduleType,
+    };
+    const topic = metadataString(job, 'topic');
+    const searchQuery = metadataString(job, 'searchQuery');
+    if (topic) metadata['topic'] = topic;
+    if (searchQuery) metadata['searchQuery'] = searchQuery;
+    if (recipientEmail) metadata['recipientEmail'] = maskedEmail(recipientEmail);
+
+    const input: ScheduledSelfImprovementInput = {
+      userInput: originalUserInput ?? job.prompt,
+      agentResponse: run.output ?? run.error ?? '',
+      toolsUsed: run.toolsUsed ?? [],
+      stepCount: run.toolsUsed?.length ?? 0,
+      success: run.status === 'success',
+      source: 'scheduler',
+      wasSchedulerAction: true,
+      scheduledJobId: job.id,
+      scheduledJobName: job.name,
+      emailRequired: run.emailRequired ?? jobRequiresEmail(job),
+      emailSent: run.emailSent ?? false,
+      metadata,
+    };
+    if (run.sessionId) input.sessionId = run.sessionId;
+    if (run.error) input.error = run.error;
+    return input;
+  }
+
+  private notifySelfImprovement(job: ScheduledJob, run: ScheduledJobRun): void {
+    if (!this.selfImprovement) {
+      logger.debug('scheduler self-improvement disabled', { jobId: job.id, name: job.name });
+      return;
+    }
+
+    const input = this.selfImprovementInput(job, run);
+    if (!input.success) {
+      logger.info('scheduler self-improvement skipped extraction for failed job', {
+        jobId: job.id,
+        name: job.name,
+        error: input.error,
+      });
+    }
+
+    try {
+      const result = this.selfImprovement(input);
+      void Promise.resolve(result)
+        .then(() => {
+          if (input.success) {
+            logger.info('scheduler self-improvement processed', {
+              jobId: job.id,
+              name: job.name,
+              success: true,
+              toolsUsed: input.toolsUsed,
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          logger.warn('scheduler self-improvement failed (non-fatal)', {
+            jobId: job.id,
+            name: job.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    } catch (err) {
+      logger.warn('scheduler self-improvement failed (non-fatal)', {
+        jobId: job.id,
+        name: job.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async writeWorkspaceRunLog(job: ScheduledJob, run: ScheduledJobRun): Promise<void> {

@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ToolLoop } = require('../dist/agents/tool-loop');
+const {
+  ToolLoop,
+  extractEmailPayloadFromDraft,
+  extractRecipientEmail,
+  userRequiresEmail,
+} = require('../dist/agents/tool-loop');
 const { createMessage } = require('../dist/types/message');
 
 function makeManifest(name) {
@@ -229,4 +234,89 @@ test('isScheduledEmailJob=false: normal flow does not force brevo-email injectio
 
   assert.equal(result.finalText, 'Done.');
   assert.ok(!result.toolsUsed.includes('brevo-email'));
+});
+
+test('direct email request: final draft after web-fetch is converted to brevo-email execution', async () => {
+  let webFetchCallCount = 0;
+  let brevoCallCount = 0;
+
+  const tools = {
+    'web-fetch': async () => {
+      webFetchCallCount++;
+      return 'Arsenal menang dan memperbarui skuad hari ini.';
+    },
+    'brevo-email': async (input) => {
+      brevoCallCount++;
+      assert.equal(input.subject, 'Berita Arsenal Terbaru');
+      assert.match(input.htmlContent, /Arsenal/i);
+      return JSON.stringify({ ok: true, messageId: 'direct-123', recipientEmail: 'user@example.test' });
+    },
+  };
+
+  const webFetchCall = JSON.stringify({
+    type: 'tool_call',
+    tool: 'web-fetch',
+    input: { query: 'berita arsenal terbaru' },
+  });
+  const draftFinal = JSON.stringify({
+    type: 'final_response',
+    content: [
+      'Subject: Berita Arsenal Terbaru',
+      '',
+      'Isi Email (HTML):',
+      '<h1>Berita Arsenal</h1><p>Arsenal menang dan memperbarui skuad hari ini.</p>',
+    ].join('\n'),
+  });
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 3 });
+  const result = await loop.run(
+    provider([webFetchCall, draftFinal]),
+    'mock',
+    [createMessage({ role: 'user', content: 'kirim berita arsenal terupdate ke email saya' })],
+    'You are an assistant.'
+  );
+
+  assert.equal(webFetchCallCount, 1);
+  assert.equal(brevoCallCount, 1);
+  assert.ok(result.toolsUsed.includes('web-fetch'));
+  assert.ok(result.toolsUsed.includes('brevo-email'));
+  assert.match(result.finalText, /Email berhasil dikirim/i);
+});
+
+test('direct email request: explicit recipient is preserved in brevo-email input', async () => {
+  let brevoInput;
+  const tools = {
+    'brevo-email': async (input) => {
+      brevoInput = input;
+      return JSON.stringify({ ok: true, messageId: 'recipient-123', recipientEmail: input.recipientEmail });
+    },
+  };
+  const brevoCallWithoutRecipient = JSON.stringify({
+    type: 'tool_call',
+    tool: 'brevo-email',
+    input: { subject: 'Report', htmlContent: '<p>Report</p>' },
+  });
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 2 });
+  const result = await loop.run(
+    provider([brevoCallWithoutRecipient]),
+    'mock',
+    [createMessage({ role: 'user', content: 'buat report dan kirim ke email boss@gmail.com' })],
+    'You are an assistant.'
+  );
+
+  assert.equal(brevoInput.recipientEmail, 'boss@gmail.com');
+  assert.match(result.finalText, /boss@gmail\.com/);
+});
+
+test('email intent helpers distinguish send requests from draft requests', () => {
+  assert.equal(userRequiresEmail('kirim berita arsenal terupdate ke email saya'), true);
+  assert.equal(userRequiresEmail('send latest AI news to my email'), true);
+  assert.equal(userRequiresEmail('buat draft email untuk client'), false);
+  assert.equal(extractRecipientEmail('kirim ke boss@gmail.com'), 'boss@gmail.com');
+  assert.equal(extractRecipientEmail('kirim ke email@example.com'), undefined);
+  assert.deepEqual(
+    extractEmailPayloadFromDraft('Subject: Halo\n\nIsi Email (HTML):\n<p>Hai</p>'),
+    { subject: 'Halo', htmlContent: '<p>Hai</p>' }
+  );
 });

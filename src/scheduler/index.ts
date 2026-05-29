@@ -11,6 +11,8 @@ export type {
   SchedulerListFilter,
   SchedulerIntent,
   JobOutputNotifier,
+  ScheduledSelfImprovementInput,
+  ScheduledSelfImprovementNotifier,
   SchedulerMisfirePolicy,
   SchedulerSessionMode,
   ScheduleType,

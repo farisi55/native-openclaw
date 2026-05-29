@@ -207,10 +207,15 @@ async function bootstrap(): Promise<void> {
     }
   );
 
+  const selfImprovingContext = orchestrator.getSelfImprovingActionContext();
+
   schedulerEngine = new SchedulerEngine({
     store: schedulerStore,
     workspace,
     toolRegistry,
+    ...(selfImprovingContext.engine
+      ? { selfImprovement: (input) => selfImprovingContext.engine!.processCompletedTurn(input) }
+      : {}),
     emailContentGenerator: async (input) => {
       const state = await createApiRuntimeState({
         providers,

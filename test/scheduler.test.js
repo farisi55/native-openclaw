@@ -207,8 +207,9 @@ test('scheduler disabled prevents natural language cronjob creation', async () =
 
 test('creates relative time Arsenal email cronjob from natural language', async () => {
   await withStore(async (store) => {
+    const input = 'kirimkan saya berita arsenal 5 menit lagi dari sekarang ke email saya, itu akan jadi cronjob kamu yang baru';
     const result = await handleSchedulerText(
-      'kirimkan saya berita arsenal 5 menit lagi dari sekarang ke email saya, itu akan jadi cronjob kamu yang baru',
+      input,
       { store },
       'cli'
     );
@@ -223,6 +224,7 @@ test('creates relative time Arsenal email cronjob from natural language', async 
     assert.equal(job.scheduleType, 'once');
     assert.equal(job.enabled, true);
     assert.match(job.prompt, /brevo-email/i);
+    assert.equal(job.metadata.originalUserInput, input);
   });
 });
 
@@ -594,6 +596,7 @@ test('deterministic scheduled email job executes web-fetch then brevo-email', as
   await withStore(async (store) => {
     let webFetchCalled = false;
     let brevoInput;
+    let selfImprovementInput;
     const job = await store.createJob({
       name: 'deterministic-email',
       scheduleType: 'once',
@@ -607,6 +610,7 @@ test('deterministic scheduled email job executes web-fetch then brevo-email', as
         topic: 'harga emas',
         requiresCurrentData: true,
         searchQuery: 'harga emas hari ini',
+        originalUserInput: 'kirimkan harga emas 2 menit dari sekarang, ke email boss@gmail.com',
       },
     });
 
@@ -637,6 +641,9 @@ test('deterministic scheduled email job executes web-fetch then brevo-email', as
           htmlContent: '<p>Harga emas Rp1.500.000/gram.</p>',
         };
       },
+      selfImprovement: (input) => {
+        selfImprovementInput = input;
+      },
     });
 
     const run = await engine.runNow(job.name);
@@ -647,11 +654,21 @@ test('deterministic scheduled email job executes web-fetch then brevo-email', as
     assert.equal(webFetchCalled, true);
     assert.equal(brevoInput.recipientEmail, 'boss@gmail.com');
     assert.deepEqual(run.toolsUsed, ['web-fetch', 'brevo-email']);
+    assert.equal(selfImprovementInput.source, 'scheduler');
+    assert.equal(selfImprovementInput.wasSchedulerAction, true);
+    assert.equal(selfImprovementInput.success, true);
+    assert.equal(selfImprovementInput.scheduledJobId, job.id);
+    assert.equal(selfImprovementInput.scheduledJobName, job.name);
+    assert.equal(selfImprovementInput.emailRequired, true);
+    assert.equal(selfImprovementInput.emailSent, true);
+    assert.deepEqual(selfImprovementInput.toolsUsed, ['web-fetch', 'brevo-email']);
+    assert.equal(selfImprovementInput.userInput, 'kirimkan harga emas 2 menit dari sekarang, ke email boss@gmail.com');
   });
 });
 
 test('deterministic scheduled email job fails when brevo-email tool is missing', async () => {
   await withStore(async (store) => {
+    let selfImprovementInput;
     const job = await store.createJob({
       name: 'missing-brevo',
       scheduleType: 'once',
@@ -667,6 +684,9 @@ test('deterministic scheduled email job fails when brevo-email tool is missing',
       toolRegistry: toolRegistry({
         'web-fetch': async () => 'data',
       }),
+      selfImprovement: (input) => {
+        selfImprovementInput = input;
+      },
     });
 
     const run = await engine.runNow(job.name);
@@ -675,6 +695,38 @@ test('deterministic scheduled email job fails when brevo-email tool is missing',
     assert.match(run.error ?? '', /brevo-email tool is not registered/);
     const updated = await store.getJob(job.id);
     assert.equal(updated.failureCount, 1);
+    assert.equal(selfImprovementInput.source, 'scheduler');
+    assert.equal(selfImprovementInput.success, false);
+    assert.equal(selfImprovementInput.emailRequired, true);
+    assert.equal(selfImprovementInput.emailSent, false);
+    assert.match(selfImprovementInput.error, /brevo-email tool is not registered/);
+  });
+});
+
+test('self-improvement callback error does not fail scheduled job', async () => {
+  await withStore(async (store) => {
+    const job = await store.createJob({
+      name: 'self-improve-error',
+      scheduleType: 'once',
+      runAt: new Date().toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'Buat catatan singkat.',
+      source: 'system',
+    });
+
+    const engine = new SchedulerEngine({
+      store,
+      executor: async () => ({ output: 'done', toolsUsed: [] }),
+      selfImprovement: () => {
+        throw new Error('extractor offline');
+      },
+    });
+
+    const run = await engine.runNow(job.name);
+    assert.equal(run.status, 'success');
+    assert.equal(run.output, 'done');
+    const updated = await store.getJob(job.id);
+    assert.equal(updated.failureCount, 0);
   });
 });
 
