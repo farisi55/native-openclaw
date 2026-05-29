@@ -31,6 +31,19 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function toolRegistry(tools) {
+  return {
+    getTool(name) {
+      const run = tools[name];
+      if (!run) return undefined;
+      return {
+        manifest: { name },
+        run,
+      };
+    },
+  };
+}
+
 test('parses active cronjob list request as list intent', () => {
   const intent = parseSchedulerIntent('saya mau lihat ada cronjob apa saja saat ini yang sedang aktif');
   assert.equal(intent.intent, 'list');
@@ -132,6 +145,22 @@ test('parses passive relative-time harga emas email cronjob requests', () => {
     assert.match(intent.prompt ?? '', /harga emas/i, input);
     assert.match(intent.prompt ?? '', /brevo-email/i, input);
   }
+});
+
+test('extracts explicit scheduled email metadata', () => {
+  const now = new Date('2026-05-27T08:00:00.000Z');
+  const intent = parseSchedulerIntent(
+    'kirimkan harga emas 2 menit dari sekarang, ke email boss@gmail.com',
+    { now, timezone: 'Asia/Jakarta' }
+  );
+
+  assert.equal(intent.intent, 'create');
+  assert.equal(intent.scheduleType, 'once');
+  assert.equal(intent.metadata.recipientEmail, 'boss@gmail.com');
+  assert.equal(intent.metadata.emailRequired, true);
+  assert.equal(intent.metadata.requiresCurrentData, true);
+  assert.match(intent.metadata.searchQuery, /harga emas/i);
+  assert.match(intent.prompt ?? '', /boss@gmail.com/);
 });
 
 test('parses daily email report cronjob', () => {
@@ -558,6 +587,131 @@ test('email-required job succeeds only when brevo-email returns ok true', async 
     assert.equal(run.emailSent, true);
     assert.equal(run.brevoMessageId, 'abc-123');
     assert.deepEqual(run.toolsUsed, ['web-fetch', 'brevo-email']);
+  });
+});
+
+test('deterministic scheduled email job executes web-fetch then brevo-email', async () => {
+  await withStore(async (store) => {
+    let webFetchCalled = false;
+    let brevoInput;
+    const job = await store.createJob({
+      name: 'deterministic-email',
+      scheduleType: 'once',
+      runAt: new Date().toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'Cari harga emas terbaru dan kirim ke email boss@gmail.com.',
+      source: 'system',
+      metadata: {
+        emailRequired: true,
+        recipientEmail: 'boss@gmail.com',
+        topic: 'harga emas',
+        requiresCurrentData: true,
+        searchQuery: 'harga emas hari ini',
+      },
+    });
+
+    const engine = new SchedulerEngine({
+      store,
+      toolRegistry: toolRegistry({
+        'web-fetch': async (input) => {
+          webFetchCalled = true;
+          assert.equal(input.query, 'harga emas hari ini');
+          return 'Harga emas hari ini Rp1.500.000/gram.';
+        },
+        'brevo-email': async (input) => {
+          brevoInput = input;
+          return JSON.stringify({
+            ok: true,
+            provider: 'brevo',
+            status: 201,
+            messageId: 'abc',
+            recipientEmail: input.recipientEmail,
+          });
+        },
+      }),
+      emailContentGenerator: async (input) => {
+        assert.equal(input.recipientEmail, 'boss@gmail.com');
+        assert.match(input.webFetchResult ?? '', /Rp1\.500\.000/);
+        return {
+          subject: 'Harga Emas Hari Ini',
+          htmlContent: '<p>Harga emas Rp1.500.000/gram.</p>',
+        };
+      },
+    });
+
+    const run = await engine.runNow(job.name);
+    assert.equal(run.status, 'success');
+    assert.equal(run.emailSent, true);
+    assert.equal(run.recipientEmail, 'boss@gmail.com');
+    assert.equal(run.brevoMessageId, 'abc');
+    assert.equal(webFetchCalled, true);
+    assert.equal(brevoInput.recipientEmail, 'boss@gmail.com');
+    assert.deepEqual(run.toolsUsed, ['web-fetch', 'brevo-email']);
+  });
+});
+
+test('deterministic scheduled email job fails when brevo-email tool is missing', async () => {
+  await withStore(async (store) => {
+    const job = await store.createJob({
+      name: 'missing-brevo',
+      scheduleType: 'once',
+      runAt: new Date().toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'Kirim email report menggunakan brevo-email.',
+      source: 'system',
+      metadata: { emailRequired: true },
+    });
+
+    const engine = new SchedulerEngine({
+      store,
+      toolRegistry: toolRegistry({
+        'web-fetch': async () => 'data',
+      }),
+    });
+
+    const run = await engine.runNow(job.name);
+    assert.equal(run.status, 'failed');
+    assert.equal(run.emailSent, false);
+    assert.match(run.error ?? '', /brevo-email tool is not registered/);
+    const updated = await store.getJob(job.id);
+    assert.equal(updated.failureCount, 1);
+  });
+});
+
+test('deterministic scheduled email job fails when brevo-email returns ok false', async () => {
+  await withStore(async (store) => {
+    const job = await store.createJob({
+      name: 'brevo-ok-false',
+      scheduleType: 'once',
+      runAt: new Date().toISOString(),
+      timezone: 'Asia/Jakarta',
+      prompt: 'Kirim email report menggunakan brevo-email.',
+      source: 'system',
+      metadata: { emailRequired: true, recipientEmail: 'boss@gmail.com' },
+    });
+
+    const engine = new SchedulerEngine({
+      store,
+      toolRegistry: toolRegistry({
+        'brevo-email': async () => JSON.stringify({
+          ok: false,
+          provider: 'brevo',
+          status: 400,
+          error: 'bad recipient',
+        }),
+      }),
+      emailContentGenerator: async () => ({
+        subject: 'Report',
+        htmlContent: '<p>Report</p>',
+      }),
+    });
+
+    const run = await engine.runNow(job.name);
+    assert.equal(run.status, 'failed');
+    assert.equal(run.emailSent, false);
+    assert.match(run.error ?? '', /bad recipient/);
+    const updated = await store.getJob(job.id);
+    assert.equal(updated.failureCount, 1);
   });
 });
 

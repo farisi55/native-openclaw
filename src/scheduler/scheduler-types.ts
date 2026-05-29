@@ -49,6 +49,7 @@ export interface ScheduledJobRun {
   toolResults?: ScheduledJobToolResult[];
   emailRequired?: boolean;
   emailSent?: boolean;
+  recipientEmail?: string;
   brevoMessageId?: string;
   durationMs?: number;
 }

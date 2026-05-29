@@ -18,6 +18,9 @@ const savedEnv = {
   HTTP_PROXY: process.env.HTTP_PROXY,
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   NO_PROXY: process.env.NO_PROXY,
+  http_proxy: process.env.http_proxy,
+  https_proxy: process.env.https_proxy,
+  no_proxy: process.env.no_proxy,
   DNS_SERVERS: process.env.DNS_SERVERS,
 };
 
@@ -32,6 +35,9 @@ function clearNetworkEnv() {
   delete process.env.HTTP_PROXY;
   delete process.env.HTTPS_PROXY;
   delete process.env.NO_PROXY;
+  delete process.env.http_proxy;
+  delete process.env.https_proxy;
+  delete process.env.no_proxy;
   delete process.env.DNS_SERVERS;
 }
 
@@ -126,4 +132,3 @@ test('networkCheck resolves localhost', async () => {
   assert.equal(result.ok, true);
   assert.ok(result.addresses.length > 0);
 });
-

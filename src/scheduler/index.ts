@@ -41,5 +41,5 @@ export type {
   SchedulerActionResult,
 } from './scheduler-actions';
 
-export { SchedulerEngine } from './scheduler-engine';
+export { SchedulerEngine, jobRequiresCurrentData, jobRequiresEmail } from './scheduler-engine';
 export type { SchedulerEngineOptions } from './scheduler-engine';

@@ -135,7 +135,8 @@ function toolsText(run: ScheduledJobRun | undefined): string {
 function emailText(run: ScheduledJobRun | undefined): string {
   if (!run) return '-';
   if (!run.emailRequired) return 'not required';
-  return run.emailSent ? 'sent' : 'required, not sent';
+  if (run.emailSent) return run.recipientEmail ? `sent to ${run.recipientEmail}` : 'sent';
+  return 'required, not sent';
 }
 
 function formatRunSummary(run: ScheduledJobRun): string {
@@ -145,6 +146,7 @@ function formatRunSummary(run: ScheduledJobRun): string {
     `Email: ${emailText(run)}`,
   ];
   if (run.brevoMessageId) lines.push(`Brevo messageId: ${run.brevoMessageId}`);
+  if (run.recipientEmail && !run.emailSent) lines.push(`Recipient: ${run.recipientEmail}`);
   if (run.error) lines.push(`Error: ${run.error}`);
   return lines.join('\n');
 }
@@ -158,9 +160,20 @@ function formatLastRun(run: ScheduledJobRun | undefined): string[] {
     `  Email: ${emailText(run)}`,
     `  Duration: ${run.durationMs ?? '-'}ms`,
   ];
+  if (run.recipientEmail) lines.push(`  Recipient: ${run.recipientEmail}`);
   if (run.brevoMessageId) lines.push(`  Brevo messageId: ${run.brevoMessageId}`);
   if (run.error) lines.push(`  Error: ${run.error}`);
   return lines;
+}
+
+function metadataLines(job: ScheduledJob): string[] {
+  const metadata = job.metadata ?? {};
+  const lines: string[] = [];
+  if (metadata['emailRequired'] === true) lines.push('  emailRequired: true');
+  if (typeof metadata['recipientEmail'] === 'string') lines.push(`  recipientEmail: ${metadata['recipientEmail']}`);
+  if (typeof metadata['topic'] === 'string') lines.push(`  topic: ${metadata['topic']}`);
+  if (typeof metadata['searchQuery'] === 'string') lines.push(`  searchQuery: ${metadata['searchQuery']}`);
+  return lines.length > 0 ? ['Metadata:', ...lines] : [];
 }
 
 export function formatJobDetails(job: ScheduledJob, lastRun?: ScheduledJobRun): string {
@@ -174,6 +187,7 @@ export function formatJobDetails(job: ScheduledJob, lastRun?: ScheduledJobRun): 
     `Failure count: ${job.failureCount}`,
     `Prompt: ${job.prompt}`,
   ];
+  lines.push(...metadataLines(job));
   if (job.lastStatus) lines.push(...formatLastRun(lastRun));
   return lines.join('\n');
 }

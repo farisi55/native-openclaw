@@ -9,6 +9,7 @@ import type { SchedulerIntent, SchedulerListFilter, ScheduleType } from './sched
 
 const DEFAULT_TIMEZONE = 'Asia/Jakarta';
 const TIME_RE = /(?:jam|pukul|at)\s*(\d{1,2})(?:[.:](\d{2}))?/i;
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
 export interface ParseSchedulerIntentOptions {
   now?: Date;
@@ -36,6 +37,65 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 80);
   return slug || 'cronjob';
+}
+
+function isPlaceholderEmail(value: string): boolean {
+  const lower = value.trim().toLowerCase();
+  return lower.endsWith('@example.com') ||
+    ['email@example.com', 'recipient@example.com', 'test@example.com'].includes(lower);
+}
+
+export function extractEmailAddress(input: string): string | undefined {
+  const match = EMAIL_RE.exec(input);
+  if (!match?.[0]) return undefined;
+  const email = match[0].toLowerCase();
+  return isPlaceholderEmail(email) ? undefined : email;
+}
+
+function asksForEmail(input: string): boolean {
+  return /\b(?:email|e-mail|mail)\b/i.test(input);
+}
+
+function topicFromInput(input: string): string | undefined {
+  const lower = input.toLowerCase();
+  if (lower.includes('harga emas') || lower.includes('gold price')) return 'harga emas';
+  if (lower.includes('berita') && lower.includes('arsenal')) return 'berita Arsenal';
+  if (lower.includes('berita ai')) return 'berita AI';
+  if (lower.includes('berita') || lower.includes('news')) return stripScheduleWords(input);
+  return undefined;
+}
+
+function searchQueryFromTopic(topic: string | undefined): string | undefined {
+  if (!topic) return undefined;
+  const lower = topic.toLowerCase();
+  if (lower.includes('harga emas')) return 'harga emas hari ini';
+  if (lower.includes('arsenal')) return 'berita Arsenal terbaru hari ini';
+  if (lower.includes('berita') || lower.includes('news')) return `${topic} terbaru hari ini`;
+  return `${topic} hari ini`;
+}
+
+function requiresCurrentData(input: string, topic: string | undefined): boolean {
+  const text = `${input} ${topic ?? ''}`;
+  return /\b(hari\s+ini|terbaru|terupdate|current|latest|harga\s+emas|berita|news|market|kurs|cuaca)\b/i.test(text);
+}
+
+function schedulerMetadataFromInput(input: string): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  const recipientEmail = extractEmailAddress(input);
+  const emailRequired = asksForEmail(input);
+  const topic = topicFromInput(input);
+  const currentData = requiresCurrentData(input, topic);
+  const searchQuery = searchQueryFromTopic(topic);
+
+  if (emailRequired) {
+    metadata['emailRequired'] = true;
+    metadata['emailMode'] = 'send';
+  }
+  if (recipientEmail) metadata['recipientEmail'] = recipientEmail;
+  if (topic) metadata['topic'] = topic;
+  if (currentData) metadata['requiresCurrentData'] = true;
+  if (searchQuery) metadata['searchQuery'] = searchQuery;
+  return metadata;
 }
 
 function stripScheduleWords(input: string): string {
@@ -79,7 +139,8 @@ function nameFromInput(input: string, scheduleType: ScheduleType): string {
 
 function promptFromInput(input: string): string {
   const lower = input.toLowerCase();
-  const asksEmail = /\b(?:email|e-mail|mail)\b/i.test(input);
+  const asksEmail = asksForEmail(input);
+  const recipientEmail = extractEmailAddress(input);
 
   if (/\b(?:balas|reply|jawab)\b/i.test(input) && !asksEmail) {
     const trailingReply = /\b(?:dengan|with)\s+["']?([^"']{1,80})["']?\s*$/i.exec(input);
@@ -93,7 +154,10 @@ function promptFromInput(input: string): string {
 
   if (lower.includes('berita') && lower.includes('arsenal')) {
     if (asksEmail) {
-      return 'Cari berita terbaru Arsenal dari sumber online terpercaya menggunakan web-fetch. Ringkas dalam bahasa Indonesia. Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit. Jangan gunakan placeholder email. Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.';
+      const recipient = recipientEmail
+        ? `Kirimkan ringkasan tersebut ke email ${recipientEmail} menggunakan tool brevo-email.`
+        : 'Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit.';
+      return `Cari berita terbaru Arsenal dari sumber online terpercaya menggunakan web-fetch. Ringkas dalam bahasa Indonesia. ${recipient} Jangan gunakan placeholder email. Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.`;
     }
     return 'Cari berita terbaru Arsenal dari sumber online terpercaya menggunakan web-fetch. Ringkas hasilnya dalam bahasa Indonesia.';
   }
@@ -105,7 +169,10 @@ function promptFromInput(input: string): string {
 
   if (lower.includes('harga emas') || lower.includes('gold price')) {
     if (asksEmail) {
-      return 'Cari harga emas terbaru menggunakan web-fetch dari sumber terpercaya (antam.com atau logammulia.com). Ringkas data harga beli, harga jual, dan trend hari ini dalam bahasa Indonesia. Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit. Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.';
+      const recipient = recipientEmail
+        ? `Kirimkan ringkasan tersebut ke email ${recipientEmail} menggunakan tool brevo-email.`
+        : 'Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit.';
+      return `Cari harga emas terbaru menggunakan web-fetch dari sumber terpercaya (antam.com atau logammulia.com). Ringkas data harga beli, harga jual, dan trend hari ini dalam bahasa Indonesia. ${recipient} Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.`;
     }
     return 'Cari harga emas terbaru menggunakan web-fetch dari sumber terpercaya (antam.com atau logammulia.com). Tampilkan harga beli, harga jual, dan trend hari ini dalam bahasa Indonesia.';
   }
@@ -380,6 +447,7 @@ export function parseSchedulerIntent(
   }
 
   const relative = relativeDelay(trimmed);
+  const schedulerMetadata = schedulerMetadataFromInput(trimmed);
   if (relative) {
     return {
       intent: 'create',
@@ -390,6 +458,7 @@ export function parseSchedulerIntent(
       timezone,
       prompt: promptFromInput(trimmed),
       metadata: {
+        ...schedulerMetadata,
         relativeDescription: relative.description,
         taskSummary: taskSummaryFromInput(trimmed) ?? promptFromInput(trimmed),
       },
@@ -406,7 +475,7 @@ export function parseSchedulerIntent(
       scheduleType: 'interval',
       timezone,
       prompt: promptFromInput(trimmed),
-      metadata: { intervalMs: interval.intervalMs },
+      metadata: { ...schedulerMetadata, intervalMs: interval.intervalMs },
       requiresClarification: false,
     };
   }
@@ -425,6 +494,7 @@ export function parseSchedulerIntent(
       timezone,
       time,
       prompt: promptFromInput(trimmed),
+      metadata: schedulerMetadata,
       requiresClarification: false,
     };
   }
@@ -450,6 +520,7 @@ export function parseSchedulerIntent(
       timezone,
       time,
       prompt: promptFromInput(trimmed),
+      metadata: schedulerMetadata,
       requiresClarification: false,
     };
   }

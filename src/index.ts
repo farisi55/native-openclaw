@@ -14,6 +14,7 @@ import { ProviderRouter } from './router/provider-router';
 import { SemanticMemory } from './memory/semantic-memory';
 import { ContextCompressor } from './memory/context-compressor';
 import { Orchestrator } from './agents';
+import { createMessage, extractText } from './types/message';
 import { startCLI } from './cli';
 import { WorkspaceManager } from './workspace';
 import { createApiRuntimeState, startApiServerIfEnabled } from './api';
@@ -22,6 +23,23 @@ import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 import { jobRequiresEmail } from './scheduler/scheduler-engine';
+
+function stripJsonFences(text: string): string {
+  return text.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+}
+
+function parseEmailContentJson(raw: string): { subject: string; htmlContent: string } | null {
+  try {
+    const parsed = JSON.parse(stripJsonFences(raw)) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const subject = typeof record['subject'] === 'string' ? record['subject'].trim() : '';
+    const htmlContent = typeof record['htmlContent'] === 'string' ? record['htmlContent'].trim() : '';
+    return subject && htmlContent ? { subject, htmlContent } : null;
+  } catch {
+    return null;
+  }
+}
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -192,6 +210,52 @@ async function bootstrap(): Promise<void> {
   schedulerEngine = new SchedulerEngine({
     store: schedulerStore,
     workspace,
+    toolRegistry,
+    emailContentGenerator: async (input) => {
+      const state = await createApiRuntimeState({
+        providers,
+        skillRegistry,
+        sessions,
+        settings,
+        toolRegistry,
+        orchestrator,
+        ...(mcpManager ? { mcpManager } : {}),
+        scheduler,
+      });
+
+      const prompt = [
+        'You are generating an email for a scheduled Native OpenClaw job.',
+        'Output ONLY valid JSON:',
+        '{ "subject": "string", "htmlContent": "string" }',
+        '',
+        'Rules:',
+        '- Use Indonesian.',
+        '- Base content on provided data.',
+        '- Do not claim unsupported facts.',
+        '- If data is incomplete, mention limitation.',
+        '- Do not include markdown fences.',
+        '- Do not include API keys.',
+        '- Subject must be concise.',
+        '- htmlContent must be a valid HTML snippet.',
+        '',
+        `Job name: ${input.job.name}`,
+        `Topic: ${input.topic}`,
+        `Search query: ${input.searchQuery}`,
+        `Scheduled at: ${input.now.toISOString()}`,
+        `Job prompt: ${input.job.prompt}`,
+        input.webFetchResult ? `Fetched data:\n${input.webFetchResult}` : 'Fetched data: unavailable',
+      ].join('\n');
+
+      const response = await state.activeProvider.chat({
+        model: state.activeModel,
+        messages: [createMessage({ role: 'user', content: prompt })],
+        temperature: 0,
+        maxTokens: 1200,
+      });
+      const parsed = parseEmailContentJson(extractText(response.message.content));
+      if (!parsed) throw new Error('Provider did not return valid email content JSON.');
+      return parsed;
+    },
     onJobComplete: (job, run) => {
       if (!run.output) return;
       const body = run.output.length > 1500

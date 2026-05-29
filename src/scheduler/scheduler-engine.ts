@@ -6,6 +6,7 @@
 import { randomUUID } from 'crypto';
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 import { createLogger } from '../utils/logger';
+import type { ToolRegistry } from '../tools/tool-registry';
 import type { WorkspaceManager } from '../workspace';
 import type {
   JobOutputNotifier,
@@ -20,9 +21,29 @@ import { SchedulerStore } from './scheduler-store';
 
 const logger = createLogger('scheduler:engine');
 
+export interface ScheduledEmailContentInput {
+  job: ScheduledJob;
+  topic: string;
+  searchQuery: string;
+  webFetchResult?: string;
+  recipientEmail?: string;
+  now: Date;
+}
+
+export interface ScheduledEmailContent {
+  subject: string;
+  htmlContent: string;
+}
+
+export type ScheduledEmailContentGenerator = (
+  input: ScheduledEmailContentInput
+) => Promise<ScheduledEmailContent>;
+
 export interface SchedulerEngineOptions {
   store: SchedulerStore;
   executor?: ScheduledJobExecutor;
+  toolRegistry?: Pick<ToolRegistry, 'getTool'>;
+  emailContentGenerator?: ScheduledEmailContentGenerator;
   workspace?: WorkspaceManager;
   tickMs?: number;
   enabled?: boolean;
@@ -51,9 +72,53 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function metadataString(job: ScheduledJob, key: string): string | undefined {
+  const value = job.metadata?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function metadataBool(job: ScheduledJob, key: string): boolean {
+  return job.metadata?.[key] === true;
+}
+
+function maskedEmail(email: string | undefined): string | undefined {
+  if (!email) return undefined;
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return '***';
+  return `${local[0] ?? '*'}***@${domain}`;
+}
+
 export function jobRequiresEmail(job: ScheduledJob): boolean {
-  return /\b(kirim\s+email|send\s+email|brevo-email|email\s+default|BREVO_RECIPIENT_EMAIL)\b/i.test(job.prompt) ||
+  return metadataBool(job, 'emailRequired') ||
+    /\b(kirim\s+email|send\s+email|brevo-email|email\s+default|BREVO_RECIPIENT_EMAIL|ke\s+email)\b/i.test(job.prompt) ||
     /\bkirimkan\b[\s\S]*\bke\s+email\b/i.test(job.prompt);
+}
+
+export function jobRequiresCurrentData(job: ScheduledJob): boolean {
+  if (metadataBool(job, 'requiresCurrentData')) return true;
+  const text = [
+    job.prompt,
+    metadataString(job, 'topic') ?? '',
+    metadataString(job, 'searchQuery') ?? '',
+  ].join(' ');
+  return /\b(hari\s+ini|terbaru|terupdate|current|latest|harga\s+emas|berita|news|market|kurs|cuaca)\b/i.test(text);
+}
+
+function topicForJob(job: ScheduledJob): string {
+  const explicit = metadataString(job, 'topic');
+  if (explicit) return explicit;
+  if (/harga\s+emas/i.test(job.prompt)) return 'harga emas';
+  if (/arsenal/i.test(job.prompt)) return 'berita Arsenal';
+  return job.name;
+}
+
+function searchQueryForJob(job: ScheduledJob): string {
+  const explicit = metadataString(job, 'searchQuery');
+  if (explicit) return explicit;
+  const topic = topicForJob(job);
+  if (/harga\s+emas/i.test(topic)) return 'harga emas hari ini';
+  if (/berita|news|arsenal/i.test(topic)) return `${topic} terbaru hari ini`;
+  return `${topic} hari ini`;
 }
 
 function scheduledExecutionPrompt(job: ScheduledJob): string {
@@ -85,6 +150,82 @@ function brevoMessageIdFromResult(result: ScheduledJobToolResult | undefined): s
     return parsed['messageId'].trim();
   }
   return undefined;
+}
+
+function recipientFromResult(result: ScheduledJobToolResult | undefined): string | undefined {
+  const parsed = result?.parsedResult;
+  if (isRecord(parsed) && typeof parsed['recipientEmail'] === 'string' && parsed['recipientEmail'].trim()) {
+    return parsed['recipientEmail'].trim();
+  }
+  return undefined;
+}
+
+function safeJsonParse(text: string): unknown | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function toolResultError(parsed: unknown, rawResult: string): string | undefined {
+  if (isRecord(parsed)) {
+    const error = parsed['error'];
+    if (typeof error === 'string' && error.trim()) return error.trim();
+    const content = parsed['content'];
+    if (typeof content === 'string' && /failed|error|not sent|gagal/i.test(content)) return content.trim();
+  }
+  return rawResult.startsWith('Tool execution failed:') ? rawResult : undefined;
+}
+
+function toolResultOk(tool: string, parsed: unknown, rawResult: string): boolean {
+  if (rawResult.startsWith('Tool execution failed:')) return false;
+  if (tool === 'brevo-email') {
+    if (!isRecord(parsed) || parsed['ok'] !== true) return false;
+    const status = parsed['status'];
+    return typeof status === 'number' ? status >= 200 && status < 300 : true;
+  }
+  if (isRecord(parsed) && typeof parsed['ok'] === 'boolean') return parsed['ok'];
+  return true;
+}
+
+function buildToolTrace(tool: string, input: unknown, rawResult: string): ScheduledJobToolResult {
+  const parsed = safeJsonParse(rawResult);
+  const trace: ScheduledJobToolResult = {
+    tool,
+    input,
+    rawResult: outputExcerpt(rawResult),
+    ok: toolResultOk(tool, parsed, rawResult),
+  };
+  if (parsed !== null) trace.parsedResult = parsed;
+  const error = toolResultError(parsed, rawResult);
+  if (error) trace.error = error;
+  return trace;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fallbackEmailContent(job: ScheduledJob, topic: string, webFetchResult: string | undefined): ScheduledEmailContent {
+  const subject = `Laporan Terjadwal: ${topic}`;
+  const data = webFetchResult?.trim()
+    ? `<h2>Data yang ditemukan</h2><pre>${escapeHtml(outputExcerpt(webFetchResult))}</pre>`
+    : '<p>Data terbaru tidak tersedia saat job dijalankan.</p>';
+  return {
+    subject,
+    htmlContent: [
+      `<h1>${escapeHtml(subject)}</h1>`,
+      `<p>Job: ${escapeHtml(job.name)}</p>`,
+      `<p>Instruksi: ${escapeHtml(job.prompt)}</p>`,
+      data,
+    ].join('\n'),
+  };
 }
 
 function verifyEmailDelivery(
@@ -131,6 +272,8 @@ function verifyEmailDelivery(
 export class SchedulerEngine {
   private readonly store: SchedulerStore;
   private readonly executor: ScheduledJobExecutor | undefined;
+  private readonly toolRegistry: Pick<ToolRegistry, 'getTool'> | undefined;
+  private readonly emailContentGenerator: ScheduledEmailContentGenerator | undefined;
   private readonly workspace: WorkspaceManager | undefined;
   private readonly tickMs: number;
   private readonly enabled: boolean;
@@ -144,6 +287,8 @@ export class SchedulerEngine {
   constructor(options: SchedulerEngineOptions) {
     this.store = options.store;
     this.executor = options.executor;
+    this.toolRegistry = options.toolRegistry;
+    this.emailContentGenerator = options.emailContentGenerator;
     this.workspace = options.workspace;
     this.tickMs = Math.max(1_000, options.tickMs ?? getEnvInt('SCHEDULER_TICK_MS', 30_000));
     this.enabled = options.enabled ?? getEnvBool('SCHEDULER_ENABLED', true);
@@ -297,7 +442,14 @@ export class SchedulerEngine {
 
     try {
       if (!this.executor) {
+        if (jobRequiresEmail(job) && this.toolRegistry) {
+          return await this.executeScheduledEmailJob(job, run, startedAt);
+        }
         throw new Error('Scheduler executor is not configured.');
+      }
+
+      if (jobRequiresEmail(job) && this.toolRegistry) {
+        return await this.executeScheduledEmailJob(job, run, startedAt);
       }
 
       const sessionId = typeof job.metadata?.['sessionId'] === 'string'
@@ -316,6 +468,8 @@ export class SchedulerEngine {
       const durationMs = finishedAt.getTime() - startedAt.getTime();
       const email = verifyEmailDelivery(job, result.toolsUsed, result.toolResults);
       const status: 'success' | 'failed' = email.error ? 'failed' : 'success';
+      const brevoResult = result.toolResults?.find((trace) => trace.tool === 'brevo-email');
+      const recipientEmail = recipientFromResult(brevoResult);
       const completed: ScheduledJobRun = {
         ...run,
         finishedAt: finishedAt.toISOString(),
@@ -324,6 +478,7 @@ export class SchedulerEngine {
         durationMs,
         emailRequired: email.emailRequired,
         emailSent: email.emailSent,
+        ...(recipientEmail ? { recipientEmail } : {}),
         ...(result.toolsUsed ? { toolsUsed: result.toolsUsed } : {}),
         ...(result.toolResults ? { toolResults: result.toolResults } : {}),
         ...(email.brevoMessageId ? { brevoMessageId: email.brevoMessageId } : {}),
@@ -386,6 +541,219 @@ export class SchedulerEngine {
     } finally {
       this.runningJobIds.delete(job.id);
     }
+  }
+
+  private async executeScheduledEmailJob(
+    job: ScheduledJob,
+    run: ScheduledJobRun,
+    startedAt: Date
+  ): Promise<ScheduledJobRun> {
+    const toolsUsed: string[] = [];
+    const toolResults: ScheduledJobToolResult[] = [];
+    const explicitRecipientEmail = metadataString(job, 'recipientEmail');
+    const topic = topicForJob(job);
+    const searchQuery = searchQueryForJob(job);
+    const brevoTool = this.toolRegistry?.getTool('brevo-email');
+
+    logger.info('scheduled email job started', {
+      jobId: job.id,
+      name: job.name,
+      recipientEmail: maskedEmail(explicitRecipientEmail),
+    });
+
+    if (!brevoTool) {
+      return this.completeScheduledEmailRun(job, run, startedAt, {
+        status: 'failed',
+        output: 'Email was not sent.',
+        toolsUsed,
+        toolResults,
+        emailSent: false,
+        ...(explicitRecipientEmail ? { recipientEmail: explicitRecipientEmail } : {}),
+        error: 'brevo-email tool is not registered.',
+      });
+    }
+
+    let webFetchResult: string | undefined;
+    if (jobRequiresCurrentData(job)) {
+      const webFetchTool = this.toolRegistry?.getTool('web-fetch');
+      if (webFetchTool) {
+        const input = { query: searchQuery };
+        try {
+          const raw = await webFetchTool.run(input);
+          webFetchResult = raw;
+          toolsUsed.push('web-fetch');
+          toolResults.push(buildToolTrace('web-fetch', input, raw));
+          logger.info('scheduled email web-fetch executed', {
+            jobId: job.id,
+            name: job.name,
+            searchQuery,
+          });
+        } catch (err) {
+          const raw = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
+          webFetchResult = raw;
+          toolsUsed.push('web-fetch');
+          toolResults.push(buildToolTrace('web-fetch', input, raw));
+          logger.warn('scheduled email web-fetch failed', {
+            jobId: job.id,
+            name: job.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        logger.warn('scheduled email current data requested but web-fetch is not registered', {
+          jobId: job.id,
+          name: job.name,
+          searchQuery,
+        });
+      }
+    }
+
+    const content = await this.generateScheduledEmailContent({
+      job,
+      topic,
+      searchQuery,
+      ...(webFetchResult ? { webFetchResult } : {}),
+      ...(explicitRecipientEmail ? { recipientEmail: explicitRecipientEmail } : {}),
+      now: new Date(),
+    });
+
+    logger.info('scheduled email content generated', {
+      jobId: job.id,
+      name: job.name,
+      subject: content.subject,
+    });
+
+    const brevoInput: Record<string, unknown> = {
+      subject: content.subject,
+      htmlContent: content.htmlContent,
+    };
+    if (explicitRecipientEmail) brevoInput['recipientEmail'] = explicitRecipientEmail;
+
+    let brevoRaw: string;
+    try {
+      brevoRaw = await brevoTool.run(brevoInput);
+    } catch (err) {
+      brevoRaw = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    toolsUsed.push('brevo-email');
+    const brevoTrace = buildToolTrace('brevo-email', brevoInput, brevoRaw);
+    toolResults.push(brevoTrace);
+    const messageId = brevoMessageIdFromResult(brevoTrace);
+    const resolvedRecipient = explicitRecipientEmail ?? recipientFromResult(brevoTrace);
+    const emailSent = brevoTrace.ok === true;
+
+    logger.info('scheduled email brevo executed', {
+      jobId: job.id,
+      name: job.name,
+      recipientEmail: maskedEmail(resolvedRecipient),
+      ok: emailSent,
+      messageId,
+    });
+
+    if (!emailSent) {
+      const error = brevoTrace.error ?? 'Brevo email failed or could not be verified.';
+      logger.warn('scheduled email failed', {
+        jobId: job.id,
+        name: job.name,
+        recipientEmail: maskedEmail(resolvedRecipient),
+        toolsUsed,
+        error,
+      });
+      return this.completeScheduledEmailRun(job, run, startedAt, {
+        status: 'failed',
+        output: 'Email was not sent.',
+        toolsUsed,
+        toolResults,
+        emailSent: false,
+        ...(resolvedRecipient ? { recipientEmail: resolvedRecipient } : {}),
+        error,
+      });
+    }
+
+    logger.info('scheduled email sent', {
+      jobId: job.id,
+      name: job.name,
+      recipientEmail: maskedEmail(resolvedRecipient),
+      toolsUsed,
+      messageId,
+    });
+
+    return this.completeScheduledEmailRun(job, run, startedAt, {
+      status: 'success',
+      output: `Email berhasil dikirim${resolvedRecipient ? ` ke ${resolvedRecipient}` : ''}.`,
+      toolsUsed,
+      toolResults,
+      emailSent: true,
+      ...(resolvedRecipient ? { recipientEmail: resolvedRecipient } : {}),
+      ...(messageId ? { brevoMessageId: messageId } : {}),
+    });
+  }
+
+  private async generateScheduledEmailContent(input: ScheduledEmailContentInput): Promise<ScheduledEmailContent> {
+    if (this.emailContentGenerator) {
+      try {
+        const generated = await this.emailContentGenerator(input);
+        if (generated.subject.trim() && generated.htmlContent.trim()) {
+          return {
+            subject: generated.subject.trim(),
+            htmlContent: generated.htmlContent.trim(),
+          };
+        }
+      } catch (err) {
+        logger.warn('scheduled email content generator failed, using fallback', {
+          jobId: input.job.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return fallbackEmailContent(input.job, input.topic, input.webFetchResult);
+  }
+
+  private async completeScheduledEmailRun(
+    job: ScheduledJob,
+    run: ScheduledJobRun,
+    startedAt: Date,
+    result: {
+      status: 'success' | 'failed';
+      output: string;
+      toolsUsed: string[];
+      toolResults: ScheduledJobToolResult[];
+      emailSent: boolean;
+      recipientEmail?: string;
+      brevoMessageId?: string;
+      error?: string;
+    }
+  ): Promise<ScheduledJobRun> {
+    const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
+    const completed: ScheduledJobRun = {
+      ...run,
+      finishedAt: finishedAt.toISOString(),
+      status: result.status,
+      output: outputExcerpt(result.output),
+      toolsUsed: result.toolsUsed,
+      toolResults: result.toolResults,
+      emailRequired: true,
+      emailSent: result.emailSent,
+      durationMs,
+      ...(result.recipientEmail ? { recipientEmail: result.recipientEmail } : {}),
+      ...(result.brevoMessageId ? { brevoMessageId: result.brevoMessageId } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    };
+
+    await this.store.appendRun(completed);
+    await this.store.markJobRunResult(job, result.status, finishedAt, result.error, {
+      lastToolsUsed: result.toolsUsed,
+      lastEmailRequired: true,
+      lastEmailSent: result.emailSent,
+      ...(result.recipientEmail ? { lastRecipientEmail: result.recipientEmail } : {}),
+      ...(result.brevoMessageId ? { lastBrevoMessageId: result.brevoMessageId } : {}),
+      lastRunDurationMs: durationMs,
+    });
+    await this.writeWorkspaceRunLog(job, completed);
+    return completed;
   }
 
   private async writeWorkspaceRunLog(job: ScheduledJob, run: ScheduledJobRun): Promise<void> {
