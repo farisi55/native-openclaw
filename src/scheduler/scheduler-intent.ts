@@ -225,7 +225,7 @@ export function looksLikeSchedulerRequest(input: string): boolean {
   if (/\b(cronjob|cron|jadwal|jadwalkan|schedule|scheduler|reminder|alarm)\b/i.test(input)) return true;
   if (/\b(setiap\s+jam|setiap\s+hari|setiap\s+\d+\s*(?:menit|jam)|every\s+\d+\s*(?:minutes?|hours?)|menit\s+lagi|jam\s+lagi|hapus\s+cronjob|lihat\s+(?:semua\s+)?cronjob|list\s+cronjob|disable\s+cronjob|enable\s+cronjob)\b/i.test(input)) return true;
 
-  const actionVerbRe = /\b(?:kirim|send|balas|reply|email|ingatkan|remind|notify|kabari|call|ping)\b/i;
+  const actionVerbRe = /\b(?:kirim|send|balas|reply|email|ingatkan|remind|notify|kabari|call)\b/i;
   const timePattern = /\b(\d+)\s*(menit|jam|detik|second|seconds|minute|minutes|hour|hours)\s*(?:lagi|kemudian|dari\s+sekarang|from\s+now|after|later)\b/i.exec(input);
   if (timePattern) {
     const unit = timePattern[2]?.toLowerCase() ?? '';

@@ -136,6 +136,11 @@ export interface TurnInput {
   skillIds?: string[];
   signal?: AbortSignal;
   maxToolSteps?: number;
+  /**
+   * When true, the tool-loop enforces brevo-email after data fetch.
+   * Set by scheduler executor for jobs that require email delivery.
+   */
+  isScheduledEmailJob?: boolean;
 }
 
 export interface TurnResult {
@@ -553,6 +558,7 @@ export class Orchestrator {
       preferredTool: reasoningHint,
       enableRepair: true,
       maxRepairAttempts: 2,
+      isScheduledEmailJob: input.isScheduledEmailJob ?? false,
     });
 
     let routedProviderId = input.provider.id;

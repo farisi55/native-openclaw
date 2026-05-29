@@ -134,3 +134,99 @@ test('Maximum steps reached terminates with final tool result', async () => {
   assert.equal(result.finalText, 'last-step-output');
   assert.equal(result.toolSteps, 1);
 });
+
+test('isScheduledEmailJob=true: injects mandatory brevo-email instruction after web-fetch', async () => {
+  let brevoCallCount = 0;
+  let webFetchCallCount = 0;
+  let chatCount = 0;
+
+  const tools = {
+    'web-fetch': async () => {
+      webFetchCallCount++;
+      return JSON.stringify({
+        results: [{ title: 'Harga Emas', content: 'Rp 1.500.000/gram' }],
+      });
+    },
+    'brevo-email': async () => {
+      brevoCallCount++;
+      return JSON.stringify({ ok: true, messageId: 'msg-123' });
+    },
+  };
+
+  const webFetchCall = JSON.stringify({
+    type: 'tool_call',
+    tool: 'web-fetch',
+    input: { query: 'harga emas' },
+  });
+  const brevoCall = JSON.stringify({
+    type: 'tool_call',
+    tool: 'brevo-email',
+    input: { subject: 'Harga Emas', htmlContent: '<p>Rp 1.500.000</p>' },
+  });
+
+  const scheduledProvider = {
+    id: 'mock',
+    displayName: 'Mock',
+    async listModels() {
+      return [];
+    },
+    async chat(options) {
+      chatCount++;
+      if (chatCount === 1) {
+        return {
+          message: createMessage({ role: 'assistant', content: webFetchCall }),
+          model: 'mock',
+          latencyMs: 1,
+        };
+      }
+
+      const lastMessage = options.messages[options.messages.length - 1];
+      assert.match(
+        String(lastMessage.content),
+        /MANDATORY NEXT ACTION: You MUST now call the brevo-email tool/
+      );
+
+      return {
+        message: createMessage({ role: 'assistant', content: brevoCall }),
+        model: 'mock',
+        latencyMs: 1,
+      };
+    },
+  };
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 5, isScheduledEmailJob: true });
+  const result = await loop.run(
+    scheduledProvider,
+    'mock',
+    [createMessage({ role: 'user', content: 'Cari harga emas dan kirim ke email' })],
+    'You are an assistant.'
+  );
+
+  assert.equal(webFetchCallCount, 1);
+  assert.equal(brevoCallCount, 1);
+  assert.ok(result.toolsUsed.includes('brevo-email'));
+});
+
+test('isScheduledEmailJob=false: normal flow does not force brevo-email injection', async () => {
+  const tools = {
+    'web-fetch': async () => 'some data',
+  };
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 3, isScheduledEmailJob: false });
+  const webFetchCall = JSON.stringify({
+    type: 'tool_call',
+    tool: 'web-fetch',
+    input: { query: 'test' },
+  });
+  const finalResponse = JSON.stringify({ type: 'final_response', content: 'Done.' });
+
+  const result = await loop.run(
+    provider([webFetchCall, finalResponse]),
+    'mock',
+    [createMessage({ role: 'user', content: 'Get some data' })],
+    'You are an assistant.'
+  );
+
+  assert.equal(result.finalText, 'Done.');
+  assert.ok(!result.toolsUsed.includes('brevo-email'));
+});

@@ -49,6 +49,11 @@ export interface ToolLoopOptions {
   preferredTool?: string | null;
   enableRepair?: boolean;
   maxRepairAttempts?: number;
+  /**
+   * When true, the loop knows this is a scheduled job that requires email delivery.
+   * After web-fetch completes, it asks for brevo-email instead of a final answer.
+   */
+  isScheduledEmailJob?: boolean;
 }
 
 export interface ToolLoopToolResult {
@@ -461,7 +466,30 @@ function looksLikeStructuredToolCall(text: string, availableTools: string[]): bo
   return false;
 }
 
-function buildToolResultMessage(toolName: string, result: string): Message {
+function buildToolResultMessage(
+  toolName: string,
+  result: string,
+  options: { isScheduledEmailJob?: boolean; toolsUsed?: string[] } = {}
+): Message {
+  const { isScheduledEmailJob, toolsUsed = [] } = options;
+
+  if (
+    isScheduledEmailJob &&
+    toolName === 'web-fetch' &&
+    !toolsUsed.includes('brevo-email')
+  ) {
+    return createMessage({
+      role: 'user',
+      content:
+        `TOOL RESULT [web-fetch]:\n\n${result}\n\n` +
+        'MANDATORY NEXT ACTION: You MUST now call the brevo-email tool.\n' +
+        'Do NOT write a final_response. Do NOT summarize. Call brevo-email immediately.\n' +
+        'Return ONLY this JSON:\n' +
+        '{"type":"tool_call","tool":"brevo-email","input":{"subject":"<subject>","htmlContent":"<html content using the data above>"}}\n' +
+        'Rules: Do NOT invent recipientEmail or senderEmail. Use only subject and htmlContent.',
+    });
+  }
+
   return createMessage({
     role: 'user',
     content:
@@ -572,6 +600,7 @@ export class ToolLoop {
       preferredTool: opts.preferredTool ?? null,
       enableRepair: opts.enableRepair ?? true,
       maxRepairAttempts: opts.maxRepairAttempts ?? 2,
+      isScheduledEmailJob: opts.isScheduledEmailJob ?? false,
     };
   }
 
@@ -837,7 +866,10 @@ export class ToolLoop {
         }
 
         const assistantMsg = createMessage({ role: 'assistant', content: llmText });
-        const toolResultMsg = buildToolResultMessage(toolCall.tool, toolResult);
+        const toolResultMsg = buildToolResultMessage(toolCall.tool, toolResult, {
+          isScheduledEmailJob: this.opts.isScheduledEmailJob,
+          toolsUsed: [...toolsUsed],
+        });
         currentMessages = [...currentMessages, assistantMsg, toolResultMsg];
         logger.debug('tool-loop: result injected, continuing', { tool: toolCall.tool, step, toolSteps });
         continue;

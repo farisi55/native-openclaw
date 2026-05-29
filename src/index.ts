@@ -21,6 +21,7 @@ import { startTelegramIntegrationIfEnabled, type TelegramIntegration } from './i
 import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
+import { jobRequiresEmail } from './scheduler/scheduler-engine';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -240,6 +241,7 @@ async function bootstrap(): Promise<void> {
         model: state.activeModel,
         ...(sessionId ? { sessionId } : {}),
         maxToolSteps: 5,
+        isScheduledEmailJob: jobRequiresEmail(job),
       });
 
       return {
