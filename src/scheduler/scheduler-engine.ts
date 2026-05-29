@@ -8,6 +8,7 @@ import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 import { createLogger } from '../utils/logger';
 import type { WorkspaceManager } from '../workspace';
 import type {
+  JobOutputNotifier,
   ScheduledJob,
   ScheduledJobExecutor,
   ScheduledJobRun,
@@ -28,6 +29,8 @@ export interface SchedulerEngineOptions {
   misfirePolicy?: SchedulerMisfirePolicy;
   sessionMode?: SchedulerSessionMode;
   maxConcurrentJobs?: number;
+  /** Called after a non-email job completes successfully. Delivers output to user. */
+  onJobComplete?: JobOutputNotifier;
 }
 
 function envMisfirePolicy(): SchedulerMisfirePolicy {
@@ -57,14 +60,21 @@ function scheduledExecutionPrompt(job: ScheduledJob): string {
   if (!jobRequiresEmail(job)) return job.prompt;
 
   return [
-    'This is a scheduled job. The user explicitly requested email delivery.',
-    'You must gather the requested information if needed, then call the brevo-email tool.',
-    'Do not only say the email was sent. Actually call brevo-email.',
-    'Do not use placeholder recipients.',
-    'If no recipient is specified, omit recipientEmail so the tool uses BREVO_RECIPIENT_EMAIL.',
-    'Do not claim success unless brevo-email confirms ok=true.',
+    'SYSTEM INSTRUCTION - READ CAREFULLY:',
+    'This is a scheduled job requiring TWO sequential tool calls.',
+    'Step 1: Gather information (use web-fetch or search tool).',
+    'Step 2: MANDATORY - call brevo-email tool to send the email.',
+    'You MUST complete BOTH steps. Do NOT write a final response after step 1.',
+    'After step 1 completes, immediately call brevo-email without summarizing first.',
+    'Failure to call brevo-email = task failure.',
     '',
-    'Scheduled task:',
+    'Rules:',
+    '- Do not use placeholder email recipients.',
+    '- If no recipient is specified, omit recipientEmail so the tool uses BREVO_RECIPIENT_EMAIL.',
+    '- Do not claim the email was sent unless brevo-email returns ok=true.',
+    '- Do not add commentary between tool calls.',
+    '',
+    'Scheduled task (execute now):',
     job.prompt,
   ].join('\n');
 }
@@ -127,6 +137,7 @@ export class SchedulerEngine {
   private readonly misfirePolicy: SchedulerMisfirePolicy;
   private readonly sessionMode: SchedulerSessionMode;
   private readonly maxConcurrentJobs: number;
+  private readonly onJobComplete: JobOutputNotifier | undefined;
   private readonly runningJobIds = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
 
@@ -142,6 +153,7 @@ export class SchedulerEngine {
       1,
       options.maxConcurrentJobs ?? getEnvInt('SCHEDULER_MAX_CONCURRENT_JOBS', 2)
     );
+    this.onJobComplete = options.onJobComplete;
   }
 
   async start(): Promise<void> {
@@ -336,6 +348,14 @@ export class SchedulerEngine {
       await this.writeWorkspaceRunLog(job, completed);
       if (status === 'success') {
         logger.info('scheduled job completed', { jobId: job.id, name: job.name });
+        if (!email.emailRequired && this.onJobComplete && completed.output) {
+          void Promise.resolve(this.onJobComplete(job, completed)).catch((err: unknown) => {
+            logger.warn('onJobComplete notification failed (non-fatal)', {
+              jobId: job.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
       } else {
         logger.warn('scheduled job failed verification', { jobId: job.id, name: job.name, error: email.error });
       }

@@ -29,6 +29,12 @@ export class TelegramSessionManager {
     logger.debug('telegram chat session saved', { chatId, sessionId });
   }
 
+  async getAllChatIds(): Promise<string[]> {
+    const result = await this.kv.all();
+    if (!result.ok) return [];
+    return Object.keys(result.value);
+  }
+
   async deleteSessionId(chatId: string): Promise<void> {
     await this.kv.delete(chatId);
     logger.debug('telegram chat session deleted', { chatId });

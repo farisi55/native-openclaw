@@ -24,6 +24,7 @@ export interface SchedulerActionContext {
 export interface SchedulerActionResult {
   handled: boolean;
   response?: string;
+  actionType?: 'scheduler_create' | 'scheduler_manage';
 }
 
 function scheduleDescription(job: ScheduledJob): string {
@@ -238,7 +239,7 @@ async function handleIntent(
   }
 
   if (intent.intent === 'list') {
-    return { handled: true, response: formatJobList(await ctx.store.listJobs(), intent.filter ?? 'all') };
+    return { handled: true, response: formatJobList(await ctx.store.listJobs(), intent.filter ?? 'all'), actionType: 'scheduler_manage' };
   }
 
   if (intent.intent === 'get') {
@@ -248,6 +249,7 @@ async function handleIntent(
     return {
       handled: true,
       response: job ? formatJobDetails(job, lastRun) : `Tidak ditemukan cronjob dengan nama: ${target}.`,
+      actionType: 'scheduler_manage',
     };
   }
 
@@ -263,11 +265,12 @@ async function handleIntent(
     return {
       handled: true,
       response: formatCreatedJob(job),
+      actionType: 'scheduler_create',
     };
   }
 
   if (intent.intent === 'update') {
-    return { handled: true, response: await applyUpdateIntent(intent, ctx) };
+    return { handled: true, response: await applyUpdateIntent(intent, ctx), actionType: 'scheduler_manage' };
   }
 
   if (intent.intent === 'delete') {
@@ -276,19 +279,20 @@ async function handleIntent(
     return {
       handled: true,
       response: deleted ? `Cronjob dihapus: ${deleted.name}.` : `Tidak ditemukan cronjob dengan nama: ${target}.`,
+      actionType: 'scheduler_manage',
     };
   }
 
   if (intent.intent === 'enable') {
     const target = intent.targetJob ?? intent.name ?? '';
     const job = await ctx.store.enableJob(target);
-    return { handled: true, response: `Cronjob diaktifkan: ${job.name}.` };
+    return { handled: true, response: `Cronjob diaktifkan: ${job.name}.`, actionType: 'scheduler_manage' };
   }
 
   if (intent.intent === 'disable') {
     const target = intent.targetJob ?? intent.name ?? '';
     const job = await ctx.store.disableJob(target);
-    return { handled: true, response: `Cronjob dinonaktifkan: ${job.name}.` };
+    return { handled: true, response: `Cronjob dinonaktifkan: ${job.name}.`, actionType: 'scheduler_manage' };
   }
 
   if (intent.intent === 'run_now') {
@@ -302,6 +306,7 @@ async function handleIntent(
       response: run.status === 'success'
         ? `Cronjob dijalankan: ${target}.`
         : `Cronjob gagal dijalankan: ${run.error ?? 'unknown error'}`,
+      actionType: 'scheduler_manage',
     };
   }
 

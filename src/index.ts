@@ -17,7 +17,7 @@ import { Orchestrator } from './agents';
 import { startCLI } from './cli';
 import { WorkspaceManager } from './workspace';
 import { createApiRuntimeState, startApiServerIfEnabled } from './api';
-import { startTelegramIntegrationIfEnabled } from './integrations';
+import { startTelegramIntegrationIfEnabled, type TelegramIntegration } from './integrations';
 import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
@@ -80,6 +80,7 @@ async function bootstrap(): Promise<void> {
   logger.info(`Semantic memory: ${semanticMemory.size()} chunks loaded`);
 
   let schedulerEngine: SchedulerEngine | undefined;
+  let telegramIntegration: TelegramIntegration | null = null;
 
   // Graceful shutdown — flush pending semantic memory writes
   const gracefulShutdown = async (signal: string): Promise<void> => {
@@ -190,6 +191,22 @@ async function bootstrap(): Promise<void> {
   schedulerEngine = new SchedulerEngine({
     store: schedulerStore,
     workspace,
+    onJobComplete: (job, run) => {
+      if (!run.output) return;
+      const body = run.output.length > 1500
+        ? `${run.output.slice(0, 1500)}\n...(output terpotong)`
+        : run.output;
+      const message = `[${job.name}]\n${body}`;
+      process.stdout.write(`\n  \x1b[36mscheduler\x1b[0m  ${message}\n\n`);
+
+      if (telegramIntegration) {
+        void telegramIntegration.notifyAllActive(message).catch((err: unknown) => {
+          logger.warn('scheduler: telegram notify failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    },
     executor: async (job, context) => {
       const state = await createApiRuntimeState({
         providers,
@@ -222,6 +239,7 @@ async function bootstrap(): Promise<void> {
         provider: state.activeProvider,
         model: state.activeModel,
         ...(sessionId ? { sessionId } : {}),
+        maxToolSteps: 5,
       });
 
       return {
@@ -245,7 +263,7 @@ async function bootstrap(): Promise<void> {
     scheduler,
   });
 
-  await startTelegramIntegrationIfEnabled({
+  telegramIntegration = await startTelegramIntegrationIfEnabled({
     providers,
     skillRegistry,
     sessions,

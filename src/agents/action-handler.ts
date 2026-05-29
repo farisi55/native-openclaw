@@ -48,6 +48,8 @@ export interface ActionResult {
   handled: boolean;
   /** Text response to display to the user (when handled = true). */
   response?: string;
+  /** Type of handled action, used by non-blocking learning hooks. */
+  actionType?: 'scheduler_create' | 'scheduler_manage' | 'command' | 'capability' | 'other';
 }
 
 // ─── Pattern matchers ─────────────────────────────────────────────────────────

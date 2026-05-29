@@ -81,6 +81,16 @@ function promptFromInput(input: string): string {
   const lower = input.toLowerCase();
   const asksEmail = /\b(?:email|e-mail|mail)\b/i.test(input);
 
+  if (/\b(?:balas|reply|jawab)\b/i.test(input) && !asksEmail) {
+    const trailingReply = /\b(?:dengan|with)\s+["']?([^"']{1,80})["']?\s*$/i.exec(input);
+    const directReply = /\b(?:balas|reply|jawab)\s+(?:pesan\s+ini\s+)?(?:dengan\s+)?["']?(.+?)(?:\s+(?:\d+\s*(?:menit|jam|detik|seconds?|minutes?|hours?)\s*(?:lagi|kemudian|dari\s+sekarang)|setelah\s+\d+|dalam\s+\d+|nanti|besok|tomorrow|in\s+\d+|jam\s+\d{1,2}|pukul\s+\d{1,2})\b|$)/i.exec(input);
+    const replyText = (trailingReply?.[1] ?? directReply?.[1] ?? '').trim().replace(/[.。]+$/, '');
+    if (replyText) {
+      return `Balas dengan pesan: "${replyText}". Tulis hanya pesan balasan tersebut, tanpa komentar tambahan.`;
+    }
+    return 'Balas dengan pesan yang sesuai konteks percakapan. Tulis hanya pesan balasan, singkat dan langsung.';
+  }
+
   if (lower.includes('berita') && lower.includes('arsenal')) {
     if (asksEmail) {
       return 'Cari berita terbaru Arsenal dari sumber online terpercaya menggunakan web-fetch. Ringkas dalam bahasa Indonesia. Kirimkan ringkasan tersebut ke email default user menggunakan tool brevo-email. Gunakan BREVO_RECIPIENT_EMAIL jika user tidak menyebutkan alamat email eksplisit. Jangan gunakan placeholder email. Jangan klaim email terkirim kecuali brevo-email mengonfirmasi sukses.';
@@ -213,13 +223,28 @@ function taskSummaryFromInput(input: string): string | undefined {
 
 export function looksLikeSchedulerRequest(input: string): boolean {
   if (/\b(cronjob|cron|jadwal|jadwalkan|schedule|scheduler|reminder|alarm)\b/i.test(input)) return true;
-  if (/\b(setiap\s+jam|setiap\s+hari|menit\s+lagi|jam\s+lagi|hapus\s+cronjob|lihat\s+(?:semua\s+)?cronjob|list\s+cronjob|disable\s+cronjob|enable\s+cronjob)\b/i.test(input)) return true;
-  if (/\b\d+\s*(?:menit|jam|detik|second|seconds|minute|minutes|hour|hours)\s*(?:lagi|kemudian|dari\s+sekarang|from\s+now|after|later)\b/i.test(input)) return true;
-  if (/\b(?:setelah|after|dalam)\s+\d+\s*(?:menit|jam|detik|second|seconds|minute|minutes|hour|hours)\b/i.test(input)) return true;
-  if (/\bin\s+\d+\s*(?:minutes?|hours?|seconds?)\b/i.test(input)) return true;
+  if (/\b(setiap\s+jam|setiap\s+hari|setiap\s+\d+\s*(?:menit|jam)|every\s+\d+\s*(?:minutes?|hours?)|menit\s+lagi|jam\s+lagi|hapus\s+cronjob|lihat\s+(?:semua\s+)?cronjob|list\s+cronjob|disable\s+cronjob|enable\s+cronjob)\b/i.test(input)) return true;
+
+  const actionVerbRe = /\b(?:kirim|send|balas|reply|email|ingatkan|remind|notify|kabari|call|ping)\b/i;
+  const timePattern = /\b(\d+)\s*(menit|jam|detik|second|seconds|minute|minutes|hour|hours)\s*(?:lagi|kemudian|dari\s+sekarang|from\s+now|after|later)\b/i.exec(input);
+  if (timePattern) {
+    const unit = timePattern[2]?.toLowerCase() ?? '';
+    const isSeconds = unit.startsWith('detik') || unit.startsWith('second');
+    if (!isSeconds) return true;
+    if (actionVerbRe.test(input)) return true;
+  }
+  const prefixTimePattern = /\b(?:setelah|after|dalam)\s+\d+\s*(menit|jam|detik|second|seconds|minute|minutes|hour|hours)\b/i.exec(input);
+  if (prefixTimePattern) {
+    const unit = prefixTimePattern[1]?.toLowerCase() ?? '';
+    const isSeconds = unit.startsWith('detik') || unit.startsWith('second');
+    if (!isSeconds) return true;
+    if (actionVerbRe.test(input)) return true;
+  }
+  if (/\bin\s+\d+\s*(?:minutes?|hours?|seconds?)\b/i.test(input) && actionVerbRe.test(input)) return true;
   if (/\b(?:nanti|besok|tomorrow)\b/i.test(input) && /\b(?:kirim|balas|reply|send|ingatkan|remind)\b/i.test(input)) return true;
   if (/\b(?:hari\s+ini|today)\b/i.test(input) && /\b(?:ingatkan|remind)\b/i.test(input)) return true;
-  if (/\b(?:bangunkan|wake\s+me|alarm)\s+(?:saya|me)?\s*(?:jam|pukul|at)?\s*\d{1,2}/i.test(input)) return true;
+  if (/\bbangunkan\b/i.test(input) && /\b(?:jam|pukul|at|\d{1,2}[:h]|\d{4})\b/i.test(input)) return true;
+  if (/\b(?:wake\s+me|alarm)\s+(?:saya|me)?\s*(?:jam|pukul|at)?\s*\d{1,2}/i.test(input)) return true;
   if (/\b(?:kabari|follow\s+up|followup)\s+(?:saya|me)?\s*(?:nanti|besok|tomorrow|in\s+\d+)/i.test(input)) return true;
   if (/\bfollow\s*up\b[\s\S]{0,60}\b(?:besok|tomorrow|nanti|in\s+\d+)/i.test(input)) return true;
   if (/\bbalas\s+(?:email|pesan|message)\s+(?:ini\s+)?(?:nanti|besok|tomorrow|in\s+\d+|\d+\s*(?:menit|jam))/i.test(input)) return true;
@@ -262,6 +287,7 @@ function isCreateIntent(input: string): boolean {
     /\bset\s+alarm\b/i.test(input) ||
     /\b(?:kabari|follow\s+up|followup)\s+(?:saya|me)?\s*(?:nanti|besok|in\s+\d+)/i.test(input) ||
     /\b(?:kirim|kirimkan|send)\s+(?:setiap|every)\b/i.test(input) ||
+    /\b(?:kirim|kirimkan|send|ingatkan|remind|update|laporan|report)\b[\s\S]{0,50}\b(?:setiap|every)\b/i.test(input) ||
     /\b(?:kirim|kirimkan|send)\s+(?:email\s+)?reminder\b/i.test(input) ||
     /\b(?:kirimkan\s+saya|send\s+me)\b[\s\S]{0,80}\b(?:nanti|\d+\s*(?:menit|jam|detik)\s*(?:lagi|kemudian|dari\s+sekarang)|in\s+\d+\s*(?:minutes?|hours?|seconds?))\b/i.test(input) ||
     /\b(?:kirim|send)\s+(?:email|laporan|report|pesan)\b[\s\S]{0,60}\b(?:nanti|in\s+\d+|\d+\s*(?:menit|jam)\s*(?:lagi|dari\s+sekarang))\b/i.test(input) ||
@@ -276,6 +302,7 @@ function isCreateIntent(input: string): boolean {
     /\bsend\s+email\s+(?:at|in)\b/i.test(input) ||
     /\bsetiap\s+hari\s+jam\s+\d{1,2}(?:[.:]\d{2})?\b/i.test(input) ||
     /\bhari\s+ini\s+jam\s+\d{1,2}(?:[.:]\d{2})?\b[\s\S]*\b(?:mengingatkan|reminder|meeting|rapat)\b/i.test(input) ||
+    /\b(?:besok|tomorrow)\b[\s\S]{0,50}\b(?:jam|pukul|at)\s*\d{1,2}(?:[.:]\d{2})?\b/i.test(input) ||
     /\bfollow\s*up\b[\s\S]{0,60}\b(?:besok|tomorrow|nanti|in\s+\d+)/i.test(input)
   );
 }

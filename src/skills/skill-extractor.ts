@@ -31,12 +31,30 @@ Extraction criteria - extract ONLY if ALL are true:
 
 Special focus: If the user used an unusual or informal phrase to trigger a scheduled task (for example, "nanti kamu kirim ya", "bangunkan saya", "balas email nanti"), extract a skill that documents this phrase pattern so the agent can recognize it in future sessions.`;
 
+const SCHEDULER_PHRASE_EXTRACTION_PROMPT = `You are a scheduler phrase learning engine for an AI agent.
+
+The user just successfully created a scheduled task using an informal or unusual phrase.
+Extract this phrase pattern as a reusable skill so the agent can recognize it in future sessions.
+
+Respond with ONLY valid JSON (no markdown fences, no explanation):
+{
+  "shouldExtract": true,
+  "name": "<concise skill name, max 50 chars>",
+  "description": "<one sentence: describe the phrase pattern and what it means, max 120 chars>",
+  "tags": ["scheduler", "phrase-pattern"],
+  "body": "<markdown: explain the phrase pattern and how to handle it. Include: 1) The trigger phrase, 2) What it means (create a scheduled task), 3) How to parse the timing, 4) Example variations>"
+}
+
+Only respond with { "shouldExtract": false } if the user used an already-standard phrase like "jadwalkan", "kirimkan saya", "ingatkan saya", or "schedule".
+Always extract for informal phrases like "nanti kamu kirim ya", "bangunkan saya", "balas nanti", "kabari saya", "follow up besok", etc.`;
+
 export interface SkillExtractionInput {
   userInput: string;
   agentResponse: string;
   toolsUsed: string[];
   stepCount: number;
   sessionId: string;
+  wasSchedulerAction?: boolean;
 }
 
 export interface ExtractedSkill {
@@ -76,13 +94,22 @@ export class SkillExtractor {
   }
 
   async extract(input: SkillExtractionInput): Promise<ExtractedSkill | null> {
-    if (input.toolsUsed.length === 0 && input.stepCount <= 1) return null;
+    const isComplex = input.toolsUsed.length > 0 || input.stepCount > 1;
+    const isSchedulerAction = input.wasSchedulerAction === true;
+    if (!isComplex && !isSchedulerAction) {
+      logger.debug('skipping extraction: interaction too simple', {
+        sessionId: input.sessionId,
+        toolsUsed: input.toolsUsed.length,
+        stepCount: input.stepCount,
+      });
+      return null;
+    }
 
     try {
       const model = await this.resolveModel();
       const response = await this.provider.chat({
         model,
-        systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+        systemPrompt: isSchedulerAction ? SCHEDULER_PHRASE_EXTRACTION_PROMPT : EXTRACTION_SYSTEM_PROMPT,
         temperature: 0,
         maxTokens: 512,
         messages: [

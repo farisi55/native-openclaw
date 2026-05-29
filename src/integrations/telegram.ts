@@ -163,6 +163,19 @@ export class TelegramIntegration {
     this.stopped = true;
   }
 
+  async notifyAllActive(message: string): Promise<void> {
+    const chatIds = await this.telegramSessions.getAllChatIds();
+    const sends = chatIds.map((chatId) =>
+      this.sendText(chatId, message).catch((err: unknown) => {
+        logger.debug('notify: sendText failed', {
+          chatId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+    );
+    await Promise.allSettled(sends);
+  }
+
   async handleIncomingText(chatId: string, text: string): Promise<boolean> {
     const trimmed = text.trim();
     if (!trimmed) return false;

@@ -127,3 +127,12 @@ export type ScheduledJobExecutor = (
 export type SchedulerMisfirePolicy = 'run_once' | 'skip' | 'disabled';
 
 export type SchedulerSessionMode = 'dedicated' | 'last_active' | 'new_each_run';
+
+/**
+ * Called after a job completes with output text.
+ * Used to deliver non-email scheduled job output to a user-facing channel.
+ */
+export type JobOutputNotifier = (
+  job: ScheduledJob,
+  run: ScheduledJobRun
+) => Promise<void> | void;

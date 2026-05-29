@@ -135,6 +135,7 @@ export interface TurnInput {
   sessionId?: string;
   skillIds?: string[];
   signal?: AbortSignal;
+  maxToolSteps?: number;
 }
 
 export interface TurnResult {
@@ -381,6 +382,23 @@ export class Orchestrator {
         newSession = true;
       }
 
+      if (this.opts.selfImproving && this.selfImprovingEngine) {
+        void this.selfImprovingEngine
+          .processCompletedTurn({
+            userInput: input.userInput,
+            agentResponse: responseText,
+            toolsUsed: [],
+            stepCount: 0,
+            sessionId: session.id,
+            wasSchedulerAction: actionResult.actionType === 'scheduler_create',
+          })
+          .catch((err: unknown) => {
+            logger.warn('self-improving (action) error (non-fatal)', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+      }
+
       return {
         assistantText: responseText,
         session,
@@ -529,7 +547,7 @@ export class Orchestrator {
     });
 
     const dynamicToolLoop = new ToolLoop(this.toolRegistry, {
-      maxSteps: this.opts.maxToolSteps,
+      maxSteps: input.maxToolSteps ?? this.opts.maxToolSteps,
       temperature: this.opts.temperature,
       maxTokens: this.opts.maxTokens,
       preferredTool: reasoningHint,

@@ -10,6 +10,7 @@ export type {
   ScheduledJobSource,
   SchedulerListFilter,
   SchedulerIntent,
+  JobOutputNotifier,
   SchedulerMisfirePolicy,
   SchedulerSessionMode,
   ScheduleType,
