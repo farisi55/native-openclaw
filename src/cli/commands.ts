@@ -821,7 +821,9 @@ export async function cmdHeal(ctx: CLIContext, args: string[]): Promise<void> {
     return;
   }
 
-  const input = `/heal${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
+  const command = args[0] === 'restart' ? '/restart' : '/heal';
+  const commandArgs = args[0] === 'restart' ? args.slice(1) : args;
+  const input = `${command}${commandArgs.length > 0 ? ` ${commandArgs.join(' ')}` : ''}`;
   const result = await handleSelfHealingAction(input, ctx.selfHealing, 'cli');
   process.stdout.write('\n');
   process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));

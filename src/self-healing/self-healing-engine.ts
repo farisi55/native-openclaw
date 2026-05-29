@@ -12,6 +12,7 @@ import { QAAgent } from './qa-agent';
 import { ReportWriter } from './report-writer';
 import { SnapshotManager } from './snapshot-manager';
 import { TestRunner } from './test-runner';
+import type { LifecycleManager } from '../runtime/lifecycle-manager';
 
 const logger = createLogger('self-healing');
 
@@ -25,6 +26,7 @@ export interface SelfHealingEngineDeps {
   dependencyResolver?: DependencyResolver;
   reportWriter?: ReportWriter;
   store?: HealingStore;
+  lifecycleManager?: LifecycleManager;
 }
 
 function runId(prefix: string): string {
@@ -40,6 +42,7 @@ export class SelfHealingEngine {
   private readonly store: HealingStore;
   private readonly injectedTestRunner: TestRunner | undefined;
   private readonly injectedDependencyResolver: DependencyResolver | undefined;
+  private readonly lifecycleManager: LifecycleManager | undefined;
 
   constructor(
     private readonly config: HealingEngineConfig,
@@ -53,6 +56,7 @@ export class SelfHealingEngine {
     this.store = deps.store ?? new HealingStore(config.dataDir, 'self-healing');
     this.injectedTestRunner = deps.testRunner;
     this.injectedDependencyResolver = deps.dependencyResolver;
+    this.lifecycleManager = deps.lifecycleManager;
   }
 
   async run(input: HealingRunInput): Promise<HealingRun> {
@@ -145,7 +149,8 @@ export class SelfHealingEngine {
         await this.reportWriter.writeLoop(run.id, loop);
 
         if (qaReport.passed) {
-          return this.finish(run, 'passed', `Self-healing passed after ${loopNo} loop(s).`);
+          this.markRestartRequirement(run, changedFiles);
+          return this.finish(run, 'passed', this.successSummary(run, loopNo));
         }
 
         previousQa = qaReport;
@@ -194,6 +199,7 @@ export class SelfHealingEngine {
       autoApply: this.config.autoApply,
       autoInstall: this.config.autoInstall,
       autoRollback: this.config.autoRollback,
+      autoRestart: this.config.autoRestart,
       workdir: this.config.workdir,
       runsDir: this.config.runsDir,
       testCommands: this.config.testCommands,
@@ -221,6 +227,57 @@ export class SelfHealingEngine {
     await this.store.saveRun(run).catch((err: unknown) => {
       logger.warn('self-healing store write failed', { error: err instanceof Error ? err.message : String(err) });
     });
+
+    if (status === 'passed' && run.restartRequired && this.config.autoRestart && this.lifecycleManager) {
+      this.lifecycleManager.requestRestart({
+        reason: run.restartReason ?? 'self-healing passed and restart is required',
+        runId: run.id,
+        runType: run.type,
+      });
+      run.restartScheduled = this.lifecycleManager.isRestartScheduled();
+      run.finalSummary = this.successSummary(run, run.currentLoop);
+      await this.reportWriter.writeFinal(run).catch((err: unknown) => {
+        logger.warn('self-healing restart report update failed', { error: err instanceof Error ? err.message : String(err) });
+      });
+      await this.store.saveRun(run).catch((err: unknown) => {
+        logger.warn('self-healing restart store update failed', { error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     return run;
   }
+
+  private markRestartRequirement(run: HealingRun, changedFiles: string[]): void {
+    const requiresRestart = changedFiles.some((file) => {
+      const normalized = normalizePath(file);
+      return normalized === 'package.json' ||
+        normalized === 'package-lock.json' ||
+        normalized === 'tsconfig.json' ||
+        normalized === 'src/index.ts' ||
+        normalized.startsWith('src/config/') ||
+        normalized.startsWith('src/providers/') ||
+        normalized.startsWith('src/tools/tool-registry') ||
+        normalized.startsWith('src/tools/plugins/');
+    });
+    run.restartRequired = requiresRestart;
+    run.restartScheduled = false;
+    if (requiresRestart) {
+      run.restartReason = 'self-healing changed bootstrap, provider, config, or tool registry files';
+    }
+  }
+
+  private successSummary(run: HealingRun, loops: number): string {
+    const base = `Self-healing passed after ${loops} loop(s).`;
+    if (run.restartScheduled) {
+      return `${base} Auto restart scheduled in 1.5s.`;
+    }
+    if (run.restartRequired) {
+      return this.config.autoRestart ? `${base} Restart is required, but no lifecycle restart was scheduled.` : `${base} Restart is required.`;
+    }
+    return base;
+  }
+}
+
+function normalizePath(file: string): string {
+  return file.replace(/\\/g, '/').replace(/^\.\//, '');
 }

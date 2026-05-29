@@ -12,6 +12,7 @@ import { QAAgent } from './qa-agent';
 import { ReportWriter } from './report-writer';
 import { SnapshotManager } from './snapshot-manager';
 import { TestRunner } from './test-runner';
+import type { LifecycleManager } from '../runtime/lifecycle-manager';
 
 const logger = createLogger('self-upgrade');
 
@@ -25,6 +26,7 @@ export interface SelfUpgradeEngineDeps {
   dependencyResolver?: DependencyResolver;
   reportWriter?: ReportWriter;
   store?: HealingStore;
+  lifecycleManager?: LifecycleManager;
 }
 
 function runId(): string {
@@ -40,6 +42,7 @@ export class SelfUpgradeEngine {
   private readonly store: HealingStore;
   private readonly injectedTestRunner: TestRunner | undefined;
   private readonly injectedDependencyResolver: DependencyResolver | undefined;
+  private readonly lifecycleManager: LifecycleManager | undefined;
 
   constructor(
     private readonly config: UpgradeEngineConfig,
@@ -53,6 +56,7 @@ export class SelfUpgradeEngine {
     this.store = deps.store ?? new HealingStore(config.dataDir, 'self-upgrade');
     this.injectedTestRunner = deps.testRunner;
     this.injectedDependencyResolver = deps.dependencyResolver;
+    this.lifecycleManager = deps.lifecycleManager;
   }
 
   async run(input: UpgradeRunInput): Promise<HealingRun> {
@@ -151,7 +155,8 @@ export class SelfUpgradeEngine {
         await this.reportWriter.writeLoop(run.id, loop);
 
         if (qaReport.passed) {
-          return this.finish(run, 'passed', 'Self-upgrade passed QA. Restart may be required for hot registration.');
+          this.markRestartRequirement(run, changedFiles);
+          return this.finish(run, 'passed', this.successSummary(run));
         }
 
         previousQa = qaReport;
@@ -200,6 +205,7 @@ export class SelfUpgradeEngine {
       autoInstall: this.config.autoInstall,
       autoRollback: this.config.autoRollback,
       autoRegister: this.config.autoRegister,
+      autoRestart: this.config.autoRestart,
       workdir: this.config.workdir,
       runsDir: this.config.runsDir,
       testCommands: this.config.testCommands,
@@ -217,6 +223,48 @@ export class SelfUpgradeEngine {
     await this.store.saveRun(run).catch((err: unknown) => {
       logger.warn('self-upgrade store write failed', { error: err instanceof Error ? err.message : String(err) });
     });
+
+    if (status === 'passed' && run.restartRequired && this.config.autoRestart && this.lifecycleManager) {
+      this.lifecycleManager.requestRestart({
+        reason: run.restartReason ?? 'self-upgrade passed and restart is required for hot registration',
+        runId: run.id,
+        runType: run.type,
+      });
+      run.restartScheduled = this.lifecycleManager.isRestartScheduled();
+      run.finalSummary = this.successSummary(run);
+      await this.reportWriter.writeFinal(run).catch((err: unknown) => {
+        logger.warn('self-upgrade restart report update failed', { error: err instanceof Error ? err.message : String(err) });
+      });
+      await this.store.saveRun(run).catch((err: unknown) => {
+        logger.warn('self-upgrade restart store update failed', { error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     return run;
   }
+
+  private markRestartRequirement(run: HealingRun, changedFiles: string[]): void {
+    const requiresRestart = changedFiles.some((file) => normalizePath(file).startsWith('src/'));
+    run.restartRequired = requiresRestart;
+    run.restartScheduled = false;
+    if (requiresRestart) {
+      run.restartReason = 'self-upgrade changed source files; restart required for hot registration';
+    }
+  }
+
+  private successSummary(run: HealingRun): string {
+    if (run.restartScheduled) {
+      return 'Self-upgrade passed QA. Auto restart scheduled in 1.5s. The new capability will be available after restart.';
+    }
+    if (run.restartRequired) {
+      return this.config.autoRestart
+        ? 'Self-upgrade passed QA. Restart is required, but no lifecycle restart was scheduled.'
+        : 'Self-upgrade passed QA. Restart is required for the new capability to become available.';
+    }
+    return 'Self-upgrade passed QA. Restart is not required.';
+  }
+}
+
+function normalizePath(file: string): string {
+  return file.replace(/\\/g, '/').replace(/^\.\//, '');
 }

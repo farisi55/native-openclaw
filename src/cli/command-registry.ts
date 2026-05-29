@@ -78,6 +78,8 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { command: '/upgrade runs', description: 'List self-upgrade runs' },
   { command: '/upgrade report', description: 'Show self-upgrade report', usage: '/upgrade report <runId>', requiresArgument: true },
   { command: '/upgrade run', description: 'Run autonomous self-upgrade', usage: '/upgrade run <instruction>', requiresArgument: true },
+  { command: '/restart', description: 'Schedule graceful restart when manual restart is enabled' },
+  { command: '/restart status', description: 'Show restart lifecycle status' },
   { command: '/mcp', description: 'Show MCP help' },
   { command: '/mcp list', description: 'List configured MCP servers' },
   { command: '/mcp add', description: 'Add MCP server', usage: '/mcp add <name> [json]', requiresArgument: true },

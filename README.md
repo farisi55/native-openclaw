@@ -502,6 +502,24 @@ volumes:
   - ./workspace:/workspace
 ```
 
+### Self-upgrade auto restart
+
+When `SELF_UPGRADE_AUTO_RESTART=true` and a self-upgrade passes QA after
+modifying source files, Native OpenClaw writes the final run report, then exits
+with `AUTONOMOUS_RESTART_EXIT_CODE` (default `42`) after
+`AUTONOMOUS_RESTART_DELAY_MS` (default `1500`).
+
+Docker Compose should use `restart: unless-stopped`, as shown above. With that
+policy, the container starts again automatically after the process exits, and
+the newly added capability is available after restart.
+
+Disable this behavior with:
+
+```env
+SELF_UPGRADE_AUTO_RESTART=false
+AUTONOMOUS_RESTART_MODE=disabled
+```
+
 ### Docker Compose operations
 
 ```bash

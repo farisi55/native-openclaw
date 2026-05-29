@@ -17,6 +17,9 @@ export interface HealingRun {
   finalSummary?: string;
   error?: string;
   createdBy?: 'cli' | 'api' | 'telegram' | 'system';
+  restartRequired?: boolean;
+  restartScheduled?: boolean;
+  restartReason?: string;
 }
 
 export interface HealingLoopResult {
@@ -92,6 +95,7 @@ export interface HealingEngineConfig {
   dataDir: string;
   redactSecrets: boolean;
   temperature: number;
+  autoRestart: boolean;
 }
 
 export interface UpgradeEngineConfig extends HealingEngineConfig {

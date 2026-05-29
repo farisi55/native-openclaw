@@ -1,6 +1,7 @@
 import type { HealingRun } from './healing-types';
 import type { SelfHealingEngine } from './self-healing-engine';
 import type { SelfUpgradeEngine } from './self-upgrade-engine';
+import type { LifecycleManager } from '../runtime/lifecycle-manager';
 
 export interface SelfHealingActionContext {
   healingEnabled: boolean;
@@ -8,6 +9,7 @@ export interface SelfHealingActionContext {
   runsDir: string;
   healingEngine?: SelfHealingEngine;
   upgradeEngine?: SelfUpgradeEngine;
+  lifecycleManager?: LifecycleManager;
 }
 
 export interface SelfHealingActionResult {
@@ -55,8 +57,17 @@ function formatRun(run: HealingRun): string {
   ].join('\n');
 }
 
-function parseSlash(input: string): { kind: 'heal' | 'upgrade'; action: string; payload: string } | null {
+function parseSlash(input: string): { kind: 'heal' | 'upgrade' | 'restart'; action: string; payload: string } | null {
   const trimmed = input.trim();
+  const restart = /^\/restart(?:\s+([a-z-]+))?(?:\s+([\s\S]+))?$/i.exec(trimmed);
+  if (restart) {
+    return {
+      kind: 'restart',
+      action: (restart[1] ?? 'run').toLowerCase(),
+      payload: (restart[2] ?? '').trim(),
+    };
+  }
+
   const heal = /^\/(?:heal|self-heal)(?:\s+([a-z-]+))?(?:\s+([\s\S]+))?$/i.exec(trimmed);
   if (heal) {
     return {
@@ -105,6 +116,9 @@ export async function handleSelfHealingAction(
 
   if (parsed.kind === 'heal') {
     return handleHeal(parsed.action, parsed.payload, ctx, source);
+  }
+  if (parsed.kind === 'restart') {
+    return handleRestart(parsed.action, ctx);
   }
   return handleUpgrade(parsed.action, parsed.payload, ctx, source);
 }
@@ -167,4 +181,33 @@ async function handleUpgrade(
     return { handled: true, response: formatRun(run) };
   }
   return { handled: true, response: upgradeHelp() };
+}
+
+async function handleRestart(
+  action: string,
+  ctx: SelfHealingActionContext
+): Promise<SelfHealingActionResult> {
+  if (!ctx.lifecycleManager) {
+    return { handled: true, response: 'Restart lifecycle manager is not initialized.' };
+  }
+
+  if (action === 'status') {
+    return {
+      handled: true,
+      response: ['Restart status:', formatStatus(ctx.lifecycleManager.getStatus())].join('\n'),
+    };
+  }
+
+  if (!ctx.lifecycleManager.isManualRestartEnabled()) {
+    return {
+      handled: true,
+      response: 'Manual restart is disabled. Set AUTONOMOUS_RESTART_MANUAL_ENABLED=true to allow /restart.',
+    };
+  }
+
+  const scheduled = ctx.lifecycleManager.requestManualRestart('manual /restart command');
+  return {
+    handled: true,
+    response: scheduled ? 'Restart scheduled.' : 'Restart was not scheduled.',
+  };
 }

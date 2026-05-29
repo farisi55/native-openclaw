@@ -11,6 +11,7 @@ const {
   SnapshotManager,
   redactSecrets,
 } = require('../dist/self-healing');
+const { LifecycleManager } = require('../dist/runtime/lifecycle-manager');
 
 function tmpRoot(name) {
   return path.join(process.cwd(), 'tmp', `self-healing-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -30,8 +31,27 @@ function config(root, overrides = {}) {
     dataDir: path.join(root, 'data'),
     redactSecrets: true,
     temperature: 0.1,
+    autoRestart: false,
     ...overrides,
   };
+}
+
+function fakeLifecycle(options = {}) {
+  const calls = { schedules: 0, exits: 0 };
+  const manager = new LifecycleManager({
+    isTestRuntime: false,
+    delayMs: 1500,
+    exitCode: 42,
+    setTimeoutFn: () => {
+      calls.schedules += 1;
+      return 0;
+    },
+    exitFn: () => {
+      calls.exits += 1;
+    },
+    ...options,
+  });
+  return { manager, calls };
 }
 
 function commandResult(command, exitCode, stdout = '', stderr = '') {
@@ -209,6 +229,132 @@ async function prepareRoot(name) {
     const run = await engine.run({ userInput: 'add slugify tool', source: 'system' });
     assert.equal(run.status, 'passed');
     assert.match(await fs.readFile(path.join(root, 'src', 'tools', 'text-slugify.ts'), 'utf-8'), /slugify/);
+  }
+
+  {
+    const root = await prepareRoot('upgrade-restart');
+    await fs.mkdir(path.join(root, 'src', 'tools'), { recursive: true });
+    const lifecycle = fakeLifecycle();
+    const engine = new SelfUpgradeEngine({
+      ...config(root, { autoRestart: true }),
+      autoRegister: true,
+      allowedTargets: ['repo'],
+    }, {
+      lifecycleManager: lifecycle.manager,
+      analyzer: {
+        analyzeUpgrade: async () => ({
+          summary: 'add tool',
+          missingCapability: 'restartable tool',
+          feasible: true,
+          targetFiles: ['src/tools/restartable-tool.ts'],
+          implementationStrategy: 'create tool',
+          confidence: 0.9,
+        }),
+      },
+      codingAgent: {
+        applyUpgrade: async ({ patchApplier }) => patchApplier.applyAll([
+          { path: 'src/tools/restartable-tool.ts', action: 'create', content: 'export const restartable = true;\n' },
+        ]),
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 0, 'ok', '')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'add restartable tool', source: 'system' });
+    assert.equal(run.status, 'passed');
+    assert.equal(run.restartRequired, true);
+    assert.equal(run.restartScheduled, true);
+    assert.equal(lifecycle.calls.schedules, 1);
+    assert.match(run.finalSummary, /Auto restart scheduled/);
+  }
+
+  {
+    const root = await prepareRoot('upgrade-no-restart-disabled');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    const lifecycle = fakeLifecycle();
+    const engine = new SelfUpgradeEngine({
+      ...config(root, { autoRestart: false }),
+      autoRegister: true,
+      allowedTargets: ['repo'],
+    }, {
+      lifecycleManager: lifecycle.manager,
+      analyzer: {
+        analyzeUpgrade: async () => ({
+          summary: 'add source file',
+          missingCapability: 'source change',
+          feasible: true,
+          targetFiles: ['src/source-change.ts'],
+          implementationStrategy: 'create source file',
+          confidence: 0.9,
+        }),
+      },
+      codingAgent: {
+        applyUpgrade: async ({ patchApplier }) => patchApplier.applyAll([
+          { path: 'src/source-change.ts', action: 'create', content: 'export const sourceChange = true;\n' },
+        ]),
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 0, 'ok', '')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'add source file', source: 'system' });
+    assert.equal(run.status, 'passed');
+    assert.equal(run.restartRequired, true);
+    assert.equal(run.restartScheduled, false);
+    assert.equal(lifecycle.calls.schedules, 0);
+  }
+
+  {
+    const root = await prepareRoot('upgrade-failed-no-restart');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    const lifecycle = fakeLifecycle();
+    const engine = new SelfUpgradeEngine({
+      ...config(root, { maxLoops: 1, autoRestart: true }),
+      autoRegister: true,
+      allowedTargets: ['repo'],
+    }, {
+      lifecycleManager: lifecycle.manager,
+      analyzer: {
+        analyzeUpgrade: async () => ({
+          summary: 'bad upgrade',
+          missingCapability: 'broken source',
+          feasible: true,
+          targetFiles: ['src/broken-upgrade.ts'],
+          implementationStrategy: 'create broken source',
+          confidence: 0.9,
+        }),
+      },
+      codingAgent: {
+        applyUpgrade: async ({ patchApplier }) => patchApplier.applyAll([
+          { path: 'src/broken-upgrade.ts', action: 'create', content: 'export const broken = true;\n' },
+        ]),
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 1, '', 'still failing')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'add broken source', source: 'system' });
+    assert.equal(run.status, 'rolled_back');
+    assert.equal(run.restartScheduled ?? false, false);
+    assert.equal(lifecycle.calls.schedules, 0);
+  }
+
+  {
+    const lifecycle = fakeLifecycle({ isTestRuntime: true });
+    lifecycle.manager.requestRestart({ reason: 'test runtime' });
+    assert.equal(lifecycle.manager.isRestartScheduled(), false);
+    assert.equal(lifecycle.calls.schedules, 0);
+  }
+
+  {
+    const lifecycle = fakeLifecycle();
+    lifecycle.manager.requestRestart({ reason: 'first' });
+    lifecycle.manager.requestRestart({ reason: 'second' });
+    assert.equal(lifecycle.manager.isRestartScheduled(), true);
+    assert.equal(lifecycle.calls.schedules, 1);
   }
 
   console.log('self-healing tests passed');

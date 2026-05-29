@@ -186,7 +186,7 @@ async function handleCommand(
       case 'memory': case 'mem': await cmdMemory(ctx, args); break;
       case 'heartbeat': case 'hb': await cmdHeartbeat(ctx, args); break;
       case 'cron': case 'jobs': case 'schedule': await cmdCron(ctx, args); break;
-      case 'heal': case 'self-heal': case 'fix': await cmdHeal(ctx, cmd === 'fix' ? ['run', ...args] : args); break;
+      case 'heal': case 'self-heal': case 'fix': case 'restart': await cmdHeal(ctx, cmd === 'fix' ? ['run', ...args] : cmd === 'restart' ? ['restart', ...args] : args); break;
       case 'upgrade': case 'self-upgrade': await cmdUpgrade(ctx, args); break;
       case 'network': case 'net': await cmdNetwork(ctx, args); break;
       case 'mcp': await cmdMcp(ctx, args); break;
