@@ -20,6 +20,12 @@ export interface SkillQualityEntry {
   createdAt: string;
 }
 
+export interface SkillUsageRef {
+  id: string;
+  name: string;
+  filePath: string;
+}
+
 interface SkillQualityStore {
   taskCounter: number;
   skills: Record<string, SkillQualityEntry>;
@@ -52,6 +58,14 @@ export class SkillQualityTracker {
     this.filePath = join(dataDir, 'skill-quality.json');
   }
 
+  get qualityFilePath(): string {
+    return this.filePath;
+  }
+
+  get threshold(): number {
+    return this.evaluationThreshold;
+  }
+
   async load(): Promise<void> {
     if (this.loaded) return;
     try {
@@ -68,29 +82,61 @@ export class SkillQualityTracker {
     await atomicWrite(this.filePath, JSON.stringify(this.store, null, 2));
   }
 
-  async recordTaskCompletion(skillId: string | null, success: boolean): Promise<void> {
+  private applySkillUsage(skill: SkillUsageRef, success: boolean): void {
+    const now = new Date().toISOString();
+    const existing = this.store.skills[skill.id];
+    const entry: SkillQualityEntry = existing ?? {
+      name: skill.name,
+      filePath: skill.filePath,
+      usageCount: 0,
+      successCount: 0,
+      failureCount: 0,
+      lastUsed: now,
+      createdAt: now,
+    };
+
+    entry.name = skill.name;
+    entry.filePath = skill.filePath;
+    entry.usageCount += 1;
+    if (success) entry.successCount += 1;
+    else entry.failureCount += 1;
+    entry.lastUsed = now;
+    this.store.skills[skill.id] = entry;
+  }
+
+  async recordTaskCompletion(
+    skillsUsedOrId: SkillUsageRef[] | string | null = [],
+    success: boolean
+  ): Promise<void> {
     await this.load();
     this.store.taskCounter += 1;
-    if (skillId) {
-      const now = new Date().toISOString();
-      const existing = this.store.skills[skillId];
-      const entry: SkillQualityEntry = existing ?? {
-        name: skillId,
-        filePath: skillId,
-        usageCount: 0,
-        successCount: 0,
-        failureCount: 0,
-        lastUsed: now,
-        createdAt: now,
-      };
-      entry.usageCount += 1;
-      if (success) entry.successCount += 1;
-      else entry.failureCount += 1;
-      entry.lastUsed = now;
-      this.store.skills[skillId] = entry;
+
+    const skillsUsed = Array.isArray(skillsUsedOrId)
+      ? skillsUsedOrId
+      : skillsUsedOrId
+        ? [{ id: skillsUsedOrId, name: skillsUsedOrId, filePath: skillsUsedOrId }]
+        : [];
+
+    const seen = new Set<string>();
+    for (const skill of skillsUsed) {
+      if (seen.has(skill.id)) continue;
+      seen.add(skill.id);
+      this.applySkillUsage(skill, success);
     }
+
     await this.save();
-    logger.debug('skill quality task recorded', { skillId, success, taskCounter: this.store.taskCounter });
+    logger.debug('skill quality task recorded', {
+      skillsUsed: [...seen],
+      success,
+      taskCounter: this.store.taskCounter,
+    });
+  }
+
+  async recordSkillUsage(skillId: string, skillName: string, filePath: string, success: boolean): Promise<void> {
+    await this.load();
+    this.applySkillUsage({ id: skillId, name: skillName, filePath }, success);
+    await this.save();
+    logger.debug('skill usage recorded', { skillId, success });
   }
 
   async registerSkill(id: string, name: string, filePath: string): Promise<void> {

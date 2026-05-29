@@ -85,4 +85,12 @@ export class ProviderRouter {
       hint
     )[0] ?? null;
   }
+
+  getProvider(providerId: string): IProvider | undefined {
+    return (this.fallback as unknown as { providers: ProviderRegistry }).providers.get(providerId);
+  }
+
+  allProviders(): IProvider[] {
+    return [...(this.fallback as unknown as { providers: ProviderRegistry }).providers.values()];
+  }
 }

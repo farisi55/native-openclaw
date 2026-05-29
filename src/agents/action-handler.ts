@@ -21,6 +21,7 @@ import { validateMcpConfigFile } from '../mcp';
 import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
+import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills/self-improving-actions';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -39,6 +40,8 @@ export interface ActionContext {
   mcpManager?: McpManager;
   /** Optional scheduler action context for natural-language cronjob management. */
   scheduler?: SchedulerActionContext;
+  /** Optional self-improvement action context for management commands. */
+  selfImproving?: SelfImprovingActionContext;
   /** Called when the active session must be cleared (e.g. after delete). */
   onSessionCleared: () => void;
 }
@@ -49,7 +52,7 @@ export interface ActionResult {
   /** Text response to display to the user (when handled = true). */
   response?: string;
   /** Type of handled action, used by non-blocking learning hooks. */
-  actionType?: 'scheduler_create' | 'scheduler_manage' | 'command' | 'capability' | 'other';
+  actionType?: 'scheduler_create' | 'scheduler_manage' | 'self_improve' | 'command' | 'capability' | 'other';
 }
 
 // ─── Pattern matchers ─────────────────────────────────────────────────────────
@@ -289,6 +292,17 @@ export async function handleAction(
   ctx: ActionContext
 ): Promise<ActionResult> {
   const trimmed = input.trim();
+
+  if (ctx.selfImproving) {
+    const selfImprovingAction = await handleSelfImprovingAction(trimmed, ctx.selfImproving);
+    if (selfImprovingAction.handled) {
+      return {
+        handled: true,
+        response: selfImprovingAction.response ?? '',
+        actionType: 'self_improve',
+      };
+    }
+  }
 
   if (ctx.scheduler) {
     const schedulerAction = await handleSchedulerText(trimmed, ctx.scheduler, 'system');

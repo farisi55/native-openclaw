@@ -15,7 +15,7 @@
  *     return
  */
 
-import type { IProvider, ChatOptions, ChatResponse } from '../types/provider';
+import type { IProvider, ChatOptions, ChatResponse, ModelInfo } from '../types/provider';
 import type { Message } from '../types/message';
 import { createMessage } from '../types/message';
 import type { SkillRegistry } from '../skills/registry';
@@ -38,6 +38,7 @@ import {
   SkillExtractor,
   SkillQualityTracker,
   SkillWriter,
+  type SelfImprovingActionContext,
 } from '../skills';
 import type { SystemContextInput } from './system-context';
 import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
@@ -45,6 +46,7 @@ import { WorkspaceManager } from '../workspace';
 import type { SchedulerActionContext } from '../scheduler';
 import { createLogger } from '../utils/logger';
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
+import { join } from 'path';
 
 const logger = createLogger('agent:orchestrator');
 
@@ -65,6 +67,125 @@ function sanitizeFlowReason(reason: string | undefined, fallback: string): strin
 
 function shouldIncludeWorkflowContext(input: string): boolean {
   return /\b(workflow|workflow\.md|jalankan workflow|laporan|report|autonomous|otomatis|otonom)\b/i.test(input);
+}
+
+interface SelfImprovingProviderSelection {
+  provider: IProvider;
+  model: string;
+}
+
+function parseSelfImprovingModel(value: string): { providerId?: string; modelId: string } | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const slashIndex = trimmed.indexOf('/');
+  if (slashIndex > 0 && slashIndex < trimmed.length - 1) {
+    return {
+      providerId: trimmed.slice(0, slashIndex).trim().toLowerCase(),
+      modelId: trimmed.slice(slashIndex + 1).trim(),
+    };
+  }
+  return { modelId: trimmed };
+}
+
+async function defaultModelForProvider(provider: IProvider): Promise<string> {
+  const envModel = process.env[`${provider.id.toUpperCase()}_DEFAULT_MODEL`];
+  if (envModel?.trim()) return envModel.trim();
+  const models = await provider.listModels();
+  return models[0]?.id ?? 'default';
+}
+
+function modelInfo(modelId: string): ModelInfo {
+  return {
+    id: modelId,
+    name: modelId,
+    contextWindow: 0,
+    supportsTools: false,
+    supportsVision: false,
+  };
+}
+
+function createSelfImprovingProvider(router: ProviderRouter): IProvider | null {
+  const fallbackProvider = router.bestProvider() ?? router.allProviders()[0] ?? null;
+  if (!fallbackProvider) return null;
+
+  let selectionPromise: Promise<SelfImprovingProviderSelection> | null = null;
+
+  const fallbackSelection = async (): Promise<SelfImprovingProviderSelection> => ({
+    provider: fallbackProvider,
+    model: await defaultModelForProvider(fallbackProvider),
+  });
+
+  const resolveSelection = async (): Promise<SelfImprovingProviderSelection> => {
+    const configured = parseSelfImprovingModel(getOptionalEnv('SELF_IMPROVING_MODEL') ?? '');
+    if (!configured) return fallbackSelection();
+
+    if (configured.providerId) {
+      const provider = router.getProvider(configured.providerId);
+      if (!provider) {
+        logger.warn('SELF_IMPROVING_MODEL provider not found; using default router', {
+          configuredProvider: configured.providerId,
+        });
+        return fallbackSelection();
+      }
+      return { provider, model: configured.modelId };
+    }
+
+    const matches: IProvider[] = [];
+    for (const provider of router.allProviders()) {
+      try {
+        const models = await provider.listModels();
+        if (models.some((model) => model.id === configured.modelId)) {
+          matches.push(provider);
+        }
+      } catch (err) {
+        logger.debug('self-improving model lookup skipped provider', {
+          provider: provider.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (matches.length === 1) {
+      return { provider: matches[0]!, model: configured.modelId };
+    }
+
+    if (matches.length > 1) {
+      logger.warn('SELF_IMPROVING_MODEL is ambiguous; using default router', {
+        model: configured.modelId,
+        providers: matches.map((provider) => provider.id),
+      });
+      return fallbackSelection();
+    }
+
+    logger.warn('SELF_IMPROVING_MODEL model not found; using default router', {
+      model: configured.modelId,
+    });
+    return fallbackSelection();
+  };
+
+  const getSelection = (): Promise<SelfImprovingProviderSelection> => {
+    selectionPromise ??= resolveSelection();
+    return selectionPromise;
+  };
+
+  return {
+    id: 'self-improving-router',
+    displayName: 'Self-Improving Router',
+    async listModels() {
+      const selection = await getSelection();
+      return [modelInfo(selection.model)];
+    },
+    async chat(options: ChatOptions): Promise<ChatResponse> {
+      const selection = await getSelection();
+      const routed = await router.chat(
+        selection.provider,
+        selection.model,
+        { ...options, model: selection.model },
+        'self-improving skill maintenance'
+      );
+      return routed.response;
+    },
+  };
 }
 
 export interface OrchestratorOptions {
@@ -170,6 +291,8 @@ export class Orchestrator {
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
   private readonly selfImprovingEngine?: SelfImprovingEngine;
+  private readonly skillsDir: string;
+  private selfImprovingActionContext: SelfImprovingActionContext;
   readonly workspace: WorkspaceManager; // PERF [E1]
   private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler'>>;
 
@@ -197,6 +320,9 @@ export class Orchestrator {
     this.workspace = workspace;
     const selfImproving = opts.selfImproving ?? getEnvBool('SELF_IMPROVING', false);
     const selfImprovingEvalThreshold = opts.selfImprovingEvalThreshold ?? getEnvInt('SELF_IMPROVING_EVAL_THRESHOLD', 10);
+    this.skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
+    const dataDir = getOptionalEnv('APP_DATA_DIR') ?? './data';
+    const autoSkillsDir = join(this.skillsDir, 'auto-generated');
 
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
@@ -213,15 +339,32 @@ export class Orchestrator {
 
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
+    this.selfImprovingActionContext = {
+      enabled: selfImproving,
+      autoSkillsDir,
+      qualityFilePath: join(dataDir, 'skill-quality.json'),
+      evaluationThreshold: selfImprovingEvalThreshold,
+    };
 
     if (selfImproving) {
-      const primaryProvider = this.router.bestProvider?.() ?? null;
-      if (primaryProvider) {
-        const extractor = new SkillExtractor(primaryProvider);
-        const writer = new SkillWriter('skills/auto-generated');
-        const tracker = new SkillQualityTracker('data', selfImprovingEvalThreshold);
-        const evaluator = new SkillEvaluator(primaryProvider, writer, tracker);
-        this.selfImprovingEngine = new SelfImprovingEngine(extractor, writer, tracker, evaluator, skills);
+      const selfImprovingProvider = createSelfImprovingProvider(this.router);
+      if (selfImprovingProvider) {
+        const extractor = new SkillExtractor(selfImprovingProvider);
+        const writer = new SkillWriter(autoSkillsDir);
+        const tracker = new SkillQualityTracker(dataDir, selfImprovingEvalThreshold);
+        const evaluator = new SkillEvaluator(selfImprovingProvider, writer, tracker);
+        this.selfImprovingEngine = new SelfImprovingEngine(
+          extractor,
+          writer,
+          tracker,
+          evaluator,
+          skills,
+          this.skillsDir
+        );
+        this.selfImprovingActionContext = {
+          ...this.selfImprovingActionContext,
+          engine: this.selfImprovingEngine,
+        };
         tracker.load().catch((err: unknown) => {
           logger.warn('tracker load error', { error: err instanceof Error ? err.message : String(err) });
         });
@@ -229,6 +372,10 @@ export class Orchestrator {
         logger.warn('self-improving disabled: no provider available for extraction');
       }
     }
+  }
+
+  getSelfImprovingActionContext(): SelfImprovingActionContext {
+    return { ...this.selfImprovingActionContext };
   }
 
   private async ensureWorkspaceReady(): Promise<void> {
@@ -358,15 +505,14 @@ export class Orchestrator {
     }
 
     // ── 5. Action handler ─────────────────────────────────────────────────────
-    const skillsDir = getOptionalEnv('SKILLS_DIR') ?? './skills';
-
     const actionContext: ActionContext = {
       skillRegistry: this.skills,
       sessions: this.sessions,
-      skillsDir,
+      skillsDir: this.skillsDir,
       activeSessionId: this._activeSessionId,
       ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
       ...(this.scheduler ? { scheduler: this.scheduler } : {}),
+      selfImproving: this.selfImprovingActionContext,
       onSessionCleared: () => {
         this._activeSessionId = null;
       },
@@ -469,6 +615,11 @@ export class Orchestrator {
 
     // ── 7. Build system prompt ────────────────────────────────────────────────
     const activeSkills = this.skills.activeSkills();
+    const activeSkillsUsed = activeSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      filePath: skill.filePath,
+    }));
     const memoryBlock = await this.memory.buildMemoryBlock(session.id);
     const workspaceContext = await this.workspace.buildContext({
       includeWorkflow: shouldIncludeWorkflowContext(input.userInput),
@@ -660,6 +811,7 @@ export class Orchestrator {
           toolsUsed: loopResult.toolsUsed ?? [],
           stepCount: loopResult.toolSteps ?? 0,
           sessionId: session.id,
+          activeSkillsUsed,
         })
         .catch((err: unknown) => {
           logger.warn('self-improving error (non-fatal)', {

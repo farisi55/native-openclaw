@@ -32,6 +32,10 @@ function tagsValue(tags: string[]): string {
 export class SkillWriter {
   constructor(private readonly skillsDir = 'skills/auto-generated') {}
 
+  get directory(): string {
+    return this.skillsDir;
+  }
+
   async listAutoSkills(): Promise<string[]> {
     try {
       const entries = await readdir(this.skillsDir);

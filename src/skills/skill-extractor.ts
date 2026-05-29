@@ -5,8 +5,8 @@
 
 import type { IProvider } from '../types/provider';
 import { createMessage, extractText } from '../types/message';
-import { getOptionalEnv } from '../config/env';
 import { createLogger } from '../utils/logger';
+import type { SkillUsageRef } from './skill-quality-tracker';
 
 const logger = createLogger('skills:extractor');
 
@@ -55,6 +55,11 @@ export interface SkillExtractionInput {
   stepCount: number;
   sessionId: string;
   wasSchedulerAction?: boolean;
+  /**
+   * Skills that were active and injected before this turn completed.
+   * These are tracked for usage quality, but are not sent to the extractor.
+   */
+  activeSkillsUsed?: SkillUsageRef[];
 }
 
 export interface ExtractedSkill {
@@ -83,11 +88,6 @@ export class SkillExtractor {
 
   private async resolveModel(): Promise<string> {
     if (this.model) return this.model;
-    const configured = getOptionalEnv('SELF_IMPROVING_MODEL');
-    if (configured?.trim()) {
-      this.model = configured.trim();
-      return this.model;
-    }
     const models = await this.provider.listModels();
     this.model = models[0]?.id ?? 'default';
     return this.model;

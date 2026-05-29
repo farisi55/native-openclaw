@@ -26,6 +26,7 @@ import {
   workflowSummary,
 } from '../workflows';
 import { handleCronCommand, type SchedulerActionContext } from '../scheduler';
+import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills';
 
 const C = {
   reset:   '\x1b[0m',
@@ -58,6 +59,7 @@ export interface CLIContext {
   toolRegistry: ToolRegistry;
   mcpManager?: McpManager;
   scheduler?: SchedulerActionContext;
+  selfImproving?: SelfImprovingActionContext;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -128,6 +130,9 @@ export function cmdHelp(): void {
     `  ${c('yellow', '/cron list')}                    List cronjobs`,
     `  ${c('yellow', '/cron create <text>')}           Create cronjob from natural language`,
     `  ${c('yellow', '/cron run <id-or-name>')}        Run a cronjob now`,
+    `  ${c('yellow', '/self-improve status')}          Show self-improvement status`,
+    `  ${c('yellow', '/self-improve skills')}          List auto-generated skills`,
+    `  ${c('yellow', '/self-improve evaluate')}        Run skill self-evaluation`,
     `  ${c('yellow', '/tools')}                         List all installed tools`,
     `  ${c('yellow', '/tools install <name>')}          Install a tool from tools/available/`,
     `  ${c('yellow', '/tools enable <name>')}           Enable a disabled tool`,
@@ -792,6 +797,19 @@ export async function cmdCron(ctx: CLIContext, args: string[]): Promise<void> {
   const outputText = await handleCronCommand(args, ctx.scheduler, 'cli');
   process.stdout.write('\n');
   process.stdout.write(outputText.split('\n').map((line) => `  ${line}`).join('\n'));
+  process.stdout.write('\n\n');
+}
+
+export async function cmdSelfImprove(ctx: CLIContext, args: string[]): Promise<void> {
+  if (!ctx.selfImproving) {
+    process.stdout.write(c('yellow', '\n  Self-improvement context is not initialized.\n\n'));
+    return;
+  }
+
+  const input = `/self-improve${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
+  const result = await handleSelfImprovingAction(input, ctx.selfImproving);
+  process.stdout.write('\n');
+  process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
   process.stdout.write('\n\n');
 }
 

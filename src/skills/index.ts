@@ -18,3 +18,6 @@ export type { SkillQualityEntry } from './skill-quality-tracker';
 export { SkillEvaluator } from './skill-evaluator';
 export type { EvaluationReport } from './skill-evaluator';
 export { SelfImprovingEngine } from './self-improving-engine';
+export type { SelfImprovingStatus, SelfImprovingSkillStatus } from './self-improving-engine';
+export { handleSelfImprovingAction } from './self-improving-actions';
+export type { SelfImprovingActionContext, SelfImprovingActionResult } from './self-improving-actions';

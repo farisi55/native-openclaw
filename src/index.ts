@@ -350,6 +350,7 @@ async function bootstrap(): Promise<void> {
     orchestrator,
     ...(mcpManager ? { mcpManager } : {}),
     scheduler,
+    selfImproving: orchestrator.getSelfImprovingActionContext(),
   });
 }
 

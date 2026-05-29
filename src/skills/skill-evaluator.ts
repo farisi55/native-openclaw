@@ -9,7 +9,6 @@ import { createMessage, extractText } from '../types/message';
 import type { Skill } from './loader';
 import { SkillWriter } from './skill-writer';
 import { SkillQualityTracker } from './skill-quality-tracker';
-import { getOptionalEnv } from '../config/env';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('skills:evaluator');
@@ -50,11 +49,6 @@ export class SkillEvaluator {
 
   private async resolveModel(): Promise<string> {
     if (this.model) return this.model;
-    const configured = getOptionalEnv('SELF_IMPROVING_MODEL');
-    if (configured?.trim()) {
-      this.model = configured.trim();
-      return this.model;
-    }
     const models = await this.provider.listModels();
     this.model = models[0]?.id ?? 'default';
     return this.model;
