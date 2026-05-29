@@ -6,6 +6,7 @@ import type { SettingsManager } from '../storage/settings-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { McpManager } from '../mcp';
 import type { SchedulerActionContext } from '../scheduler';
+import type { SelfHealingActionContext } from '../self-healing';
 
 export interface ApiConfig {
   enabled: boolean;
@@ -23,6 +24,7 @@ export interface ApiDependencies {
   orchestrator: Orchestrator;
   mcpManager?: McpManager;
   scheduler?: SchedulerActionContext;
+  selfHealing?: SelfHealingActionContext;
 }
 
 export interface ApiRuntimeState {

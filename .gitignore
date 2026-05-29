@@ -3,6 +3,7 @@ dist/
 workspace/
 .data/
 data/
+tmp/
 data/skill-quality.json
 .env
 skills/auto-generated/

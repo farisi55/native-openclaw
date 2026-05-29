@@ -13,12 +13,13 @@ import type { Orchestrator } from '../agents/orchestrator';
 import type { McpManager } from '../mcp';
 import type { SchedulerActionContext } from '../scheduler';
 import type { SelfImprovingActionContext } from '../skills';
+import type { SelfHealingActionContext } from '../self-healing';
 import { readLineWithSlashAutocomplete } from './autocomplete';
 import { SLASH_COMMANDS } from './command-registry';
 import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
   cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
-  cmdCron, cmdNetwork, cmdMcp, cmdWorkflow, cmdSelfImprove,
+  cmdCron, cmdNetwork, cmdMcp, cmdWorkflow, cmdSelfImprove, cmdHeal, cmdUpgrade,
   type CLIContext,
 } from './commands';
 
@@ -177,6 +178,8 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'heartbeat': case 'hb': await cmdHeartbeat(ctx, args); break;
     case 'cron': case 'jobs': case 'schedule': await cmdCron(ctx, args); break;
     case 'self-improve': case 'self': case 'improve': await cmdSelfImprove(ctx, args); break;
+    case 'heal': case 'self-heal': case 'fix': await cmdHeal(ctx, cmd === 'fix' ? ['run', ...args] : args); break;
+    case 'upgrade': case 'self-upgrade': await cmdUpgrade(ctx, args); break;
     case 'network': case 'net': await cmdNetwork(ctx, args); break;
     case 'mcp':                 await cmdMcp(ctx, args); break;
     case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;
@@ -199,6 +202,7 @@ export interface CLIRunnerOptions {
   mcpManager?: McpManager;
   scheduler?: SchedulerActionContext;
   selfImproving?: SelfImprovingActionContext;
+  selfHealing?: SelfHealingActionContext;
 }
 
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
@@ -268,6 +272,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     ...(mcpManager ? { mcpManager } : {}),
     ...(opts.scheduler ? { scheduler: opts.scheduler } : {}),
     ...(opts.selfImproving ? { selfImproving: opts.selfImproving } : {}),
+    ...(opts.selfHealing ? { selfHealing: opts.selfHealing } : {}),
     get activeProvider()  { return activeProvider!; },
     get activeModel()     { return activeModel; },
     get activeSessionId() { return activeSessionId; },

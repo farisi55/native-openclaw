@@ -8,6 +8,7 @@ import { networkFetch } from '../network';
 const logger = createLogger('telegram');
 const TELEGRAM_API = 'https://api.telegram.org';
 const MAX_TELEGRAM_MESSAGE = 4000;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 export interface TelegramConfig {
   enabled: boolean;
@@ -414,7 +415,7 @@ export class TelegramIntegration {
   }
 
   private async sendText(chatId: string, text: string): Promise<void> {
-    const chunks = this.splitMessage(text);
+    const chunks = this.splitMessage(text.replace(ANSI_RE, ''));
     for (const chunk of chunks) {
       try {
         await this.telegramFetch('sendMessage', {

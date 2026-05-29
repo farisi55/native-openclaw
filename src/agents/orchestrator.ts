@@ -44,6 +44,7 @@ import type { SystemContextInput } from './system-context';
 import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { WorkspaceManager } from '../workspace';
 import type { SchedulerActionContext } from '../scheduler';
+import type { SelfHealingActionContext } from '../self-healing';
 import { createLogger } from '../utils/logger';
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 import { join } from 'path';
@@ -287,6 +288,11 @@ export interface OrchestratorOptions {
   scheduler?: SchedulerActionContext;
 
   /**
+   * Optional autonomous self-healing/self-upgrade action context.
+   */
+  selfHealing?: SelfHealingActionContext;
+
+  /**
    * Enable Self-Improving Skill Loop (Hermes-style).
    */
   selfImproving?: boolean;
@@ -335,6 +341,7 @@ export class Orchestrator {
   private readonly router: ProviderRouter;
   private readonly mcpManager: McpManager | undefined;
   private readonly scheduler: SchedulerActionContext | undefined;
+  private readonly selfHealing: SelfHealingActionContext | undefined;
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
@@ -342,7 +349,7 @@ export class Orchestrator {
   private readonly skillsDir: string;
   private selfImprovingActionContext: SelfImprovingActionContext;
   readonly workspace: WorkspaceManager; // PERF [E1]
-  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler'>>;
+  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler' | 'selfHealing'>>;
 
   private _activeSessionId: string | null = null;
   private _workspaceReady = false;
@@ -365,6 +372,7 @@ export class Orchestrator {
     this.contextCompressor = contextCompressor;
     this.mcpManager = opts.mcpManager;
     this.scheduler = opts.scheduler;
+    this.selfHealing = opts.selfHealing;
     this.workspace = workspace;
     const selfImproving = opts.selfImproving ?? getEnvBool('SELF_IMPROVING', false);
     const selfImprovingEvalThreshold = opts.selfImprovingEvalThreshold ?? getEnvInt('SELF_IMPROVING_EVAL_THRESHOLD', 10);
@@ -561,6 +569,7 @@ export class Orchestrator {
       ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
       ...(this.scheduler ? { scheduler: this.scheduler } : {}),
       selfImproving: this.selfImprovingActionContext,
+      ...(this.selfHealing ? { selfHealing: this.selfHealing } : {}),
       onSessionCleared: () => {
         this._activeSessionId = null;
       },

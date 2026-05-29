@@ -27,6 +27,7 @@ import {
 } from '../workflows';
 import { handleCronCommand, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills';
+import { handleSelfHealingAction, type SelfHealingActionContext } from '../self-healing';
 
 const C = {
   reset:   '\x1b[0m',
@@ -60,6 +61,7 @@ export interface CLIContext {
   mcpManager?: McpManager;
   scheduler?: SchedulerActionContext;
   selfImproving?: SelfImprovingActionContext;
+  selfHealing?: SelfHealingActionContext;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -808,6 +810,32 @@ export async function cmdSelfImprove(ctx: CLIContext, args: string[]): Promise<v
 
   const input = `/self-improve${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
   const result = await handleSelfImprovingAction(input, ctx.selfImproving);
+  process.stdout.write('\n');
+  process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
+  process.stdout.write('\n\n');
+}
+
+export async function cmdHeal(ctx: CLIContext, args: string[]): Promise<void> {
+  if (!ctx.selfHealing) {
+    process.stdout.write(c('yellow', '\n  Self-healing context is not initialized.\n\n'));
+    return;
+  }
+
+  const input = `/heal${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
+  const result = await handleSelfHealingAction(input, ctx.selfHealing, 'cli');
+  process.stdout.write('\n');
+  process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
+  process.stdout.write('\n\n');
+}
+
+export async function cmdUpgrade(ctx: CLIContext, args: string[]): Promise<void> {
+  if (!ctx.selfHealing) {
+    process.stdout.write(c('yellow', '\n  Self-upgrade context is not initialized.\n\n'));
+    return;
+  }
+
+  const input = `/upgrade${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
+  const result = await handleSelfHealingAction(input, ctx.selfHealing, 'cli');
   process.stdout.write('\n');
   process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
   process.stdout.write('\n\n');

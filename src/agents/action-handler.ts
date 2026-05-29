@@ -22,6 +22,7 @@ import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills/self-improving-actions';
+import { handleSelfHealingAction, type SelfHealingActionContext } from '../self-healing';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -42,6 +43,8 @@ export interface ActionContext {
   scheduler?: SchedulerActionContext;
   /** Optional self-improvement action context for management commands. */
   selfImproving?: SelfImprovingActionContext;
+  /** Optional autonomous self-healing/self-upgrade action context. */
+  selfHealing?: SelfHealingActionContext;
   /** Called when the active session must be cleared (e.g. after delete). */
   onSessionCleared: () => void;
 }
@@ -52,7 +55,7 @@ export interface ActionResult {
   /** Text response to display to the user (when handled = true). */
   response?: string;
   /** Type of handled action, used by non-blocking learning hooks. */
-  actionType?: 'scheduler_create' | 'scheduler_manage' | 'self_improve' | 'command' | 'capability' | 'other';
+  actionType?: 'scheduler_create' | 'scheduler_manage' | 'self_improve' | 'self_healing' | 'self_upgrade' | 'command' | 'capability' | 'other';
 }
 
 // ─── Pattern matchers ─────────────────────────────────────────────────────────
@@ -300,6 +303,19 @@ export async function handleAction(
         handled: true,
         response: selfImprovingAction.response ?? '',
         actionType: 'self_improve',
+      };
+    }
+  }
+
+  if (ctx.selfHealing) {
+    const selfHealingAction = await handleSelfHealingAction(trimmed, ctx.selfHealing, 'system');
+    if (selfHealingAction.handled) {
+      const isUpgrade = /^\/?(?:upgrade|self-upgrade)\b/i.test(trimmed) ||
+        /\b(?:tambahkan tool baru|fitur belum ada|logic belum ada|capability missing|add new tool|install capability|upgrade yourself|self upgrade)\b/i.test(trimmed);
+      return {
+        handled: true,
+        response: selfHealingAction.response ?? '',
+        actionType: isUpgrade ? 'self_upgrade' : 'self_healing',
       };
     }
   }
