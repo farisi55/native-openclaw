@@ -7,7 +7,7 @@ const { join } = require('node:path');
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
 
-const { TelegramIntegration, startTelegramIntegrationIfEnabled } = require('../dist/integrations');
+const { TelegramIntegration, isTelegramConflictError, startTelegramIntegrationIfEnabled } = require('../dist/integrations');
 const { TelegramSessionManager } = require('../dist/storage');
 const { SessionManager } = require('../dist/storage/session-manager');
 const { SettingsManager } = require('../dist/storage/settings-manager');
@@ -24,6 +24,9 @@ const telegramRuntime = {
   retryMaxMs: 60000,
   pollTimeoutSeconds: 25,
   queueNoticeEnabled: false,
+  suppressConflictErrors: true,
+  conflictBackoffMs: 60000,
+  recoveryLogEnabled: false,
 };
 
 const provider = {
@@ -133,6 +136,33 @@ function mockTelegramFetch(sentMessages, sentActions = []) {
     throw new Error(`Unexpected Telegram URL: ${url}`);
   };
 }
+
+function captureStream(stream, run) {
+  const originalWrite = stream.write;
+  let output = '';
+  stream.write = (chunk, ...args) => {
+    output += String(chunk);
+    const maybeCallback = args.find((arg) => typeof arg === 'function');
+    if (maybeCallback) maybeCallback();
+    return true;
+  };
+  try {
+    const result = run();
+    return { output, result };
+  } finally {
+    stream.write = originalWrite;
+  }
+}
+
+const conflictError = new Error(
+  'Conflict: terminated by other getUpdates request; make sure that only one bot instance is running'
+);
+
+test('Telegram conflict error detection', () => {
+  assert.equal(isTelegramConflictError(conflictError), true);
+  assert.equal(isTelegramConflictError(new Error('Telegram API getUpdates failed with HTTP 409')), true);
+  assert.equal(isTelegramConflictError(new Error('network fetch failed')), false);
+});
 
 test('TELEGRAM_ENABLED=false does not start polling', async () => {
   const previous = process.env.TELEGRAM_ENABLED;
@@ -305,5 +335,70 @@ test('Telegram processing timeout sends friendly timeout response', async () => 
     assert.equal(sent.length, 2);
     assert.equal(sent[0].text, 'Sedang diproses...');
     assert.match(sent[1].text, /Proses terlalu lama/);
+  });
+});
+
+test('Telegram polling conflict logs first warning and suppresses repeated conflicts', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({
+        logPollingErrors: false,
+        suppressConflictErrors: true,
+        conflictBackoffMs: 60000,
+      }),
+      dataDir
+    );
+
+    const first = captureStream(process.stderr, () => integration.handlePollingError(conflictError, 1));
+    const second = captureStream(process.stderr, () => integration.handlePollingError(conflictError, 2));
+
+    assert.match(first.output, /Telegram polling conflict detected/);
+    assert.match(first.output, /Stop other Native OpenClaw instances/);
+    assert.equal(second.output, '');
+  });
+});
+
+test('Telegram polling conflict uses configured long backoff', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({ conflictBackoffMs: 12345 }),
+      dataDir
+    );
+
+    const { result } = captureStream(process.stderr, () => integration.handlePollingError(conflictError, 1));
+    assert.equal(result, 12345);
+  });
+});
+
+test('Telegram polling recovery log is disabled by default', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({ recoveryLogEnabled: false }),
+      dataDir
+    );
+
+    const { output } = captureStream(process.stdout, () => integration.logPollingRecovery(1));
+    assert.doesNotMatch(output, /Telegram polling recovered/);
+  });
+});
+
+test('Telegram verbose polling errors log every conflict', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({ logPollingErrors: true, suppressConflictErrors: true }),
+      dataDir
+    );
+
+    const { output } = captureStream(process.stderr, () => {
+      integration.handlePollingError(conflictError, 1);
+      integration.handlePollingError(conflictError, 2);
+    });
+
+    const matches = output.match(/Telegram polling error/g) ?? [];
+    assert.equal(matches.length, 2);
   });
 });

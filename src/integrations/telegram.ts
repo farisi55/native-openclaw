@@ -22,6 +22,9 @@ export interface TelegramConfig {
   retryMaxMs?: number;
   pollTimeoutSeconds?: number;
   queueNoticeEnabled?: boolean;
+  suppressConflictErrors?: boolean;
+  conflictBackoffMs?: number;
+  recoveryLogEnabled?: boolean;
 }
 
 interface TelegramRuntimeOptions {
@@ -33,6 +36,9 @@ interface TelegramRuntimeOptions {
   retryMaxMs: number;
   pollTimeoutSeconds: number;
   queueNoticeEnabled: boolean;
+  suppressConflictErrors: boolean;
+  conflictBackoffMs: number;
+  recoveryLogEnabled: boolean;
 }
 
 interface TelegramUpdate {
@@ -62,6 +68,18 @@ function positiveInt(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function isTelegramConflictError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return message.includes('conflict: terminated by other getupdates request') ||
+    message.includes('terminated by other getupdates request') ||
+    message.includes('only one bot instance is running') ||
+    /\b409\b/.test(message);
+}
+
 function resolveRuntimeOptions(cfg: TelegramConfig): TelegramRuntimeOptions {
   const retryMinMs = positiveInt(
     cfg.retryMinMs ?? getEnvInt('TELEGRAM_RETRY_MIN_MS', 3_000),
@@ -86,6 +104,12 @@ function resolveRuntimeOptions(cfg: TelegramConfig): TelegramRuntimeOptions {
       25
     ),
     queueNoticeEnabled: cfg.queueNoticeEnabled ?? getEnvBool('TELEGRAM_QUEUE_NOTICE_ENABLED', false),
+    suppressConflictErrors: cfg.suppressConflictErrors ?? getEnvBool('TELEGRAM_SUPPRESS_CONFLICT_ERRORS', true),
+    conflictBackoffMs: positiveInt(
+      cfg.conflictBackoffMs ?? getEnvInt('TELEGRAM_CONFLICT_BACKOFF_MS', 60_000),
+      60_000
+    ),
+    recoveryLogEnabled: cfg.recoveryLogEnabled ?? getEnvBool('TELEGRAM_RECOVERY_LOG_ENABLED', false),
   };
 }
 
@@ -111,6 +135,9 @@ export function loadTelegramConfig(): TelegramConfig {
     retryMaxMs: getEnvInt('TELEGRAM_RETRY_MAX_MS', 60_000),
     pollTimeoutSeconds: getEnvInt('TELEGRAM_POLL_TIMEOUT', 25),
     queueNoticeEnabled: getEnvBool('TELEGRAM_QUEUE_NOTICE_ENABLED', false),
+    suppressConflictErrors: getEnvBool('TELEGRAM_SUPPRESS_CONFLICT_ERRORS', true),
+    conflictBackoffMs: getEnvInt('TELEGRAM_CONFLICT_BACKOFF_MS', 60_000),
+    recoveryLogEnabled: getEnvBool('TELEGRAM_RECOVERY_LOG_ENABLED', false),
   };
   if (token) cfg.botToken = token;
   return cfg;
@@ -123,6 +150,9 @@ export class TelegramIntegration {
   private readonly telegramSessions: TelegramSessionManager;
   private readonly runtime: TelegramRuntimeOptions;
   private readonly chatQueues = new Map<string, Promise<void>>();
+  private lastConflictLogAt = 0;
+  private conflictErrorCount = 0;
+  private lastPollingErrorMessage: string | null = null;
 
   constructor(
     private readonly deps: ApiDependencies,
@@ -293,20 +323,15 @@ export class TelegramIntegration {
 
   private async pollLoop(): Promise<void> {
     let consecutiveErrors = 0;
-    let lastErrorMessage = '';
 
     while (!this.stopped) {
       try {
         const updates = await this.getUpdates();
 
-        if (consecutiveErrors > 0) {
-          logger.info('Telegram polling recovered', {
-            previousErrors: consecutiveErrors,
-          });
-        }
+        this.logPollingRecovery(consecutiveErrors);
 
         consecutiveErrors = 0;
-        lastErrorMessage = '';
+        this.lastPollingErrorMessage = null;
 
         for (const update of updates) {
           this.offset = Math.max(this.offset, update.update_id + 1);
@@ -317,28 +342,66 @@ export class TelegramIntegration {
         }
       } catch (err) {
         consecutiveErrors++;
-
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        if (
-          this.runtime.logPollingErrors ||
-          consecutiveErrors === 1 ||
-          errorMessage !== lastErrorMessage
-        ) {
-          logger.warn('Telegram polling error', {
-            error: errorMessage,
-            consecutiveErrors,
-          });
-        }
-
-        lastErrorMessage = errorMessage;
-
-        const delayMs = Math.min(
-          this.runtime.retryMaxMs,
-          this.runtime.retryMinMs * consecutiveErrors
-        );
+        const delayMs = this.handlePollingError(err, consecutiveErrors);
         await this.sleep(delayMs);
       }
     }
+  }
+
+  private handlePollingError(err: unknown, consecutiveErrors: number): number {
+    const message = errorMessage(err);
+    const isConflict = isTelegramConflictError(err);
+
+    if (this.runtime.logPollingErrors) {
+      logger.warn('Telegram polling error', {
+        error: message,
+        consecutiveErrors,
+      });
+    } else if (isConflict && this.runtime.suppressConflictErrors) {
+      this.logTelegramConflict(consecutiveErrors);
+    } else if (
+      consecutiveErrors === 1 ||
+      message !== this.lastPollingErrorMessage
+    ) {
+      logger.warn('Telegram polling error', {
+        error: message,
+        consecutiveErrors,
+      });
+    }
+
+    this.lastPollingErrorMessage = message;
+
+    if (isConflict) return this.runtime.conflictBackoffMs;
+    return Math.min(
+      this.runtime.retryMaxMs,
+      this.runtime.retryMinMs * consecutiveErrors
+    );
+  }
+
+  private logTelegramConflict(consecutiveErrors: number): void {
+    this.conflictErrorCount += 1;
+    const now = Date.now();
+    const tenMinutesMs = 10 * 60_000;
+    const shouldLog =
+      this.conflictErrorCount === 1 ||
+      this.conflictErrorCount % 10 === 0 ||
+      now - this.lastConflictLogAt >= tenMinutesMs;
+
+    if (!shouldLog) return;
+
+    this.lastConflictLogAt = now;
+    logger.warn('Telegram polling conflict detected. Another getUpdates consumer is running for this bot token. Stop other bot instances, ensure only one Native OpenClaw container is running, or delete webhook if configured.', {
+      consecutiveErrors,
+      conflictErrorCount: this.conflictErrorCount,
+      hint: 'Stop other Native OpenClaw instances or delete Telegram webhook.',
+    });
+  }
+
+  private logPollingRecovery(previousErrors: number): void {
+    if (previousErrors <= 0 || !this.runtime.recoveryLogEnabled) return;
+    logger.info('Telegram polling recovered', {
+      previousErrors,
+    });
   }
 
   private async getUpdates(): Promise<TelegramUpdate[]> {
