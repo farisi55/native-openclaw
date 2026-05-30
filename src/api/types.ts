@@ -7,6 +7,7 @@ import type { ToolRegistry } from '../tools/tool-registry';
 import type { McpManager } from '../mcp';
 import type { SchedulerActionContext } from '../scheduler';
 import type { SelfHealingActionContext } from '../self-healing';
+import type { PromptOptimizationApiMetadata } from '../prompt-optimizer';
 
 export interface ApiConfig {
   enabled: boolean;
@@ -48,4 +49,5 @@ export interface ChatApiResponse {
   flow: Array<Record<string, unknown>>;
   sessionId: string | null;
   error_detail: string[];
+  promptOptimization?: PromptOptimizationApiMetadata;
 }

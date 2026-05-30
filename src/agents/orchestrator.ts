@@ -17,7 +17,7 @@
 
 import type { IProvider, ChatOptions, ChatResponse, ModelInfo } from '../types/provider';
 import type { Message } from '../types/message';
-import { createMessage } from '../types/message';
+import { createMessage, extractText } from '../types/message';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { MemoryManager } from '../storage/memory-manager';
@@ -48,6 +48,13 @@ import type { SelfHealingActionContext } from '../self-healing';
 import { createLogger } from '../utils/logger';
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 import { join } from 'path';
+import {
+  createPromptOptimizerFromEnv,
+  toPromptOptimizationApiMetadata,
+  type PromptOptimizationApiMetadata,
+  type PromptOptimizationResult,
+  type PromptOptimizer,
+} from '../prompt-optimizer';
 
 const logger = createLogger('agent:orchestrator');
 
@@ -68,6 +75,49 @@ function sanitizeFlowReason(reason: string | undefined, fallback: string): strin
 
 function shouldIncludeWorkflowContext(input: string): boolean {
   return /\b(workflow|workflow\.md|jalankan workflow|laporan|report|autonomous|otomatis|otonom)\b/i.test(input);
+}
+
+function replaceLatestUserMessage(messages: Message[], optimizedInput: string): Message[] {
+  const index = [...messages].reverse().findIndex((message) => message.role === 'user');
+  if (index < 0) return messages;
+  const actualIndex = messages.length - 1 - index;
+  return messages.map((message, currentIndex) => {
+    if (currentIndex !== actualIndex) return message;
+    return {
+      ...message,
+      content: optimizedInput,
+      metadata: {
+        ...(message.metadata ?? {}),
+        promptOptimized: true,
+      },
+    };
+  });
+}
+
+function estimatePromptChars(systemPrompt: string, messages: Message[]): number {
+  return systemPrompt.length + messages.reduce((sum, message) => sum + extractText(message.content).length, 0);
+}
+
+function reduceContextToBudget(messages: Message[], maxChars: number): Message[] {
+  let total = 0;
+  const kept: Message[] = [];
+  for (const message of [...messages].reverse()) {
+    const text = extractText(message.content);
+    if (message.role === 'user' || total + text.length <= maxChars) {
+      kept.push(message);
+      total += text.length;
+      continue;
+    }
+    if (kept.length < 4) {
+      const budget = Math.max(500, Math.floor(maxChars / 4));
+      kept.push({
+        ...message,
+        content: `${text.slice(0, budget)}\n...[context trimmed by prompt optimizer]`,
+      });
+      total += budget;
+    }
+  }
+  return kept.reverse();
 }
 
 interface SelfImprovingProviderSelection {
@@ -331,6 +381,7 @@ export interface TurnResult {
   toolSteps?: number;
   usedFallback?: boolean;
   fallbackProvider?: string;
+  promptOptimization?: PromptOptimizationApiMetadata;
 }
 
 export class Orchestrator {
@@ -345,6 +396,7 @@ export class Orchestrator {
   private readonly reasoning: ReasoningEngine;
   private readonly capabilityInstaller: CapabilityInstaller;
   private readonly contextCompressor: ContextCompressor;
+  private readonly promptOptimizer: PromptOptimizer;
   private readonly selfImprovingEngine?: SelfImprovingEngine;
   private readonly skillsDir: string;
   private selfImprovingActionContext: SelfImprovingActionContext;
@@ -395,6 +447,7 @@ export class Orchestrator {
 
     this.reasoning = new ReasoningEngine(toolRegistry);
     this.capabilityInstaller = new CapabilityInstaller(toolRegistry, skills);
+    this.promptOptimizer = createPromptOptimizerFromEnv();
     this.selfImprovingActionContext = {
       enabled: selfImproving,
       autoSkillsDir,
@@ -488,6 +541,22 @@ export class Orchestrator {
       this.skills.setActive(input.skillIds);
     }
 
+    const promptOptimizationResult: PromptOptimizationResult | null =
+      await this.promptOptimizer.optimize({ userInput: input.userInput });
+    const promptOptimization = toPromptOptimizationApiMetadata(promptOptimizationResult);
+    const routingInput = promptOptimizationResult?.compiled.optimizedInput ?? input.userInput;
+
+    if (promptOptimization) {
+      flow.push({
+        stage: 'prompt_optimizer',
+        intent: promptOptimization.intent,
+        originalChars: promptOptimization.originalChars,
+        optimizedChars: promptOptimization.optimizedChars,
+        compressionApplied: promptOptimization.compressionApplied,
+        routingHint: promptOptimization.routingHint ?? null,
+      });
+    }
+
     // ── 3. Memory extraction ──────────────────────────────────────────────────
     const memoryUpdates = extractMemory(input.userInput);
 
@@ -521,7 +590,7 @@ export class Orchestrator {
      * 4. Capability installer (natural language tool/skill install)
      * 5. Reasoning + ToolLoop (main LLM pipeline)
      */
-    if (isWorkflowRunRequest(input.userInput)) {
+    if (isWorkflowRunRequest(routingInput)) {
       const workflowResult = await runWorkflowFromWorkspace({
         ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
         toolRegistry: this.toolRegistry,
@@ -549,6 +618,7 @@ export class Orchestrator {
         newSession,
         wasAction: true,
         flow: [
+          ...flow,
           {
             stage: 'final',
             type: 'workflow',
@@ -557,6 +627,7 @@ export class Orchestrator {
           },
         ],
         toolsUsed: workflowResult.toolsUsed,
+        ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
 
@@ -575,7 +646,11 @@ export class Orchestrator {
       },
     };
 
-    const actionResult = await handleAction(input.userInput, actionContext);
+    const actionResult = await handleAction(
+      routingInput,
+      actionContext,
+      promptOptimizationResult?.compiled
+    );
 
     if (actionResult.handled) {
       const responseText = actionResult.response ?? '';
@@ -612,12 +687,13 @@ export class Orchestrator {
         session,
         newSession,
         wasAction: true,
-        flow: [{ stage: 'final', type: 'action' }],
+        flow: [...flow, { stage: 'final', type: 'action' }],
+        ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
 
     // ── 6. Reasoning step, internal only ──────────────────────────────────────
-    const capabilityResult = await this.capabilityInstaller.handle(input.userInput);
+    const capabilityResult = await this.capabilityInstaller.handle(routingInput);
 
     if (capabilityResult.handled) {
       session = await this.persistExchange(
@@ -631,7 +707,8 @@ export class Orchestrator {
         session,
         newSession,
         wasAction: true,
-        flow: [{ stage: 'final', type: 'capability_action' }],
+        flow: [...flow, { stage: 'final', type: 'capability_action' }],
+        ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
 
@@ -639,7 +716,7 @@ export class Orchestrator {
 
     if (this.opts.useReasoning && this.toolRegistry.size > 0) {
       const reasoningResult = await this.reasoning.reason(
-        input.userInput,
+        routingInput,
         input.provider,
         input.model
       );
@@ -679,7 +756,7 @@ export class Orchestrator {
     }));
     const memoryBlock = await this.memory.buildMemoryBlock(session.id);
     const workspaceContext = await this.workspace.buildContext({
-      includeWorkflow: shouldIncludeWorkflowContext(input.userInput),
+      includeWorkflow: shouldIncludeWorkflowContext(routingInput),
     });
     const toolsBlock = this.toolRegistry.buildToolsBlock();
 
@@ -690,7 +767,7 @@ export class Orchestrator {
       sessionId: session.id,
     };
 
-    const systemPrompt = buildSystemPrompt({
+    let systemPrompt = buildSystemPrompt({
       basePrompt: this.opts.baseSystemPrompt,
       skills: activeSkills,
       systemContext,
@@ -698,6 +775,10 @@ export class Orchestrator {
       workspaceContext,
       toolsBlock,
     });
+
+    if (promptOptimizationResult?.compiled.systemAddendum) {
+      systemPrompt = `${systemPrompt}\n\n${promptOptimizationResult.compiled.systemAddendum}`;
+    }
 
     // ── 8. Persist user message ───────────────────────────────────────────────
     const userMessage: Message = createMessage({
@@ -722,7 +803,7 @@ export class Orchestrator {
     if (this.opts.useSemanticCompression) {
       const compressed = this.contextCompressor.compress(
         session.messages,
-        input.userInput,
+        routingInput,
         session.id,
         {
           recentWindowSize: Math.min(this.opts.maxMessages, 8),
@@ -748,6 +829,25 @@ export class Orchestrator {
 
       if (dropped > 0) {
         logger.debug('messages dropped for context window', { dropped });
+      }
+    }
+
+    if (promptOptimizationResult) {
+      contextMessages = replaceLatestUserMessage(contextMessages, routingInput);
+      const maxPromptChars = promptOptimizationResult.compiled.tokenBudget.maxInputChars;
+      const estimatedChars = estimatePromptChars(systemPrompt, contextMessages);
+      if (estimatedChars > maxPromptChars) {
+        contextMessages = reduceContextToBudget(contextMessages, Math.max(2000, maxPromptChars - systemPrompt.length));
+        flow.push({
+          stage: 'prompt_optimizer',
+          action: 'context_budget_reduced',
+          beforeChars: estimatedChars,
+          afterChars: estimatePromptChars(systemPrompt, contextMessages),
+        });
+        logger.warn('Prompt optimizer reduced context to avoid Request too large', {
+          beforeChars: estimatedChars,
+          afterChars: estimatePromptChars(systemPrompt, contextMessages),
+        });
       }
     }
 
@@ -780,7 +880,7 @@ export class Orchestrator {
           input.provider,
           input.model,
           chatOptions,
-          input.userInput
+          routingInput
         );
 
         routedProviderId = routedResult.providerId;
@@ -858,6 +958,7 @@ export class Orchestrator {
       toolsUsed: loopResult.toolsUsed,
       ...(loopResult.toolResults ? { toolResults: loopResult.toolResults } : {}),
       usedFallback,
+      ...(promptOptimization ? { promptOptimization } : {}),
     };
 
     if (this.opts.selfImproving && this.selfImprovingEngine) {

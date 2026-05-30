@@ -12,6 +12,7 @@ import {
   cmdHeartbeat,
   cmdCron,
   cmdHeal,
+  cmdPromptOptimize,
   cmdNetwork,
   cmdMcp,
   cmdWorkflow,
@@ -53,6 +54,7 @@ function makeResponse(fields: Partial<ChatApiResponse>): ChatApiResponse {
     flow: fields.flow ? sanitizeFlowForApi(fields.flow) : [],
     sessionId: fields.sessionId ?? null,
     error_detail: fields.error_detail ?? [],
+    ...(fields.promptOptimization ? { promptOptimization: fields.promptOptimization } : {}),
   };
 }
 
@@ -188,6 +190,7 @@ async function handleCommand(
       case 'cron': case 'jobs': case 'schedule': await cmdCron(ctx, args); break;
       case 'heal': case 'self-heal': case 'fix': case 'restart': await cmdHeal(ctx, cmd === 'fix' ? ['run', ...args] : cmd === 'restart' ? ['restart', ...args] : args); break;
       case 'upgrade': case 'self-upgrade': await cmdUpgrade(ctx, args); break;
+      case 'prompt-optimize': case 'po': await cmdPromptOptimize(ctx, args); break;
       case 'network': case 'net': await cmdNetwork(ctx, args); break;
       case 'mcp': await cmdMcp(ctx, args); break;
       case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;
@@ -276,6 +279,7 @@ export async function handleChatRoute(
         tools: result.toolsUsed ?? [],
         flow: result.flow,
         sessionId: result.session.id,
+        ...(result.promptOptimization ? { promptOptimization: result.promptOptimization } : {}),
       }),
     };
   } catch (err) {

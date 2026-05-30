@@ -28,6 +28,7 @@ import {
 import { handleCronCommand, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills';
 import { handleSelfHealingAction, type SelfHealingActionContext } from '../self-healing';
+import { createPromptOptimizerFromEnv } from '../prompt-optimizer';
 
 const C = {
   reset:   '\x1b[0m',
@@ -552,7 +553,7 @@ export async function cmdWorkspace(_ctx: CLIContext, args: string[]): Promise<vo
   if (!action) {
     process.stdout.write('\n');
     process.stdout.write(`  ${c('bold', 'Workspace')}\n`);
-    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
     process.stdout.write(`  ${c('dim', 'Root')}  ${workspace.rootDir}\n\n`);
     process.stdout.write(c('dim', '  Commands:\n'));
     process.stdout.write(c('dim', '    /workspace info\n'));
@@ -688,7 +689,7 @@ export async function cmdMemory(_ctx: CLIContext, args: string[]): Promise<void>
   if (!action) {
     process.stdout.write('\n');
     process.stdout.write(`  ${c('bold', 'Workspace Memory')}\n`);
-    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
     process.stdout.write(c('dim', '  Commands:\n'));
     process.stdout.write(c('dim', '    /memory show\n'));
     process.stdout.write(c('dim', '    /memory append <text>\n'));
@@ -771,7 +772,7 @@ export async function cmdHeartbeat(_ctx: CLIContext, args: string[]): Promise<vo
     const content = await workspace.read('HEARTBEAT.md');
     process.stdout.write('\n');
     process.stdout.write(`  ${c('bold', 'HEARTBEAT.md')}\n`);
-    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
     process.stdout.write(content.split('\n').map((line) => `  ${line}`).join('\n'));
     process.stdout.write('\n\n');
     return;
@@ -841,6 +842,78 @@ export async function cmdUpgrade(ctx: CLIContext, args: string[]): Promise<void>
   process.stdout.write('\n');
   process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
   process.stdout.write('\n\n');
+}
+
+export async function cmdPromptOptimize(_ctx: CLIContext, args: string[]): Promise<void> {
+  const action = args[0]?.toLowerCase() ?? 'status';
+
+  if (action === 'status') {
+    const optimizer = createPromptOptimizerFromEnv({ storeRuns: false, logSummary: false });
+    const config = optimizer.getConfig();
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Prompt Optimizer')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  enabled: ${config.enabled}\n`);
+    process.stdout.write(`  mode: ${config.mode}\n`);
+    process.stdout.write(`  model: ${config.model ?? '(default router)'}\n`);
+    process.stdout.write(`  maxInputChars: ${config.maxInputChars}\n`);
+    process.stdout.write(`  maxContextChars: ${config.maxContextChars}\n`);
+    process.stdout.write(`  maxToolResultChars: ${config.maxToolResultChars}\n`);
+    process.stdout.write(`  storeRuns: ${config.storeRuns}\n`);
+    process.stdout.write(`  storeFile: ${optimizer.getStore().filePath}\n\n`);
+    return;
+  }
+
+  if (action === 'last') {
+    const optimizer = createPromptOptimizerFromEnv({ storeRuns: false, logSummary: false });
+    const last = await optimizer.getStore().last();
+    process.stdout.write('\n');
+    if (!last) {
+      process.stdout.write(c('dim', '  No prompt optimizer runs recorded yet.\n\n'));
+      return;
+    }
+    process.stdout.write(`  ${c('bold', 'Last Prompt Optimization')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    for (const [key, value] of Object.entries(last)) {
+      process.stdout.write(`  ${key}: ${String(value)}\n`);
+    }
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (action === 'test') {
+    const text = args.slice(1).join(' ').trim();
+    if (!text) {
+      process.stdout.write(c('yellow', '\n  Usage: /prompt-optimize test <text>\n\n'));
+      return;
+    }
+    const optimizer = createPromptOptimizerFromEnv({
+      enabled: true,
+      storeRuns: false,
+      logSummary: false,
+    });
+    const result = await optimizer.optimize({ userInput: text });
+    if (!result) {
+      process.stdout.write(c('yellow', '\n  Prompt optimizer is disabled.\n\n'));
+      return;
+    }
+    const preview = result.compiled.optimizedInput.length > 1200
+      ? `${result.compiled.optimizedInput.slice(0, 1200)}\n...[preview truncated]`
+      : result.compiled.optimizedInput;
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Prompt Optimization Preview')}\n`);
+    process.stdout.write(c('dim', `  ${hr('─', 56)}\n`));
+    process.stdout.write(`  intent: ${result.compiled.intent}\n`);
+    process.stdout.write(`  routingHint: ${result.compiled.routingHint ?? '-'}\n`);
+    process.stdout.write(`  originalChars: ${result.compression.estimatedOriginalChars}\n`);
+    process.stdout.write(`  optimizedChars: ${result.compiled.optimizedInput.length}\n`);
+    process.stdout.write(`  compressionApplied: ${result.compiled.tokenBudget.compressionApplied}\n\n`);
+    process.stdout.write(preview.split('\n').map((line) => `  ${line}`).join('\n'));
+    process.stdout.write('\n\n');
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /prompt-optimize [status|last|test <text>]\n\n'));
 }
 
 export async function cmdNetwork(_ctx: CLIContext, args: string[]): Promise<void> {

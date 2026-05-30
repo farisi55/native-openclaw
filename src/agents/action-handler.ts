@@ -31,6 +31,7 @@ import {
 } from './application-debug-intent';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
+import type { CompiledPrompt } from '../prompt-optimizer';
 
 const logger = createLogger('agent:action-handler');
 
@@ -298,9 +299,59 @@ async function handleWorkspaceAction(trimmed: string): Promise<ActionResult> {
  */
 export async function handleAction(
   input: string,
-  ctx: ActionContext
+  ctx: ActionContext,
+  compiledPrompt?: CompiledPrompt
 ): Promise<ActionResult> {
   const trimmed = input.trim();
+  const originalInput = compiledPrompt?.originalInput.trim() || trimmed;
+
+  if (compiledPrompt?.intent === 'self-upgrade') {
+    if (!ctx.selfHealing) {
+      return {
+        handled: true,
+        response: 'Self-upgrade is disabled. Set SELF_UPGRADE_ENABLED=true.',
+        actionType: 'self_upgrade',
+      };
+    }
+    const upgradeAction = await handleSelfHealingAction(
+      `/upgrade run ${compiledPrompt.optimizedInput}`,
+      ctx.selfHealing,
+      'system'
+    );
+    return {
+      handled: true,
+      response: upgradeAction.response ?? 'Self-upgrade is disabled. Set SELF_UPGRADE_ENABLED=true.',
+      actionType: 'self_upgrade',
+    };
+  }
+
+  if (compiledPrompt?.intent === 'self-healing') {
+    const selfHealingEnabled = ctx.selfHealing?.healingEnabled === true && Boolean(ctx.selfHealing.healingEngine);
+    if (selfHealingEnabled && ctx.selfHealing) {
+      const healingAction = await handleSelfHealingAction(
+        `/heal run ${compiledPrompt.optimizedInput}`,
+        ctx.selfHealing,
+        'system'
+      );
+      return {
+        handled: true,
+        response: healingAction.response ?? '',
+        actionType: 'self_healing',
+      };
+    }
+    if (isApplicationDebugRequest(originalInput)) {
+      return {
+        handled: true,
+        response: applicationDebugDiagnostic(selfHealingEnabled),
+        actionType: 'other',
+      };
+    }
+    return {
+      handled: true,
+      response: 'Self-healing is disabled. Set SELF_HEALING_ENABLED=true.',
+      actionType: 'self_healing',
+    };
+  }
 
   if (ctx.selfImproving) {
     const selfImprovingAction = await handleSelfImprovingAction(trimmed, ctx.selfImproving);
@@ -351,7 +402,8 @@ export async function handleAction(
   }
 
   if (ctx.scheduler) {
-    const schedulerAction = await handleSchedulerText(trimmed, ctx.scheduler, 'system');
+    const schedulerInput = compiledPrompt?.intent === 'scheduler' ? originalInput : trimmed;
+    const schedulerAction = await handleSchedulerText(schedulerInput, ctx.scheduler, 'system');
     if (schedulerAction.handled) return schedulerAction;
   }
 
