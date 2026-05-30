@@ -35,6 +35,7 @@ const {
 const { buildSystemPrompt } = require('../dist/agents/prompt-builder');
 const { sanitizeFinalAnswer } = require('../dist/agents/tool-loop');
 const { handleAction } = require('../dist/agents/action-handler');
+const { isSelfUpgradeIntent } = require('../dist/self-healing');
 const { cmdWorkspace, cmdMemory, cmdHeartbeat, cmdWorkflow } = require('../dist/cli/commands');
 const { getSlashCommandSuggestions } = require('../dist/cli/command-registry');
 const { startApiServer } = require('../dist/api');
@@ -321,6 +322,143 @@ test('should_not_log_trivial_chat_messages_and_preserve_json_memory_system', asy
     assert.match(await workspace.readDailyMemory(), /No daily memory log/);
     assert.equal(await memory.getGlobalValue('agentName'), 'Jarpis-Json');
   });
+});
+
+test('should_treat_logging_config_requests_as_application_debug_not_system_execute', async () => {
+  const action = await handleAction(
+    'hilangkan notif error : Telegram polling error',
+    workspaceActionContext()
+  );
+
+  assert.equal(action.handled, true);
+  assert.match(action.response, /Native OpenClaw/);
+  assert.match(action.response, /src\/integrations\/telegram\.ts/);
+  assert.match(action.response, /TELEGRAM_LOG_POLLING_ERRORS=false/);
+  assert.doesNotMatch(action.response, /system-execute/i);
+});
+
+test('should_route_logging_config_fix_to_self_healing_when_enabled', async () => {
+  const calls = [];
+  const context = {
+    ...workspaceActionContext(),
+    selfHealing: {
+      healingEnabled: true,
+      upgradeEnabled: false,
+      runsDir: 'workspace/self-healing/runs',
+      healingEngine: {
+        async run(input) {
+          calls.push(input);
+          return {
+            id: 'heal-test',
+            type: 'self-healing',
+            status: 'passed',
+            userInput: input.userInput,
+            startedAt: '2026-05-30T00:00:00.000Z',
+            maxLoops: 3,
+            currentLoop: 1,
+            workdir: process.cwd(),
+            loops: [],
+            finalSummary: 'mock passed',
+          };
+        },
+      },
+    },
+  };
+
+  const action = await handleAction(
+    'jangan tampilkan log Telegram polling recovered',
+    context
+  );
+
+  assert.equal(action.handled, true);
+  assert.equal(action.actionType, 'self_healing');
+  assert.match(action.response, /Self-healing run started/);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].userInput, /TELEGRAM_RECOVERY_LOG_ENABLED=false/);
+});
+
+test('should_not_intercept_explicit_system_command_requests_as_application_debug', async () => {
+  const action = await handleAction(
+    'jalankan command docker logs native-openclaw',
+    workspaceActionContext()
+  );
+
+  assert.equal(action.handled, false);
+});
+
+test('should_route_token_efficiency_upgrade_request_to_self_upgrade', async () => {
+  const input = 'analisa lalu upgrade, dalam efisiensi penggunaan token, usahakan jangan sampai ada notif : Request too large for model';
+  const calls = [];
+  const context = {
+    ...workspaceActionContext(),
+    selfHealing: {
+      healingEnabled: false,
+      upgradeEnabled: true,
+      runsDir: 'workspace/self-healing/runs',
+      upgradeEngine: {
+        async run(runInput) {
+          calls.push(runInput);
+          return {
+            id: 'upgrade-token-test',
+            type: 'self-upgrade',
+            status: 'passed',
+            userInput: runInput.userInput,
+            startedAt: '2026-05-30T00:00:00.000Z',
+            maxLoops: 3,
+            currentLoop: 1,
+            workdir: process.cwd(),
+            loops: [],
+            finalSummary: 'mock passed',
+          };
+        },
+      },
+    },
+  };
+
+  const action = await handleAction(input, context);
+
+  assert.equal(isSelfUpgradeIntent(input), true);
+  assert.equal(action.handled, true);
+  assert.equal(action.actionType, 'self_upgrade');
+  assert.match(action.response, /Self-upgrade started/);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].userInput, /Request too large for model/);
+  assert.match(calls[0].userInput, /context budgeting/i);
+});
+
+test('should_detect_token_optimization_as_self_upgrade_intent', () => {
+  assert.equal(isSelfUpgradeIntent('optimalkan penggunaan token agar tidak Request too large'), true);
+});
+
+test('should_not_treat_telegram_log_suppression_as_self_upgrade_without_upgrade_language', () => {
+  assert.equal(isSelfUpgradeIntent('hilangkan notif error Telegram polling error'), false);
+});
+
+test('should_return_disabled_message_for_self_upgrade_when_disabled', async () => {
+  const action = await handleAction(
+    'optimalkan penggunaan token agar tidak Request too large',
+    {
+      ...workspaceActionContext(),
+      selfHealing: {
+        healingEnabled: false,
+        upgradeEnabled: false,
+        runsDir: 'workspace/self-healing/runs',
+      },
+    }
+  );
+
+  assert.equal(action.handled, true);
+  assert.equal(action.actionType, 'self_upgrade');
+  assert.equal(action.response, 'Self-upgrade is disabled. Set SELF_UPGRADE_ENABLED=true.');
+});
+
+test('should_allow_explicit_export_command_to_reach_normal_tool_routing', async () => {
+  const action = await handleAction(
+    'jalankan command export TELEGRAM_LOG_POLLING_ERRORS=false',
+    workspaceActionContext()
+  );
+
+  assert.equal(action.handled, false);
 });
 
 test('should_parse_memory_commands', async () => {

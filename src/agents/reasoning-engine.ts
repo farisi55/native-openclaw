@@ -16,6 +16,8 @@ import type { ToolRegistry } from '../tools/tool-registry';
 import { createLogger } from '../utils/logger';
 import { createMessage, extractText } from '../types/message';
 import { normalizeToolName } from './tool-loop';
+import { isApplicationDebugRequest } from './application-debug-intent';
+import { isSelfUpgradeIntent } from '../self-healing';
 
 const logger = createLogger('agents:reasoning');
 const CURRENT_INFO_RE = /\b(news|latest news|current events?|today'?s? news|current\s+(\w+\s+)?price|market update|football transfer|transfer news|search internet|web lookup)\b|berita\s+(terbaru|hari ini|transfer|sepakbola|bola|pasar|harga)|harga\s+(\w+\s+)?(hari ini|sekarang|terkini|terbaru)|update\s+pasar|informasi\s+terbaru\s+tentang|berita\s+terkini|transfer\s+sepakbola/i;
@@ -63,6 +65,9 @@ function buildReasoningPrompt(toolNames: string[], toolDescriptions: string): st
     '- Use ONLY exact valid tool names.',
     '- Do not invent tool names.',
     '- For news, latest information, current events, web lookup, current prices, or market updates, use web-fetch if available.',
+    '- For Native OpenClaw logging, config, debug, or "suppress error log" requests, do NOT use system-execute unless the user explicitly asks to run a shell command.',
+    '- For Telegram polling errors, treat the request as application debugging/config first, not as an external Telegram action.',
+    '- For self-upgrade requests, optimization requests, new capability requests, token efficiency work, or "Request too large" prevention, do NOT use system-execute; route through SelfUpgradeEngine before this reasoning step.',
     '- Never use news_api, news, search_api, web_search, browser, or browse unless that exact name is in the valid tool list.',
     '- If no valid suitable tool exists, set needsTool to false.',
     '',
@@ -100,6 +105,24 @@ export class ReasoningEngine {
     const toolDescriptions = tools
       .map((t) => `- ${t.manifest.name}: ${t.manifest.description}`)
       .join('\n');
+
+    if (isApplicationDebugRequest(userInput)) {
+      return {
+        needsTool: false,
+        tool: null,
+        reason: 'Application logging/config debug request; system-execute is not appropriate without an explicit shell command request.',
+        directAnswer: false,
+      };
+    }
+
+    if (isSelfUpgradeIntent(userInput)) {
+      return {
+        needsTool: false,
+        tool: null,
+        reason: 'Self-upgrade request; route through SelfUpgradeEngine instead of direct tool execution.',
+        directAnswer: false,
+      };
+    }
 
     if (toolNames.includes('web-fetch') && CURRENT_INFO_RE.test(userInput)) {
       return {

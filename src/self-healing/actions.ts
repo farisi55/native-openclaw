@@ -96,12 +96,49 @@ function parseSlash(input: string): { kind: 'heal' | 'upgrade' | 'restart'; acti
   return null;
 }
 
+const EXPLICIT_SYSTEM_COMMAND_RE =
+  /\b(?:jalankan\s+command|jalankan\s+perintah|execute|run\s+command|restart(?:\s+container|\s+service|\s+process)?|kill\s+process|hapus\s+file|delete\s+file|cek\s+proses|check\s+process|docker\s+logs|docker\s+restart|docker\s+stop|systemctl|pm2|export\s+[A-Z_]+=)\b/i;
+
+const UPGRADE_RE =
+  /\b(?:analisa\s+(?:lalu|dan)\s+upgrade|upgrade|self\s*upgrade|upgrade\s+yourself|tingkatkan\s+kemampuan|tambahkan\s+kemampuan|tambahkan\s+fitur|fitur\s+belum\s+ada|logic\s+belum\s+ada|tool\s+belum\s+ada|optimalkan\s+logic|optimalkan\s+penggunaan\s+token|efisiensi\s+penggunaan\s+token|perbaiki\s+arsitektur|buat\s+mekanisme\s+baru|tambahkan\s+mekanisme|tambahkan\s+guard\s+token|add\s+capability|add\s+feature|missing\s+capability|optimi[sz]e\s+token\s+usage|add\s+token\s+guard|add\s+context\s+budgeting|improve\s+context\s+compression)\b/i;
+
+const TOKEN_LIMIT_RE =
+  /\b(?:request\s+too\s+large|token\s+terlalu\s+besar|konteks\s+terlalu\s+besar|context\s+terlalu\s+besar|context\s+too\s+large|token\s+budget|context\s+budget|context\s+budgeting|penggunaan\s+token|efisiensi\s+token|efisiensi\s+penggunaan\s+token)\b/i;
+
+const TOKEN_LIMIT_PREVENTION_RE =
+  /\b(?:jangan\s+sampai\s+ada\s+(?:notif\s*:?\s*)?request\s+too\s+large|cegah\s+request\s+too\s+large|hindari\s+request\s+too\s+large|prevent\s+request\s+too\s+large|avoid\s+request\s+too\s+large)\b/i;
+
+export function isSelfUpgradeIntent(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  if (parseSlash(trimmed)?.kind === 'upgrade') return true;
+  if (EXPLICIT_SYSTEM_COMMAND_RE.test(trimmed)) return false;
+  if (UPGRADE_RE.test(trimmed)) return true;
+  if (TOKEN_LIMIT_PREVENTION_RE.test(trimmed)) return true;
+  if (TOKEN_LIMIT_RE.test(trimmed) && /\b(?:optimalkan|optimi[sz]e|upgrade|tingkatkan|tambahkan|add|improve|cegah|hindari|prevent|avoid)\b/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+export function buildSelfUpgradeInstruction(input: string): string {
+  if (TOKEN_LIMIT_RE.test(input) || TOKEN_LIMIT_PREVENTION_RE.test(input)) {
+    return [
+      'Analyze and upgrade Native OpenClaw token efficiency to prevent "Request too large for model" errors.',
+      'Implement context budgeting, model-aware token limits, tool result truncation, memory/workspace context trimming, and fallback before oversized requests.',
+      'Ensure build and tests pass.',
+      `Original request: ${input.trim()}`,
+    ].join(' ');
+  }
+  return input.trim();
+}
+
 function parseNatural(input: string): { kind: 'heal' | 'upgrade'; payload: string } | null {
+  if (isSelfUpgradeIntent(input)) {
+    return { kind: 'upgrade', payload: buildSelfUpgradeInstruction(input) };
+  }
   if (/\b(?:fix this bug|perbaiki bug ini|jalankan self healing|heal this error|fix failing test|repair build|solve this error)\b/i.test(input)) {
     return { kind: 'heal', payload: input.trim() };
-  }
-  if (/\b(?:tambahkan tool baru|fitur belum ada|logic belum ada|capability missing|add new tool|install capability|upgrade yourself|self upgrade)\b/i.test(input)) {
-    return { kind: 'upgrade', payload: input.trim() };
   }
   return null;
 }
@@ -190,7 +227,7 @@ async function handleUpgrade(
   if (action === 'run') {
     if (!payload) return { handled: true, response: 'Usage: /upgrade run <instruction>' };
     const run = await ctx.upgradeEngine.run({ userInput: payload, source, missingCapability: payload });
-    return { handled: true, response: formatRun(run) };
+    return { handled: true, response: ['Self-upgrade started.', formatRun(run)].join('\n\n') };
   }
   return { handled: true, response: upgradeHelp() };
 }

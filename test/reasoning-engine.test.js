@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReasoningEngine } = require('../dist/agents/reasoning-engine');
+const { isApplicationDebugRequest } = require('../dist/agents/application-debug-intent');
+const { isSelfUpgradeIntent } = require('../dist/self-healing');
 const { createMessage } = require('../dist/types/message');
 
 function mockRegistryWithWebFetch() {
@@ -35,6 +37,23 @@ function mockProvider(needsTool, tool = null, calls = { count: 0 }) {
           content: JSON.stringify({ needsTool, tool, reason: 'test reason' }),
         }),
       };
+    },
+  };
+}
+
+function mockRegistryWithSystemExecute() {
+  return {
+    listTools() {
+      return [{
+        manifest: {
+          name: 'system-execute',
+          description: 'Run allowed shell commands',
+          version: '1.0.0',
+          entry: 'x',
+          enabled: true,
+        },
+        run: async () => 'mock command output',
+      }];
     },
   };
 }
@@ -140,4 +159,52 @@ test('ReasoningEngine falls back gracefully when provider fails', async () => {
   const result = await engine.reason('test', failProvider, 'mock');
   assert.equal(result.needsTool, false);
   assert.equal(result.tool, null);
+});
+
+test('ReasoningEngine does not route Native OpenClaw logging debug requests to system-execute', async () => {
+  const calls = { count: 0 };
+  const engine = new ReasoningEngine(mockRegistryWithSystemExecute());
+  const result = await engine.reason(
+    'hilangkan notif error : Telegram polling error',
+    mockProvider(true, 'system-execute', calls),
+    'mock'
+  );
+
+  assert.equal(isApplicationDebugRequest('hilangkan notif error : Telegram polling error'), true);
+  assert.equal(calls.count, 0);
+  assert.equal(result.needsTool, false);
+  assert.equal(result.tool, null);
+  assert.match(result.reason, /Application logging\/config debug request/);
+});
+
+test('ReasoningEngine still allows explicit command requests to choose system-execute', async () => {
+  const calls = { count: 0 };
+  const engine = new ReasoningEngine(mockRegistryWithSystemExecute());
+  const result = await engine.reason(
+    'jalankan command docker logs native-openclaw',
+    mockProvider(true, 'system-execute', calls),
+    'mock'
+  );
+
+  assert.equal(isApplicationDebugRequest('jalankan command docker logs native-openclaw'), false);
+  assert.equal(calls.count, 1);
+  assert.equal(result.needsTool, true);
+  assert.equal(result.tool, 'system-execute');
+});
+
+test('ReasoningEngine does not route self-upgrade token requests to system-execute', async () => {
+  const input = 'analisa lalu upgrade, dalam efisiensi penggunaan token, usahakan jangan sampai ada notif : Request too large for model';
+  const calls = { count: 0 };
+  const engine = new ReasoningEngine(mockRegistryWithSystemExecute());
+  const result = await engine.reason(
+    input,
+    mockProvider(true, 'system-execute', calls),
+    'mock'
+  );
+
+  assert.equal(isSelfUpgradeIntent(input), true);
+  assert.equal(calls.count, 0);
+  assert.equal(result.needsTool, false);
+  assert.equal(result.tool, null);
+  assert.match(result.reason, /Self-upgrade request/);
 });

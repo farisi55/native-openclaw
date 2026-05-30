@@ -22,7 +22,13 @@ import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills/self-improving-actions';
-import { handleSelfHealingAction, type SelfHealingActionContext } from '../self-healing';
+import { handleSelfHealingAction, isSelfUpgradeIntent, type SelfHealingActionContext } from '../self-healing';
+import {
+  applicationDebugDiagnostic,
+  isApplicationDebugFixRequest,
+  isApplicationDebugRequest,
+  telegramPollingLogFixInstruction,
+} from './application-debug-intent';
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 
@@ -310,14 +316,38 @@ export async function handleAction(
   if (ctx.selfHealing) {
     const selfHealingAction = await handleSelfHealingAction(trimmed, ctx.selfHealing, 'system');
     if (selfHealingAction.handled) {
-      const isUpgrade = /^\/?(?:upgrade|self-upgrade)\b/i.test(trimmed) ||
-        /\b(?:tambahkan tool baru|fitur belum ada|logic belum ada|capability missing|add new tool|install capability|upgrade yourself|self upgrade)\b/i.test(trimmed);
+      const isUpgrade = isSelfUpgradeIntent(trimmed);
       return {
         handled: true,
         response: selfHealingAction.response ?? '',
         actionType: isUpgrade ? 'self_upgrade' : 'self_healing',
       };
     }
+  }
+
+  if (isApplicationDebugRequest(trimmed)) {
+    const selfHealingEnabled = ctx.selfHealing?.healingEnabled === true && Boolean(ctx.selfHealing.healingEngine);
+    if (selfHealingEnabled && isApplicationDebugFixRequest(trimmed) && ctx.selfHealing) {
+      const healingAction = await handleSelfHealingAction(
+        `/heal run ${telegramPollingLogFixInstruction()}`,
+        ctx.selfHealing,
+        'system'
+      );
+      return {
+        handled: true,
+        response: [
+          'Self-healing run started: fix Telegram polling log suppression.',
+          healingAction.response ?? '',
+        ].filter(Boolean).join('\n\n'),
+        actionType: 'self_healing',
+      };
+    }
+
+    return {
+      handled: true,
+      response: applicationDebugDiagnostic(selfHealingEnabled),
+      actionType: 'other',
+    };
   }
 
   if (ctx.scheduler) {
