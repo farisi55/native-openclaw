@@ -1,6 +1,18 @@
 export type HealingRunType = 'self-healing' | 'self-upgrade';
 export type HealingRunStatus = 'running' | 'passed' | 'failed' | 'rolled_back' | 'aborted';
 export type HealingLoopStatus = 'passed' | 'failed' | 'dependency_installed' | 'patched';
+export type FileChangeType = 'created' | 'updated' | 'deleted';
+
+export interface FileDiffSummary {
+  path: string;
+  changeType: FileChangeType;
+  additions: number;
+  deletions: number;
+  beforeSize: number;
+  afterSize: number;
+  diffText: string;
+  truncated: boolean;
+}
 
 export interface HealingRun {
   id: string;
@@ -20,6 +32,7 @@ export interface HealingRun {
   restartRequired?: boolean;
   restartScheduled?: boolean;
   restartReason?: string;
+  fileDiffs?: FileDiffSummary[];
 }
 
 export interface HealingLoopResult {
@@ -34,6 +47,7 @@ export interface HealingLoopResult {
   qaReport?: QAReport;
   missingPackages?: string[];
   error?: string;
+  fileDiffs?: FileDiffSummary[];
 }
 
 export interface BugAnalysis {

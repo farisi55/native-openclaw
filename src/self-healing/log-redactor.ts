@@ -4,6 +4,10 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)\s*=\s*[^\s]+/g, '[REDACTED_ENV_SECRET]'],
   [/(https?:\/\/[^:\s/@]+:)([^@\s/]+)(@)/gi, '$1[REDACTED]$3'],
   [/\b(?:sk|pk|rk|ghp|glpat|xoxb|xoxp)-[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_TOKEN]'],
+  [/\bxkeysib-[A-Za-z0-9_-]{12,}\b/gi, '[REDACTED_TOKEN]'],
+  [/\bgsk_[A-Za-z0-9_-]{12,}\b/gi, '[REDACTED_TOKEN]'],
+  [/\btvly-[A-Za-z0-9_-]{12,}\b/gi, '[REDACTED_TOKEN]'],
+  [/\bfc-[A-Za-z0-9_-]{12,}\b/gi, '[REDACTED_TOKEN]'],
 ];
 
 export function redactSecrets(input: string, enabled = true): string {

@@ -23,6 +23,7 @@ function healHelp(): string {
     '/heal status',
     '/heal runs',
     '/heal report <runId>',
+    '/heal diff <runId>',
     '/heal run <instruction>',
     '',
     'Aliases: /fix, /self-heal',
@@ -35,6 +36,7 @@ function upgradeHelp(): string {
     '/upgrade status',
     '/upgrade runs',
     '/upgrade report <runId>',
+    '/upgrade diff <runId>',
     '/upgrade run <instruction>',
     '',
     'Aliases: /self-upgrade',
@@ -145,6 +147,11 @@ async function handleHeal(
     const report = await ctx.healingEngine.getReport(payload);
     return { handled: true, response: report ?? `No report found for ${payload}.` };
   }
+  if (action === 'diff') {
+    if (!payload) return { handled: true, response: 'Usage: /heal diff <runId>' };
+    const diff = await ctx.healingEngine.getDiffReport(payload);
+    return { handled: true, response: diff ?? `No diff report found for run ${payload}.` };
+  }
   if (action === 'run') {
     if (!payload) return { handled: true, response: 'Usage: /heal run <instruction>' };
     const run = await ctx.healingEngine.run({ userInput: payload, source });
@@ -174,6 +181,11 @@ async function handleUpgrade(
     if (!payload) return { handled: true, response: 'Usage: /upgrade report <runId>' };
     const report = await ctx.upgradeEngine.getReport(payload);
     return { handled: true, response: report ?? `No report found for ${payload}.` };
+  }
+  if (action === 'diff') {
+    if (!payload) return { handled: true, response: 'Usage: /upgrade diff <runId>' };
+    const diff = await ctx.upgradeEngine.getDiffReport(payload);
+    return { handled: true, response: diff ?? `No diff report found for run ${payload}.` };
   }
   if (action === 'run') {
     if (!payload) return { handled: true, response: 'Usage: /upgrade run <instruction>' };

@@ -19,6 +19,8 @@ export type {
 export { BugAnalyzerAgent } from './bug-analyzer-agent';
 export { CodingAgent } from './coding-agent';
 export { DependencyResolver } from './dependency-resolver';
+export { DiffGenerator } from './diff-generator';
+export type { DiffGeneratorOptions } from './diff-generator';
 export { HealingStore } from './healing-store';
 export { PatchApplier } from './patch-applier';
 export { PatchPlanner } from './patch-planner';

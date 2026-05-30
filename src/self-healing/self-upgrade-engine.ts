@@ -1,11 +1,13 @@
+import { readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import type { IProvider } from '../types/provider';
 import { createLogger } from '../utils/logger';
 import { BugAnalyzerAgent } from './bug-analyzer-agent';
 import { CodingAgent } from './coding-agent';
 import { DependencyResolver } from './dependency-resolver';
+import { DiffGenerator } from './diff-generator';
 import { HealingStore } from './healing-store';
-import type { HealingLoopResult, HealingRun, QAReport, UpgradeEngineConfig, UpgradeRunInput } from './healing-types';
+import type { FileDiffSummary, HealingLoopResult, HealingRun, QAReport, UpgradeEngineConfig, UpgradeRunInput } from './healing-types';
 import { PatchApplier } from './patch-applier';
 import { PatchPlanner } from './patch-planner';
 import { QAAgent } from './qa-agent';
@@ -43,6 +45,7 @@ export class SelfUpgradeEngine {
   private readonly injectedTestRunner: TestRunner | undefined;
   private readonly injectedDependencyResolver: DependencyResolver | undefined;
   private readonly lifecycleManager: LifecycleManager | undefined;
+  private readonly diffGenerator: DiffGenerator;
 
   constructor(
     private readonly config: UpgradeEngineConfig,
@@ -57,6 +60,7 @@ export class SelfUpgradeEngine {
     this.injectedTestRunner = deps.testRunner;
     this.injectedDependencyResolver = deps.dependencyResolver;
     this.lifecycleManager = deps.lifecycleManager;
+    this.diffGenerator = new DiffGenerator({ redactSecrets: config.redactSecrets });
   }
 
   async run(input: UpgradeRunInput): Promise<HealingRun> {
@@ -150,12 +154,14 @@ export class SelfUpgradeEngine {
         loop.commandsRun = commandsRun;
         loop.qaReport = qaReport;
         loop.missingPackages = qaReport.missingPackages;
+        loop.fileDiffs = await this.generateDiffs(snapshot, changedFiles, workdir);
         loop.finishedAt = new Date().toISOString();
         run.loops.push(loop);
         await this.reportWriter.writeLoop(run.id, loop);
 
         if (qaReport.passed) {
-          this.markRestartRequirement(run, changedFiles);
+          await this.attachRunDiffs(run, snapshot, workdir);
+          this.markRestartRequirement(run, snapshot.changedFiles());
           return this.finish(run, 'passed', this.successSummary(run));
         }
 
@@ -177,10 +183,12 @@ export class SelfUpgradeEngine {
     }
 
     if (this.config.autoRollback) {
+      await this.attachRunDiffs(run, snapshot, workdir);
       await snapshot.rollback();
       logger.warn('self-upgrade rolled back changes', { runId: run.id, changedFiles: snapshot.changedFiles() });
       return this.finish(run, 'rolled_back', 'Self-upgrade did not pass QA and changes were rolled back.');
     }
+    await this.attachRunDiffs(run, snapshot, workdir);
     return this.finish(run, 'failed', 'Self-upgrade did not pass QA.');
   }
 
@@ -195,6 +203,11 @@ export class SelfUpgradeEngine {
   async getReport(id: string): Promise<string | null> {
     const run = await this.store.get(id);
     return run ? this.reportWriter.readFinalReport(run.id) : null;
+  }
+
+  async getDiffReport(id: string): Promise<string | null> {
+    const run = await this.store.get(id);
+    return run ? this.reportWriter.readDiffReport(run.id) : null;
   }
 
   getStatus(): Record<string, unknown> {
@@ -252,6 +265,23 @@ export class SelfUpgradeEngine {
     }
   }
 
+  private async attachRunDiffs(run: HealingRun, snapshot: SnapshotManager, workdir: string): Promise<void> {
+    run.fileDiffs = await this.generateDiffs(snapshot, snapshot.changedFiles(), workdir);
+  }
+
+  private async generateDiffs(
+    snapshot: SnapshotManager,
+    changedFiles: string[],
+    workdir: string
+  ): Promise<FileDiffSummary[]> {
+    const inputs = await Promise.all([...new Set(changedFiles)].sort().map(async (file) => ({
+      path: file,
+      beforeContent: await snapshot.getOriginalContent(file),
+      afterContent: await readCurrentFile(workdir, file),
+    })));
+    return this.diffGenerator.generateDiffs(inputs);
+  }
+
   private successSummary(run: HealingRun): string {
     if (run.restartScheduled) {
       return 'Self-upgrade passed QA. Auto restart scheduled in 1.5s. The new capability will be available after restart.';
@@ -267,4 +297,12 @@ export class SelfUpgradeEngine {
 
 function normalizePath(file: string): string {
   return file.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+async function readCurrentFile(workdir: string, filePath: string): Promise<string | null> {
+  try {
+    return await readFile(join(workdir, filePath), 'utf-8');
+  } catch {
+    return null;
+  }
 }

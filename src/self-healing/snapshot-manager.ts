@@ -8,6 +8,11 @@ interface SnapshotEntry {
   existed: boolean;
 }
 
+export interface FileSnapshotRecord {
+  existed: boolean;
+  content: string | null;
+}
+
 export class SnapshotManager {
   private readonly policy: SafetyPolicy;
   private readonly entries = new Map<string, SnapshotEntry>();
@@ -52,6 +57,10 @@ export class SnapshotManager {
     return [...this.entries.keys()].sort();
   }
 
+  getChangedFiles(): string[] {
+    return this.changedFiles();
+  }
+
   private async writeManifest(): Promise<void> {
     await mkdir(this.snapshotDir, { recursive: true });
     const manifest = [...this.entries.values()].map((entry) => ({
@@ -68,5 +77,20 @@ export class SnapshotManager {
     const entry = this.entries.get(rel);
     if (!entry || !entry.existed) return null;
     return readFile(entry.snapshotPath, 'utf-8');
+  }
+
+  async getOriginalContent(filePath: string): Promise<string | null> {
+    return this.readOriginal(filePath);
+  }
+
+  async getFileSnapshotMap(): Promise<Map<string, FileSnapshotRecord>> {
+    const records = new Map<string, FileSnapshotRecord>();
+    for (const [rel, entry] of this.entries.entries()) {
+      records.set(rel, {
+        existed: entry.existed,
+        content: entry.existed ? await readFile(entry.snapshotPath, 'utf-8') : null,
+      });
+    }
+    return records;
   }
 }

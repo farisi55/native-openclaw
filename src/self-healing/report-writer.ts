@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import type { HealingLoopResult, HealingRun, HealingRunType } from './healing-types';
+import type { FileDiffSummary, HealingLoopResult, HealingRun, HealingRunType } from './healing-types';
 import { redactSecrets, truncateForReport } from './log-redactor';
 
 export class ReportWriter {
@@ -27,6 +27,9 @@ export class ReportWriter {
     if (loop.analysis) await writeFile(join(loopDir, 'analysis.json'), JSON.stringify(loop.analysis, null, 2), 'utf-8');
     if (loop.patchPlan) await writeFile(join(loopDir, 'patch-plan.json'), JSON.stringify(loop.patchPlan, null, 2), 'utf-8');
     if (loop.changedFiles) await writeFile(join(loopDir, 'files-changed.json'), JSON.stringify(loop.changedFiles, null, 2), 'utf-8');
+    if (loop.fileDiffs) {
+      await this.writeDiffFiles(loopDir, loop.fileDiffs);
+    }
     if (loop.commandsRun) {
       await writeFile(
         join(loopDir, 'command-log.txt'),
@@ -44,6 +47,9 @@ export class ReportWriter {
 
   async writeFinal(run: HealingRun): Promise<void> {
     await this.writeRunJson(run);
+    if (run.fileDiffs) {
+      await this.writeDiffFiles(this.runDir(run.id), run.fileDiffs);
+    }
     await writeFile(join(this.runDir(run.id), 'final-report.md'), this.finalMarkdown(run), 'utf-8');
   }
 
@@ -55,9 +61,23 @@ export class ReportWriter {
     }
   }
 
+  async readDiffReport(runId: string): Promise<string | null> {
+    try {
+      return await readFile(join(this.runDir(runId), 'diff.md'), 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
   private async writeRunJson(run: HealingRun): Promise<void> {
     await mkdir(this.runDir(run.id), { recursive: true });
     await writeFile(join(this.runDir(run.id), 'run.json'), JSON.stringify(run, null, 2), 'utf-8');
+  }
+
+  private async writeDiffFiles(dir: string, diffs: FileDiffSummary[]): Promise<void> {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'diff.json'), JSON.stringify(diffs, null, 2), 'utf-8');
+    await writeFile(join(dir, 'diff.md'), this.diffMarkdown(diffs), 'utf-8');
   }
 
   private finalMarkdown(run: HealingRun): string {
@@ -89,7 +109,70 @@ export class ReportWriter {
       '',
       run.finalSummary ?? run.error ?? 'No summary.',
       '',
+      '## File Changes Summary',
+      '',
+      this.fileChangesSummary(run.fileDiffs ?? []),
+      '',
+      '## Per-File Diff',
+      '',
+      this.perFileDiff(run.fileDiffs ?? []),
+      '',
+      run.status === 'rolled_back'
+        ? 'Rollback status: changes were rolled back after this attempted diff was captured.'
+        : '',
+      '',
     ].join('\n');
+  }
+
+  private diffMarkdown(diffs: FileDiffSummary[]): string {
+    return [
+      '## File Changes Summary',
+      '',
+      this.fileChangesSummary(diffs),
+      '',
+      '## Per-File Diff',
+      '',
+      this.perFileDiff(diffs),
+      '',
+    ].join('\n');
+  }
+
+  private fileChangesSummary(diffs: FileDiffSummary[]): string {
+    if (diffs.length === 0) return 'No file changes were recorded.';
+
+    const header = '| File | Type | + Lines | - Lines | Truncated |';
+    const divider = '| --- | ---: | ---: | ---: | ---: |';
+    const rows = diffs.map((diff) => [
+      '|',
+      diff.path,
+      '|',
+      diff.changeType,
+      '|',
+      String(diff.additions),
+      '|',
+      String(diff.deletions),
+      '|',
+      String(diff.truncated),
+      '|',
+    ].join(' '));
+    return [header, divider, ...rows].join('\n');
+  }
+
+  private perFileDiff(diffs: FileDiffSummary[]): string {
+    if (diffs.length === 0) return 'No file changes were recorded.';
+
+    return diffs.map((diff) => [
+      `### ${diff.path}`,
+      '',
+      `Change type: ${diff.changeType}`,
+      `Additions: ${diff.additions}`,
+      `Deletions: ${diff.deletions}`,
+      '',
+      '````diff',
+      diff.diffText,
+      '````',
+      diff.truncated ? 'Diff truncated. See diff.json for metadata.' : '',
+    ].filter((line) => line !== '').join('\n')).join('\n\n');
   }
 }
 

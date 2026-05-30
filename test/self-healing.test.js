@@ -4,6 +4,7 @@ const path = require('path');
 
 const {
   PatchApplier,
+  DiffGenerator,
   QAAgent,
   SafetyPolicy,
   SelfHealingEngine,
@@ -74,6 +75,61 @@ async function prepareRoot(name) {
 
 (async () => {
   {
+    const diff = new DiffGenerator({ maxDiffChars: 10_000 }).generateFileDiff({
+      path: 'src/example.ts',
+      beforeContent: 'export const x = 1;\n',
+      afterContent: 'export const x = 2;\n',
+    });
+    assert.equal(diff.changeType, 'updated');
+    assert(diff.additions >= 1);
+    assert(diff.deletions >= 1);
+    assert.match(diff.diffText, /-export const x = 1/);
+    assert.match(diff.diffText, /\+export const x = 2/);
+  }
+
+  {
+    const diff = new DiffGenerator().generateFileDiff({
+      path: 'src/created.ts',
+      beforeContent: null,
+      afterContent: 'export const y = 1;\n',
+    });
+    assert.equal(diff.changeType, 'created');
+    assert.equal(diff.additions, 1);
+    assert.equal(diff.deletions, 0);
+  }
+
+  {
+    const diff = new DiffGenerator().generateFileDiff({
+      path: 'src/deleted.ts',
+      beforeContent: 'old\n',
+      afterContent: null,
+    });
+    assert.equal(diff.changeType, 'deleted');
+    assert.equal(diff.additions, 0);
+    assert.equal(diff.deletions, 1);
+  }
+
+  {
+    const diff = new DiffGenerator().generateFileDiff({
+      path: 'src/secret.ts',
+      beforeContent: 'const token = "Bearer abc123";\n',
+      afterContent: 'const token = "xkeysib-123456789012345";\n',
+    });
+    assert.match(diff.diffText, /\[REDACTED/);
+    assert(!diff.diffText.includes('abc123'));
+    assert(!diff.diffText.includes('xkeysib-123456789012345'));
+  }
+
+  {
+    const diff = new DiffGenerator().generateFileDiff({
+      path: '.env',
+      beforeContent: 'SECRET=old\n',
+      afterContent: 'SECRET=new\n',
+    });
+    assert.equal(diff.diffText, 'Diff omitted for protected file.');
+  }
+
+  {
     const root = await prepareRoot('loop-pass');
     await fs.mkdir(path.join(root, 'src'), { recursive: true });
     let qaCalls = 0;
@@ -105,6 +161,13 @@ async function prepareRoot(name) {
     const run = await engine.run({ userInput: 'fix fixture', source: 'system' });
     assert.equal(run.status, 'passed');
     assert.equal(run.loops.length, 2);
+    assert(run.fileDiffs?.some((diff) => diff.path === 'src/bug.ts'));
+    const report = await engine.getReport(run.id);
+    assert.match(report ?? '', /## File Changes Summary/);
+    assert.match(report ?? '', /## Per-File Diff/);
+    assert.match(report ?? '', /src\/bug\.ts/);
+    const diffReport = await engine.getDiffReport(run.id);
+    assert.match(diffReport ?? '', /src\/bug\.ts/);
   }
 
   {
@@ -170,6 +233,10 @@ async function prepareRoot(name) {
     const run = await engine.run({ userInput: 'fix but fail', source: 'system' });
     assert.equal(run.status, 'rolled_back');
     assert.equal(await fs.readFile(path.join(root, 'src', 'broken.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.match(run.fileDiffs?.[0]?.diffText ?? '', /\+export const value = 2/);
+    const report = await engine.getReport(run.id);
+    assert.match(report ?? '', /Rollback status/);
+    assert.match(report ?? '', /\+export const value = 2/);
   }
 
   {

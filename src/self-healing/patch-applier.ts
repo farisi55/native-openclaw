@@ -51,6 +51,10 @@ export class PatchApplier {
     return [...new Set(changed)].sort();
   }
 
+  getChangedFiles(): string[] {
+    return this.snapshot.getChangedFiles();
+  }
+
   get root(): string {
     return this.rootDir;
   }
