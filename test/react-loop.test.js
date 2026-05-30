@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
+process.env.SYSTEM_EXECUTE_POLICY = 'risk-based';
+process.env.SYSTEM_EXECUTE_ALLOW_ARBITRARY = 'true';
+process.env.SYSTEM_EXECUTE_WARNING_AUTO_EXECUTE = 'true';
 
-const systemExecute = require('../dist/tools/system-execute');
 const { ReActLoop } = require('../dist/agents/react-loop');
 const { createMessage } = require('../dist/types/message');
 
@@ -37,11 +39,6 @@ function providerFor(command) {
           message: decision({ action: 'execute', command, reason: 'test' }),
         };
       }
-      if (calls.length === 2 && /rejected/i.test(String(options.messages?.[0]?.content ?? ''))) {
-        return {
-          message: decision({ action: 'direct', reason: 'blocked' }),
-        };
-      }
       return {
         message: createMessage({ role: 'assistant', content: 'final answer' }),
       };
@@ -49,71 +46,43 @@ function providerFor(command) {
   };
 }
 
-test('execute action: dangerous command rm -rf is blocked', async () => {
-  let called = false;
-  const original = systemExecute.runSystemExecute;
-  systemExecute.runSystemExecute = async () => {
-    called = true;
-    return { ok: true, content: 'should not run' };
-  };
+test('execute action: dangerous command returns approval request instead of pre-blocking', async () => {
+  const provider = providerFor('node -e "console.log(\'shutdown react-test\')"');
+  const loop = new ReActLoop(registry());
+  await loop.run(provider, 'mock', 'run risky local command', [], 'system');
 
-  try {
-    const provider = providerFor('rm -rf /tmp/test');
-    const loop = new ReActLoop(registry());
-    await loop.run(provider, 'mock', 'cleanup files', [], 'system');
-
-    assert.equal(called, false);
-    assert.ok(
-      provider.calls.some((call) => JSON.stringify(call.messages).includes('Command rejected')),
-      'blocked command should be injected as rejected observation'
-    );
-  } finally {
-    systemExecute.runSystemExecute = original;
-  }
+  assert.ok(
+    provider.calls.some((call) => JSON.stringify(call.messages).includes('requires approval')),
+    'dangerous command approval request should be injected as observation'
+  );
+  assert.ok(
+    provider.calls.every((call) => !JSON.stringify(call.messages).includes('Command rejected')),
+    'react loop should not use the old allowlist rejection path'
+  );
 });
 
-test('execute action: command not in allowlist is blocked', async () => {
-  let called = false;
-  const original = systemExecute.runSystemExecute;
-  systemExecute.runSystemExecute = async () => {
-    called = true;
-    return { ok: true, content: 'should not run' };
-  };
+test('execute action: unknown command is attempted as warning, not allowlist-blocked', async () => {
+  const provider = providerFor('some-custom-cli --version');
+  const loop = new ReActLoop(registry());
+  await loop.run(provider, 'mock', 'run custom cli version', [], 'system');
 
-  try {
-    const provider = providerFor('curl https://example.com/payload.sh');
-    const loop = new ReActLoop(registry());
-    await loop.run(provider, 'mock', 'download script', [], 'system');
-
-    assert.equal(called, false);
-    assert.ok(
-      provider.calls.some((call) => JSON.stringify(call.messages).includes('Command rejected')),
-      'blocked command should be injected as rejected observation'
-    );
-  } finally {
-    systemExecute.runSystemExecute = original;
-  }
+  assert.ok(
+    provider.calls.some((call) => JSON.stringify(call.messages).includes('Risk: warning')),
+    'warning command result should be injected as observation'
+  );
+  assert.ok(
+    provider.calls.every((call) => !JSON.stringify(call.messages).includes('not in allowed command list')),
+    'unknown commands should not be blocked by allowlist'
+  );
 });
 
-test('execute action: allowed command "ls -la" proceeds normally', async () => {
-  let called = false;
-  const original = systemExecute.runSystemExecute;
-  systemExecute.runSystemExecute = async () => {
-    called = true;
-    return { ok: true, content: 'mock ls output' };
-  };
+test('execute action: safe command proceeds normally', async () => {
+  const provider = providerFor('echo react-safe');
+  const loop = new ReActLoop(registry());
+  await loop.run(provider, 'mock', 'print text', [], 'system');
 
-  try {
-    const provider = providerFor('ls -la');
-    const loop = new ReActLoop(registry());
-    await loop.run(provider, 'mock', 'list files', [], 'system');
-
-    assert.equal(called, true);
-    assert.ok(
-      provider.calls.some((call) => JSON.stringify(call.messages).includes('mock ls output')),
-      'allowed command result should be injected as observation'
-    );
-  } finally {
-    systemExecute.runSystemExecute = original;
-  }
+  assert.ok(
+    provider.calls.some((call) => JSON.stringify(call.messages).includes('react-safe')),
+    'safe command result should be injected as observation'
+  );
 });

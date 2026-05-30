@@ -10,6 +10,11 @@ import type { SettingsManager } from '../storage/settings-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { McpManager } from '../mcp';
 import { installTool, listAvailable } from '../tools/tool-installer';
+import {
+  approveCommand,
+  listPendingCommandApprovals,
+  rejectCommand,
+} from '../tools/system-execute';
 import { WorkspaceManager } from '../workspace';
 import {
   getDnsServers,
@@ -842,6 +847,69 @@ export async function cmdUpgrade(ctx: CLIContext, args: string[]): Promise<void>
   process.stdout.write('\n');
   process.stdout.write((result.response ?? '').split('\n').map((line) => `  ${line}`).join('\n'));
   process.stdout.write('\n\n');
+}
+
+export async function cmdSystemExecute(_ctx: CLIContext, args: string[]): Promise<void> {
+  const action = args[0]?.toLowerCase() ?? 'policy';
+
+  if (action === 'policy') {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'System Execute Policy')}\n`);
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
+    process.stdout.write(`  enabled: ${process.env['SYSTEM_EXECUTE_ENABLED'] ?? 'true'}\n`);
+    process.stdout.write(`  policy: ${process.env['SYSTEM_EXECUTE_POLICY'] ?? 'risk-based'}\n`);
+    process.stdout.write(`  allowArbitrary: ${process.env['SYSTEM_EXECUTE_ALLOW_ARBITRARY'] ?? 'true'}\n`);
+    process.stdout.write(`  warningAutoExecute: ${process.env['SYSTEM_EXECUTE_WARNING_AUTO_EXECUTE'] ?? 'true'}\n`);
+    process.stdout.write(`  requireDangerousApproval: ${process.env['SYSTEM_EXECUTE_REQUIRE_APPROVAL_FOR_DANGEROUS'] ?? 'true'}\n`);
+    process.stdout.write(`  approvalTtlMs: ${process.env['SYSTEM_EXECUTE_APPROVAL_TTL_MS'] ?? '300000'}\n\n`);
+    return;
+  }
+
+  if (action === 'approvals') {
+    const approvals = await listPendingCommandApprovals();
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Pending Command Approvals')}\n`);
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
+    if (approvals.length === 0) {
+      process.stdout.write(c('dim', '  No pending approvals.\n\n'));
+      return;
+    }
+    for (const approval of approvals) {
+      process.stdout.write(`  ${approval.id}  expires:${approval.expiresAt}\n`);
+      process.stdout.write(`    reason: ${approval.reason}\n`);
+      process.stdout.write(`    command: ${approval.command}\n`);
+    }
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (action === 'approve') {
+    const id = args[1]?.trim();
+    if (!id) {
+      process.stdout.write(c('yellow', '\n  Usage: /system-execute approve <id>\n\n'));
+      return;
+    }
+    const result = await approveCommand(id);
+    process.stdout.write('\n');
+    process.stdout.write(result.content.split('\n').map((line) => `  ${line}`).join('\n'));
+    process.stdout.write('\n\n');
+    return;
+  }
+
+  if (action === 'reject') {
+    const id = args[1]?.trim();
+    if (!id) {
+      process.stdout.write(c('yellow', '\n  Usage: /system-execute reject <id>\n\n'));
+      return;
+    }
+    const result = await rejectCommand(id);
+    process.stdout.write('\n');
+    process.stdout.write(result.content.split('\n').map((line) => `  ${line}`).join('\n'));
+    process.stdout.write('\n\n');
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /system-execute [policy|approvals|approve <id>|reject <id>]\n\n'));
 }
 
 export async function cmdPromptOptimize(_ctx: CLIContext, args: string[]): Promise<void> {

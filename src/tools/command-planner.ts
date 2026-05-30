@@ -1,4 +1,4 @@
-import { isDangerousCommand } from './system-execute';
+import { classifyCommandRisk, isDangerousCommand, type CommandRiskAssessment } from './system-execute';
 
 export interface CommandPlanRequest {
   /** Natural language intent, e.g. "list 10 largest files in downloads". */
@@ -10,6 +10,8 @@ export interface CommandPlanRequest {
 export interface CommandPlanResult {
   command: string;
   isDangerous: boolean;
+  risk?: CommandRiskAssessment;
+  requiresApproval?: boolean;
   explanation: string;
 }
 
@@ -48,9 +50,12 @@ export async function planCommand(request: CommandPlanRequest): Promise<CommandP
   const lower = intent.toLowerCase();
 
   if (isDangerousCommand(intent)) {
+    const risk = classifyCommandRisk(intent);
     return {
       command: intent,
       isDangerous: true,
+      risk,
+      requiresApproval: risk.requiresApproval,
       explanation: 'The requested command matches a dangerous system-operation pattern.',
     };
   }
@@ -60,9 +65,12 @@ export async function planCommand(request: CommandPlanRequest): Promise<CommandP
     /(download|downloads|unduhan)/i.test(lower)
   ) {
     const command = COMMAND_TEMPLATES['list_downloads_by_size'][request.platform];
+    const risk = classifyCommandRisk(command);
     return {
       command,
-      isDangerous: isDangerousCommand(command),
+      isDangerous: risk.risk === 'dangerous',
+      risk,
+      requiresApproval: risk.requiresApproval,
       explanation: 'Lists the largest files in the Downloads folder using the current platform shell.',
     };
   }
@@ -70,9 +78,12 @@ export async function planCommand(request: CommandPlanRequest): Promise<CommandP
   if (/(count|jumlah|hitung)/i.test(lower) && /(extension|ekstensi|file|\.)/i.test(lower)) {
     const ext = inferExtension(intent);
     const command = COMMAND_TEMPLATES['count_files_by_extension'][request.platform].replace('{EXT}', ext);
+    const risk = classifyCommandRisk(command);
     return {
       command,
-      isDangerous: isDangerousCommand(command),
+      isDangerous: risk.risk === 'dangerous',
+      risk,
+      requiresApproval: risk.requiresApproval,
       explanation: `Counts files with extension "${ext}" in the Downloads folder.`,
     };
   }
@@ -81,9 +92,12 @@ export async function planCommand(request: CommandPlanRequest): Promise<CommandP
     ? 'Get-ChildItem -LiteralPath "$env:USERPROFILE\\Downloads"'
     : 'ls -la ~/Downloads';
 
+  const risk = classifyCommandRisk(fallback);
   return {
     command: fallback,
-    isDangerous: false,
+    isDangerous: risk.risk === 'dangerous',
+    risk,
+    requiresApproval: risk.requiresApproval,
     explanation: `No exact heuristic matched; returning a safe Downloads listing for ${request.shell}.`,
   };
 }

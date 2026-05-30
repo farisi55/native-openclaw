@@ -1,88 +1,197 @@
 /**
  * tools/system-execute.ts
- * Execute arbitrary local commands with stdout/stderr capture.
- * Supports shell mode, custom command registry, and OS-aware defaults.
- *
- * Env:
- *   SYSTEM_EXECUTE_ENABLED=true   (default: true)
- *   SYSTEM_EXECUTE_TIMEOUT=30000  (ms)
+ * Execute local commands with risk-based policy and approval for dangerous operations.
  */
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { basename, join, resolve, sep } from 'path';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { basename, dirname, join, resolve, sep } from 'path';
+import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
-import { KVStore } from '../storage/json-store';
-import type { JsonObject, JsonValue } from '../types/global';
 import { WorkspaceManager } from '../workspace';
+import { redactSecrets } from '../self-healing';
 
 const logger = createLogger('tool:system-execute');
 const execAsync = promisify(exec);
 
-const TIMEOUT_MS = parseInt(process.env['SYSTEM_EXECUTE_TIMEOUT'] ?? '30000', 10);
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_OUTPUT_CHARS = 20_000;
+const DEFAULT_APPROVAL_TTL_MS = 5 * 60 * 1000;
 const REGISTRY_PATH = join(process.cwd(), 'data', 'custom-commands.json');
-const CONFIRM_TTL_MS = 5 * 60 * 1000;
-const CONFIRM_STORE_KEY_PREFIX = 'confirm:';
-const CONFIRM_STORE_FILE = 'system-execute-confirmations';
+const APPROVALS_PATH = join(process.env['APP_DATA_DIR'] ?? join(process.cwd(), 'data'), 'system-execute-approvals.json');
 
-// SECURITY FIX [C1]: allowlist is the primary command gate; dangerous regex remains secondary.
-const DEFAULT_ALLOWED_COMMANDS = [
-  'ls',
-  'pwd',
-  'cat',
-  'echo',
-  'git',
-  'node',
-  'npm',
-  'python',
-  'python3',
-  'pip',
-  'find',
-  'grep',
-  'head',
-  'tail',
-  'wc',
-  'sort',
-  'mkdir',
-  'cp',
-  'mv',
-  'touch',
-  'date',
-  'whoami',
-  'which',
-  'dir',
-  'env --help',
-] as const;
+export type CommandRiskLevel = 'safe' | 'warning' | 'dangerous';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
-// SECURITY FIX [C3]: only explicitly safe environment keys are inherited by child processes.
+export interface CommandRiskAssessment {
+  risk: CommandRiskLevel;
+  reason: string;
+  requiresApproval: boolean;
+  warnings: string[];
+  matchedRules: string[];
+}
+
+export interface PendingCommandApproval {
+  id: string;
+  command: string;
+  shell?: string;
+  cwd?: string;
+  createdAt: string;
+  expiresAt: string;
+  risk: 'dangerous';
+  reason: string;
+  requestedBy?: string;
+  status: ApprovalStatus;
+}
+
+export interface ExecuteInput {
+  command?: string;
+  alias?: string;
+  shell?: string;
+  timeout?: number;
+  cwd?: string;
+  saveAs?: string;
+  description?: string;
+  approvalId?: string;
+  approved?: boolean;
+  requestedBy?: string;
+  confirm?: boolean;
+  confirmId?: string;
+}
+
+export interface ExecuteResult {
+  ok: boolean;
+  content: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  risk?: CommandRiskAssessment;
+  approvalId?: string;
+}
+
+export interface CustomCommand {
+  alias: string;
+  command: string;
+  description?: string;
+  createdAt: string;
+}
+
 const SAFE_ENV_KEYS = [
   'PATH',
   'HOME',
   'USER',
+  'USERNAME',
+  'USERPROFILE',
   'SHELL',
   'LANG',
   'LC_ALL',
   'TZ',
   'TERM',
   'TMPDIR',
+  'TEMP',
+  'TMP',
   'PWD',
   'LOGNAME',
   'COLORTERM',
   'TERM_PROGRAM',
+  'ComSpec',
+  'COMSPEC',
+  'SystemRoot',
 ] as const;
 
+const SAFE_BASE_COMMANDS = new Set([
+  'pwd',
+  'ls',
+  'dir',
+  'cat',
+  'type',
+  'echo',
+  'date',
+  'whoami',
+  'hostname',
+  'uname',
+  'ps',
+  'tasklist',
+  'netstat',
+  'ss',
+  'ipconfig',
+  'ifconfig',
+  'find',
+  'grep',
+  'select-string',
+  'get-childitem',
+  'get-content',
+  'head',
+  'tail',
+  'wc',
+  'sort',
+  'which',
+  'where',
+]);
+
+const WARNING_BASE_COMMANDS = new Set([
+  'npm',
+  'mkdir',
+  'touch',
+  'cp',
+  'copy',
+  'mv',
+  'move',
+  'set-content',
+  'new-item',
+  'docker',
+  'docker-compose',
+  'git',
+  'sed',
+  'service',
+]);
+
 export const DANGEROUS_PATTERNS: RegExp[] = [
-  /\b(shutdown|reboot|restart)\b/i,
-  /\brm\s+-[a-z]*r[a-z]*f?[a-z]*\b/i,
-  /\bdel\s+\/s\b/i,
-  /\brmdir\s+\/s\b/i,
-  /\b(format|mkfs|diskpart)\b/i,
-  /\bdd\s+if=/i,
-  /\bchmod\s+-R\s+777\b/i,
+  /\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:\/|~|\*|\.{1,2}(?:\s|$)|["']?[a-zA-Z]:[\\/])/i,
+  /\brm\s+-[a-z]*r[a-z]*\s+(?:\/|~|\*|\.{1,2}(?:\s|$)|["']?[a-zA-Z]:[\\/])/i,
+  /\bsudo\s+rm\b/i,
+  /\bchmod\s+-R\s+777\s+(?:\/|~|[a-zA-Z]:[\\/])/i,
   /\bchown\s+-R\b/i,
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /\bshutdown\b/i,
+  /\breboot\b/i,
+  /\bhalt\b/i,
+  /\bpoweroff\b/i,
+  /\bsystemctl\s+(?:stop|disable)\b/i,
+  /\biptables\b/i,
+  /\bufw\b/i,
+  /\bfirewalld\b/i,
+  /\buserdel\b/i,
+  /\bpasswd\b/i,
+  /\bcrontab\s+-r\b/i,
+  /\bkill\s+-9\b/i,
+  /\bpkill\b/i,
+  /\bcurl\b[\s\S]*\|\s*(?:sh|bash|zsh)\b/i,
+  /\bwget\b[\s\S]*\|\s*(?:sh|bash|zsh)\b/i,
+  /(?:^|[;&|]\s*)eval\b/i,
+  /:\(\)\s*\{\s*:\|\:\s*&\s*\}\s*;/,
+  /\bRemove-Item\b[\s\S]*\b-Recurse\b[\s\S]*\b-Force\b[\s\S]*(?:[a-zA-Z]:\\|\\|\*)/i,
+  /\bdel\s+\/s\s+\/q\s+[a-zA-Z]:\\/i,
+  /\bformat\b/i,
+  /\bdiskpart\b/i,
+  /\bbcdedit\b/i,
+  /\breg\s+delete\b/i,
+  /\bnet\s+user\b[\s\S]*\s+\/delete\b/i,
+  /\bStop-Service\b/i,
+  /\bSet-ExecutionPolicy\s+Unrestricted\b/i,
+  /\b(?:Invoke-Expression|iex)\b/i,
+  /\biwr\b[\s\S]*\|\s*iex\b/i,
+  /\bdocker\s+system\s+prune\s+-a\b/i,
+  /\bdocker\s+volume\s+rm\b/i,
+  /\bdocker\s+rm\s+-f\b/i,
+  /\bdocker\s+compose\s+down\s+-v\b/i,
+  /\bdocker-compose\s+down\s+-v\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\bgit\s+clean\s+-fdx\b/i,
+  /\bgit\s+push\s+--force\b/i,
 ];
 
 export const SUBSHELL_PATTERNS: RegExp[] = [
@@ -90,15 +199,6 @@ export const SUBSHELL_PATTERNS: RegExp[] = [
   /`/m,
   /\$\{[\s\S]*/m,
 ];
-
-export interface PendingCommand {
-  id: string;
-  command: string;
-  createdAt: number;
-  expiresAt: number;
-}
-
-const fallbackPendingCommands = new Map<string, PendingCommand>();
 
 let _workspace: WorkspaceManager | undefined;
 
@@ -110,74 +210,39 @@ async function getWorkspace(): Promise<WorkspaceManager> {
   return _workspace;
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export interface ExecuteInput {
-  /** Raw command to execute. */
-  command?: string;
-  /** Name/alias of a saved custom command. */
-  alias?: string;
-  /** Shell to use: 'bash' | 'sh' | 'cmd' | 'powershell'. Default: auto-detect. */
-  shell?: string;
-  /** Timeout in ms. */
-  timeout?: number;
-  /** Working directory. */
-  cwd?: string;
-  /** Save this command as a custom alias. */
-  saveAs?: string;
-  /** Description for saved command. */
-  description?: string;
-  /** Explicit confirmation for dangerous commands. */
-  confirm?: boolean;
-  /** Pending confirmation ID returned for a dangerous command. */
-  confirmId?: string;
-}
-
-export interface ExecuteResult {
-  ok: boolean;
-  content: string;
-  stdout?: string;
-  stderr?: string;
-  exitCode?: number;
-}
-
-export interface CustomCommand {
-  alias: string;
-  command: string;
-  description?: string;
-  createdAt: string;
-}
-
 function isSystemExecuteEnabled(): boolean {
   return process.env['SYSTEM_EXECUTE_ENABLED'] !== 'false';
 }
 
-export function isDangerousCommand(cmd: string): boolean {
-  if (SUBSHELL_PATTERNS.some((pattern) => pattern.test(cmd))) {
-    return true;
-  }
-
-  // SECURITY FIX [C1]: secondary guard is intentionally narrower for restart/reboot tokens.
-  if (/\b(rm\s+-[a-z]*r[a-z]*f?[a-z]*|del\s+\/s|rmdir\s+\/s|format|mkfs|diskpart|dd\s+if=|chmod\s+-R\s+777|chown\s+-R)\b/i.test(cmd)) {
-    return true;
-  }
-
-  if (/\bshutdown(?:\b|[-_])/i.test(cmd) || /(^|[;&|]\s*)(reboot|restart)(\s|$)/i.test(cmd)) {
-    return true;
-  }
-
-  return DANGEROUS_PATTERNS.some((pattern) => {
-    if (pattern.source.includes('shutdown|reboot|restart')) return false;
-    return pattern.test(cmd);
-  });
+function getEnvBool(key: string, fallback: boolean): boolean {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  return raw.trim().toLowerCase() === 'true';
 }
 
-function getAllowedCommands(): string[] {
-  const extra = (process.env['SYSTEM_EXECUTE_ALLOWED_COMMANDS'] ?? '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  return [...DEFAULT_ALLOWED_COMMANDS, ...extra].map((entry) => entry.toLowerCase());
+function getEnvInt(key: string, fallback: number): number {
+  const parsed = Number(process.env[key]);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function isRiskBasedPolicy(): boolean {
+  return (process.env['SYSTEM_EXECUTE_POLICY'] ?? 'risk-based').trim().toLowerCase() === 'risk-based';
+}
+
+function allowArbitraryCommands(): boolean {
+  return getEnvBool('SYSTEM_EXECUTE_ALLOW_ARBITRARY', true);
+}
+
+function warningAutoExecute(): boolean {
+  return getEnvBool('SYSTEM_EXECUTE_WARNING_AUTO_EXECUTE', true);
+}
+
+function requireApprovalForDangerous(): boolean {
+  return getEnvBool('SYSTEM_EXECUTE_REQUIRE_APPROVAL_FOR_DANGEROUS', true);
+}
+
+function redactOutput(input: string): string {
+  return redactSecrets(input, getEnvBool('SYSTEM_EXECUTE_REDACT_SECRETS', true));
 }
 
 function stripCommandQuotes(value: string): string {
@@ -193,7 +258,7 @@ function stripCommandQuotes(value: string): string {
 
 function commandSegments(command: string): string[] {
   return command
-    .split(/&&|\|\||\||(?<!\\);|\r?\n/)
+    .split(/&&|\|\||(?<!\\);|\r?\n/)
     .map((segment) => segment.trim())
     .filter(Boolean);
 }
@@ -203,158 +268,135 @@ function baseCommand(segment: string): string {
   return basename(token.replace(/\\/g, '/')).toLowerCase();
 }
 
-function isAllowedCommand(cmd: string): boolean {
-  const allowed = getAllowedCommands();
-  const segments = commandSegments(cmd);
+function allSegmentsReadOnly(command: string): boolean {
+  const segments = commandSegments(command);
   if (segments.length === 0) return false;
 
   return segments.every((segment) => {
-    const normalized = segment.trim().toLowerCase();
     const base = baseCommand(segment);
-
-    if (!base) return false;
-
-    if (
-      (base === 'python' || base === 'python3') &&
-      /(^|\s)-c(\s|$)/i.test(segment)
-    ) {
-      return false;
-    }
-
-    if (
-      base === 'node' &&
-      /(^|\s)(-e|--eval)(\s|=|$)/i.test(segment)
-    ) {
-      return false;
-    }
-
-    return allowed.some((entry) => {
-      if (entry.includes(' ')) {
-        return normalized === entry || normalized.startsWith(`${entry} `);
-      }
-      return base === entry;
-    });
+    const lower = segment.toLowerCase();
+    if (!SAFE_BASE_COMMANDS.has(base)) return false;
+    if (base === 'find' && /\b(?:-delete|-exec\s+(?:rm|mv|cp|sh|bash)\b)/i.test(lower)) return false;
+    if ((base === 'grep' || base === 'select-string') && /\s>\s?/.test(segment)) return false;
+    return true;
   });
 }
 
+function isSafeKnownCommand(command: string): boolean {
+  const lower = command.toLowerCase().trim();
+  if (/^docker\s+(?:ps|logs\b)/i.test(lower)) return true;
+  if (/^git\s+(?:status|diff|log|show|branch\b)/i.test(lower)) return true;
+  if (/^npm\s+(?:run\s+build|test|run\s+test)\b/i.test(lower)) return true;
+  if (/^node\s+--version\b/i.test(lower)) return true;
+  return allSegmentsReadOnly(command);
+}
+
+function warningRules(command: string): string[] {
+  const lower = command.toLowerCase();
+  const matched: string[] = [];
+  const segments = commandSegments(command);
+  if (segments.some((segment) => WARNING_BASE_COMMANDS.has(baseCommand(segment)))) matched.push('known-modifying-command');
+  if (/\bnpm\s+(?:install|uninstall|update|cache\s+clean)\b/i.test(lower)) matched.push('npm-may-modify-dependencies');
+  if (/\bgit\s+(?:checkout|restore)\b/i.test(lower)) matched.push('git-working-tree-change');
+  if (/\b(?:mkdir|touch|cp|copy|mv|move|set-content|new-item|sed\s+-i)\b/i.test(lower)) matched.push('file-system-change');
+  if (/\bdocker(?:\s+compose|-compose)?\s+restart\b/i.test(lower)) matched.push('container-restart');
+  if (/\b(?:sudo|runas)\b/i.test(lower)) matched.push('privilege-request');
+  if (/\b(?:curl|wget|iwr|invoke-webrequest)\b/i.test(lower)) matched.push('network-command');
+  if (/\bexport\s+[A-Z_][A-Z0-9_]*=/i.test(command)) matched.push('environment-change');
+  if (/[>&]\s*\S/.test(command)) matched.push('redirection-or-background');
+  if (/\|/.test(command)) matched.push('pipeline');
+  return matched;
+}
+
+export function classifyCommandRisk(command: string): CommandRiskAssessment {
+  const matchedSubshell = SUBSHELL_PATTERNS
+    .map((pattern) => pattern.source)
+    .filter((_, index) => SUBSHELL_PATTERNS[index]?.test(command));
+
+  if (matchedSubshell.length > 0) {
+    return {
+      risk: 'dangerous',
+      reason: 'Command uses command substitution or shell expansion that can hide a second command.',
+      requiresApproval: requireApprovalForDangerous(),
+      warnings: ['This command can execute hidden or untrusted code.'],
+      matchedRules: matchedSubshell,
+    };
+  }
+
+  if (isSafeKnownCommand(command)) {
+    return {
+      risk: 'safe',
+      reason: 'Command appears read-only or is an approved low-risk build/test/status command.',
+      requiresApproval: false,
+      warnings: [],
+      matchedRules: ['read-only-or-build-test'],
+    };
+  }
+
+  const matchedDangerous = DANGEROUS_PATTERNS
+    .map((pattern) => pattern.source)
+    .filter((_, index) => DANGEROUS_PATTERNS[index]?.test(command));
+
+  if (matchedDangerous.length > 0) {
+    return {
+      risk: 'dangerous',
+      reason: 'Command matches destructive, privilege-sensitive, or hard-to-reverse patterns.',
+      requiresApproval: requireApprovalForDangerous(),
+      warnings: ['This command can damage data, change system state, or execute untrusted code.'],
+      matchedRules: matchedDangerous,
+    };
+  }
+
+  const matchedWarnings = warningRules(command);
+  return {
+    risk: 'warning',
+    reason: matchedWarnings.length > 0
+      ? 'Command may modify files, environment, network state, or project dependencies.'
+      : 'Unknown command; defaulting to warning instead of blocking by allowlist.',
+    requiresApproval: false,
+    warnings: ['Warning: this command may modify files or environment.'],
+    matchedRules: matchedWarnings.length > 0 ? matchedWarnings : ['unknown-command-warning'],
+  };
+}
+
+export function isDangerousCommand(cmd: string): boolean {
+  return classifyCommandRisk(cmd).risk === 'dangerous';
+}
+
 export function isCommandAllowed(command: string): boolean {
-  return isAllowedCommand(command);
+  if (!isRiskBasedPolicy() || !allowArbitraryCommands()) {
+    return isSafeKnownCommand(command);
+  }
+  return true;
 }
 
 function buildSafeEnv(cwd: string): NodeJS.ProcessEnv {
   const safeEnv: NodeJS.ProcessEnv = {};
   const envEntries = Object.entries(process.env);
-
   for (const key of SAFE_ENV_KEYS) {
     const found = envEntries.find(([envKey]) => envKey.toLowerCase() === key.toLowerCase());
-    if (found?.[1] !== undefined) {
-      safeEnv[key] = found[1];
-    }
+    if (found?.[1] !== undefined) safeEnv[key] = found[1];
   }
-
   safeEnv['PWD'] = cwd;
   return safeEnv;
 }
 
-function pendingStore(): KVStore {
-  return new KVStore({
-    dataDir: process.env['APP_DATA_DIR'] ?? join(process.cwd(), 'data'),
-    fileName: CONFIRM_STORE_FILE,
-  });
-}
-
-function pendingToJson(command: PendingCommand): JsonObject {
-  return {
-    id: command.id,
-    command: command.command,
-    createdAt: command.createdAt,
-    expiresAt: command.expiresAt,
-  };
-}
-
-function parsePending(value: JsonValue | null): PendingCommand | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const entry = value as JsonObject;
-  if (
-    typeof entry['id'] !== 'string' ||
-    typeof entry['command'] !== 'string' ||
-    typeof entry['createdAt'] !== 'number' ||
-    typeof entry['expiresAt'] !== 'number'
-  ) {
-    return null;
-  }
-
-  return {
-    id: entry['id'],
-    command: entry['command'],
-    createdAt: entry['createdAt'],
-    expiresAt: entry['expiresAt'],
-  };
-}
-
-async function savePendingCommand(command: PendingCommand): Promise<void> {
-  const key = `${CONFIRM_STORE_KEY_PREFIX}${command.id}`;
-  const store = pendingStore();
-  const result = await store.set(key, pendingToJson(command));
-  if (!result.ok) {
-    // SECURITY FIX [H8]: fallback is best-effort only if persistent confirmation storage fails.
-    logger.warn('system-execute: persistent confirm store unavailable, using memory fallback', {
-      error: result.error.message,
-    });
-    fallbackPendingCommands.set(command.id, command);
-  }
-}
-
-async function getPendingCommand(id: string): Promise<PendingCommand | null> {
-  const key = `${CONFIRM_STORE_KEY_PREFIX}${id}`;
-  const store = pendingStore();
-  const result = await store.get<JsonObject>(key);
-  if (result.ok) {
-    return parsePending(result.value);
-  }
-
-  logger.warn('system-execute: confirm store read failed, checking memory fallback', {
-    error: result.error.message,
-  });
-  return fallbackPendingCommands.get(id) ?? null;
-}
-
-async function deletePendingCommand(id: string): Promise<void> {
-  const key = `${CONFIRM_STORE_KEY_PREFIX}${id}`;
-  const store = pendingStore();
-  const result = await store.delete(key);
-  if (!result.ok) {
-    logger.warn('system-execute: confirm store delete failed', {
-      error: result.error.message,
-    });
-  }
-  fallbackPendingCommands.delete(id);
-}
-
-// ─── Custom command registry ──────────────────────────────────────────────────
-
 async function loadRegistry(): Promise<CustomCommand[]> {
-  if (!existsSync(REGISTRY_PATH)) {
-    return [];
-  }
-
+  if (!existsSync(REGISTRY_PATH)) return [];
   try {
     const raw = await readFile(REGISTRY_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed as CustomCommand[];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed as CustomCommand[] : [];
   } catch {
     return [];
   }
 }
 
 async function saveRegistry(commands: CustomCommand[]): Promise<void> {
-  await mkdir(join(REGISTRY_PATH, '..'), { recursive: true });
-  await writeFile(REGISTRY_PATH, JSON.stringify(commands, null, 2), 'utf-8');
+  await mkdir(dirname(REGISTRY_PATH), { recursive: true });
+  const tmp = `${REGISTRY_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(commands, null, 2), 'utf-8');
+  await rename(tmp, REGISTRY_PATH);
 }
 
 export async function saveCustomCommand(
@@ -362,71 +404,46 @@ export async function saveCustomCommand(
   command: string,
   description?: string
 ): Promise<string> {
-  if (!isCommandAllowed(command)) {
-    throw new Error(`Command "${command}" is not permitted by the allowlist and cannot be saved.`);
-  }
-
-  if (isDangerousCommand(command)) {
-    throw new Error(`Command "${command}" is dangerous and cannot be saved.`);
+  const risk = classifyCommandRisk(command);
+  if (risk.risk === 'dangerous') {
+    throw new Error(`Command "${command}" is dangerous and cannot be saved as a reusable alias.`);
   }
 
   const registry = await loadRegistry();
   const existing = registry.findIndex((c) => c.alias === alias);
-
   const entry: CustomCommand = {
     alias,
     command,
     createdAt: new Date().toISOString(),
+    ...(description !== undefined ? { description } : {}),
   };
 
-  if (description !== undefined) {
-    entry.description = description;
-  }
-
-  if (existing >= 0) {
-    registry[existing] = entry;
-  } else {
-    registry.push(entry);
-  }
-
+  if (existing >= 0) registry[existing] = entry;
+  else registry.push(entry);
   await saveRegistry(registry);
-
-  logger.info('custom command saved', { alias, command });
-
-  return `✅ Command saved as alias "${alias}":\n\`${command}\``;
+  logger.info('custom command saved', { alias, risk: risk.risk });
+  return `Command saved as alias "${alias}":\n\`${command}\`\nRisk: ${risk.risk}`;
 }
 
 export async function listCustomCommands(): Promise<string> {
   const registry = await loadRegistry();
-
-  if (registry.length === 0) {
-    return '📋 No custom commands saved yet.';
-  }
-
+  if (registry.length === 0) return 'No custom commands saved yet.';
   const lines = registry.map((c) =>
-    `- **${c.alias}**: \`${c.command}\`${c.description ? `  — ${c.description}` : ''}`
+    `- **${c.alias}**: \`${c.command}\`${c.description ? ` - ${c.description}` : ''}`
   );
-
-  return `📋 **Custom Commands:**\n\n${lines.join('\n')}`;
+  return `Custom Commands:\n\n${lines.join('\n')}`;
 }
-
-// ─── OS-aware shell selection ─────────────────────────────────────────────────
 
 export function detectShell(): string {
   if (process.platform === 'win32') {
     return process.env['ComSpec'] ?? process.env['COMSPEC'] ?? 'C:\\Windows\\System32\\cmd.exe';
   }
-
   return process.env['SHELL'] ?? '/bin/sh';
 }
 
 export function normalizeShell(shell?: string): string {
-  if (!shell || !shell.trim()) {
-    return detectShell();
-  }
-
+  if (!shell || !shell.trim()) return detectShell();
   const normalized = shell.trim().toLowerCase();
-
   if (process.platform === 'win32') {
     if (normalized === 'cmd' || normalized === 'cmd.exe') {
       return process.env['ComSpec'] ?? process.env['COMSPEC'] ?? 'C:\\Windows\\System32\\cmd.exe';
@@ -439,11 +456,9 @@ export function normalizeShell(shell?: string): string {
     if (normalized === 'pwsh' || normalized === 'pwsh.exe') return 'pwsh.exe';
     return shell;
   }
-
   if (normalized === 'bash') return '/bin/bash';
   if (normalized === 'sh') return '/bin/sh';
   if (normalized === 'zsh') return '/bin/zsh';
-
   return shell;
 }
 
@@ -462,178 +477,228 @@ async function resolveExecutionCwd(explicitCwd?: string): Promise<CwdResolution>
       : resolve(workspaceRoot, rawCwd);
     const relative = target === workspaceRoot ? '' : target.slice(workspaceRoot.length);
 
-    // SECURITY FIX [H7]: explicit cwd must remain inside the workspace boundary.
     if (
       target !== workspaceRoot &&
       (!target.startsWith(`${workspaceRoot}${sep}`) || relative.startsWith(`..${sep}`))
     ) {
-      return {
-        ok: false,
-        content: 'cwd di luar workspace boundary.',
-      };
+      return { ok: false, content: 'cwd di luar workspace boundary.' };
     }
-
     return { ok: true, cwd: target };
   }
 
   const mode = (process.env['SYSTEM_EXECUTE_DEFAULT_CWD'] ?? 'workspace').trim().toLowerCase();
-  if (mode === 'workspace') {
-    return { ok: true, cwd: workspaceRoot };
-  }
-
-  return { ok: true, cwd: process.cwd() };
+  return { ok: true, cwd: mode === 'workspace' ? workspaceRoot : process.cwd() };
 }
 
-// ─── Execution ────────────────────────────────────────────────────────────────
-
-export async function runSystemExecute(
-  input: ExecuteInput | string | Record<string, unknown>
-): Promise<ExecuteResult> {
-  if (!isSystemExecuteEnabled()) {
-    return {
-      ok: false,
-      content: '❌ System execution is disabled. Set SYSTEM_EXECUTE_ENABLED=true.',
-    };
+async function readApprovals(): Promise<PendingCommandApproval[]> {
+  try {
+    const raw = await readFile(APPROVALS_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isPendingCommandApproval) : [];
+  } catch {
+    return [];
   }
+}
 
-  let opts: ExecuteInput;
+function isPendingCommandApproval(value: unknown): value is PendingCommandApproval {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item['id'] === 'string' &&
+    typeof item['command'] === 'string' &&
+    typeof item['createdAt'] === 'string' &&
+    typeof item['expiresAt'] === 'string' &&
+    item['risk'] === 'dangerous' &&
+    typeof item['reason'] === 'string' &&
+    typeof item['status'] === 'string';
+}
 
-  if (typeof input === 'string') {
-    opts = { command: input };
-  } else {
-    opts = input as ExecuteInput;
-  }
-
-  // Save custom command
-  if (opts.saveAs && opts.command) {
-    const msg = await saveCustomCommand(
-      opts.saveAs,
-      opts.command,
-      opts.description
-    );
-
-    return {
-      ok: true,
-      content: msg,
-    };
-  }
-
-  // List custom commands
-  if (opts.alias === 'list' || opts.command === 'list') {
-    return {
-      ok: true,
-      content: await listCustomCommands(),
-    };
-  }
-
-  // Resolve command: alias → registry lookup → raw command
-  let cmd = opts.command ?? '';
-
-  if (opts.alias) {
-    const registry = await loadRegistry();
-    const found = registry.find((c) => c.alias === opts.alias);
-
-    if (found) {
-      cmd = found.command;
-
-      logger.info('custom command resolved', {
-        alias: opts.alias,
-        command: cmd,
-      });
-
-      const aliasAllowed = isCommandAllowed(cmd);
-      const aliasDangerous = isDangerousCommand(cmd);
-      if (!aliasAllowed || aliasDangerous) {
-        const dangerousNote = aliasDangerous
-          ? ' The resolved command also matches a dangerous command pattern.'
-          : '';
-        return {
-          ok: false,
-          content: aliasAllowed
-            ? `Alias "${opts.alias}" resolved to a dangerous command and cannot be executed.`
-            : `Alias "${opts.alias}" resolved to a command that is not permitted by the allowlist.${dangerousNote}`,
-        };
-      }
-    } else {
-      return {
-        ok: false,
-        content: `❌ Alias "${opts.alias}" not found. Use /tools or ask me to save it first.`,
-      };
-    }
-  }
-
-  if (!cmd.trim()) {
-    return {
-      ok: false,
-      content: '❌ No command provided.',
-    };
-  }
-
-  if (!isCommandAllowed(cmd)) {
-    return {
-      ok: false,
-      content: isDangerousCommand(cmd)
-        ? 'Command ini berpotensi berbahaya dan tidak diizinkan oleh allowlist system-execute.'
-        : 'Perintah tidak diizinkan oleh allowlist system-execute. Tambahkan command aman melalui SYSTEM_EXECUTE_ALLOWED_COMMANDS jika memang diperlukan.',
-    };
-  }
-
-  const requestedConfirmId = opts.confirmId?.trim();
-  if (requestedConfirmId) {
-    const pending = await getPendingCommand(requestedConfirmId);
-    const now = Date.now();
-
-    if (!pending || pending.expiresAt <= now || pending.command !== cmd) {
-      await deletePendingCommand(requestedConfirmId);
-      return {
-        ok: false,
-        content: 'Konfirmasi tidak valid atau sudah kedaluwarsa.',
-      };
-    }
-
-    await deletePendingCommand(requestedConfirmId);
-  } else if (isDangerousCommand(cmd) && opts.confirm !== true) {
-    const id = `cmd_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
-    const now = Date.now();
-    await savePendingCommand({
-      id,
-      command: cmd,
-      createdAt: now,
-      expiresAt: now + CONFIRM_TTL_MS,
+async function writeApprovals(records: PendingCommandApproval[]): Promise<void> {
+  await mkdir(dirname(APPROVALS_PATH), { recursive: true });
+  const tmp = `${APPROVALS_PATH}.tmp`;
+  const data = JSON.stringify(records.slice(-200), null, 2);
+  await writeFile(tmp, data, 'utf-8');
+  try {
+    await rename(tmp, APPROVALS_PATH);
+  } catch (error) {
+    logger.debug('approval store atomic rename failed, falling back to direct write', {
+      error: error instanceof Error ? error.message : String(error),
     });
+    await writeFile(APPROVALS_PATH, data, 'utf-8');
+    await unlink(tmp).catch(() => undefined);
+  }
+}
 
-    return {
-      ok: false,
-      content:
-        `⚠️ Command ini berpotensi berbahaya dan membutuhkan konfirmasi eksplisit.\n\n` +
-        `Command: \`${cmd}\`\n\n` +
-        `Untuk mengeksekusi, kirim ulang dengan:\n` +
-        `{ "confirmId": "${id}" }\n\n` +
-        'Konfirmasi berlaku selama 5 menit.',
-    };
+function expireRecord(record: PendingCommandApproval, now = new Date()): PendingCommandApproval {
+  if (record.status === 'pending' && new Date(record.expiresAt).getTime() <= now.getTime()) {
+    return { ...record, status: 'expired' };
+  }
+  return record;
+}
+
+async function savePendingApproval(input: {
+  command: string;
+  shell?: string;
+  cwd?: string;
+  risk: CommandRiskAssessment;
+  requestedBy?: string;
+}): Promise<PendingCommandApproval> {
+  const now = new Date();
+  const record: PendingCommandApproval = {
+    id: `cmd_${randomUUID().replace(/-/g, '').slice(0, 8)}`,
+    command: input.command,
+    ...(input.shell ? { shell: input.shell } : {}),
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + getEnvInt('SYSTEM_EXECUTE_APPROVAL_TTL_MS', DEFAULT_APPROVAL_TTL_MS)).toISOString(),
+    risk: 'dangerous',
+    reason: input.risk.reason,
+    ...(input.requestedBy ? { requestedBy: input.requestedBy } : {}),
+    status: 'pending',
+  };
+  const records = (await readApprovals()).map((item) => expireRecord(item, now));
+  records.push(record);
+  await writeApprovals(records);
+  return record;
+}
+
+async function findApproval(id: string): Promise<PendingCommandApproval | null> {
+  const now = new Date();
+  const records = (await readApprovals()).map((item) => expireRecord(item, now));
+  await writeApprovals(records);
+  return records.find((record) => record.id === id) ?? null;
+}
+
+async function updateApprovalStatus(id: string, status: ApprovalStatus): Promise<PendingCommandApproval | null> {
+  const now = new Date();
+  let found: PendingCommandApproval | null = null;
+  const records = (await readApprovals()).map((item) => {
+    const current = expireRecord(item, now);
+    if (current.id !== id) return current;
+    found = { ...current, status };
+    return found;
+  });
+  if (found) await writeApprovals(records);
+  return found;
+}
+
+export async function listPendingCommandApprovals(): Promise<PendingCommandApproval[]> {
+  const now = new Date();
+  const records = (await readApprovals()).map((item) => expireRecord(item, now));
+  await writeApprovals(records);
+  return records.filter((record) => record.status === 'pending');
+}
+
+export async function approveCommand(id: string): Promise<ExecuteResult> {
+  const record = await findApproval(id);
+  if (!record) {
+    return { ok: false, content: `Approval ${id} not found.` };
+  }
+  if (record.status !== 'pending') {
+    return { ok: false, content: `Approval ${id} is ${record.status}.` };
+  }
+  await updateApprovalStatus(id, 'approved');
+  return runSystemExecute({
+    command: record.command,
+    ...(record.shell ? { shell: record.shell } : {}),
+    ...(record.cwd ? { cwd: record.cwd } : {}),
+    approvalId: id,
+    approved: true,
+  });
+}
+
+export async function rejectCommand(id: string): Promise<ExecuteResult> {
+  const record = await updateApprovalStatus(id, 'rejected');
+  if (!record) return { ok: false, content: `Approval ${id} not found.` };
+  return {
+    ok: true,
+    content: `Command approval ${id} rejected. Command was not executed.`,
+  };
+}
+
+function approvalRequestContent(command: string, risk: CommandRiskAssessment, id: string): string {
+  return [
+    'Command classified as dangerous and requires approval.',
+    '',
+    `Risk: ${risk.risk}`,
+    `Reason: ${risk.reason}`,
+    '',
+    'Command:',
+    command,
+    '',
+    `To approve, reply: approve command ${id}`,
+    `To reject: reject command ${id}`,
+  ].join('\n');
+}
+
+function approvalStatusText(risk: CommandRiskAssessment, approved: boolean): string {
+  if (risk.risk !== 'dangerous') return 'not required';
+  return approved ? 'approved' : 'required';
+}
+
+function truncateOutput(value: string, maxChars: number): string {
+  const redacted = redactOutput(value);
+  if (redacted.length <= maxChars) return redacted;
+  return `${redacted.slice(0, maxChars)}\n...[output truncated]`;
+}
+
+function formatExecutionResult(input: {
+  command: string;
+  risk: CommandRiskAssessment;
+  approved: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}): string {
+  const maxOutputChars = getEnvInt('SYSTEM_EXECUTE_MAX_OUTPUT_CHARS', DEFAULT_MAX_OUTPUT_CHARS);
+  const stdout = truncateOutput(input.stdout, maxOutputChars);
+  const stderr = truncateOutput(input.stderr, Math.max(2000, Math.floor(maxOutputChars / 2)));
+  const lines = [
+    'Command:',
+    input.command,
+    '',
+    `Risk: ${input.risk.risk}`,
+    `Approval: ${approvalStatusText(input.risk, input.approved)}`,
+    `Exit code: ${input.exitCode}`,
+  ];
+
+  if (input.risk.risk === 'warning') {
+    lines.push('', 'Warning:', input.risk.warnings.join('\n') || input.risk.reason);
   }
 
-  const shell = normalizeShell(opts.shell);
-  const timeout = opts.timeout ?? TIMEOUT_MS;
-  const cwdResult = await resolveExecutionCwd(opts.cwd);
-  if (!cwdResult.ok) {
-    return {
-      ok: false,
-      content: cwdResult.content,
-    };
-  }
+  lines.push('', 'STDOUT:', stdout || '(empty)', '', 'STDERR:', stderr || '(empty)');
+  return lines.join('\n');
+}
+
+async function executeCommand(input: {
+  command: string;
+  shell?: string;
+  timeout?: number;
+  cwd?: string;
+  risk: CommandRiskAssessment;
+  approved: boolean;
+}): Promise<ExecuteResult> {
+  const shell = normalizeShell(input.shell);
+  const timeout = input.timeout ?? getEnvInt('SYSTEM_EXECUTE_TIMEOUT', DEFAULT_TIMEOUT_MS);
+  const cwdResult = await resolveExecutionCwd(input.cwd);
+  if (!cwdResult.ok) return { ok: false, content: cwdResult.content, risk: input.risk };
 
   const cwd = cwdResult.cwd;
   const safeEnv = buildSafeEnv(cwd);
 
-  logger.warn('system-execute: executing allowlisted command', {
-    command: cmd.slice(0, 80),
+  const logMeta = {
+    command: redactOutput(input.command).slice(0, 160),
     shell,
     cwd,
-  });
+    risk: input.risk.risk,
+    matchedRules: input.risk.matchedRules,
+  };
+  if (getEnvBool('SYSTEM_EXECUTE_LOG_COMMANDS', true)) {
+    if (input.risk.risk === 'safe') logger.info('system-execute: executing command', logMeta);
+    else logger.warn('system-execute: executing command with risk', logMeta);
+  }
 
   try {
-    const { stdout, stderr } = await execAsync(cmd, {
+    const { stdout, stderr } = await execAsync(input.command, {
       shell,
       cwd,
       timeout,
@@ -643,23 +708,21 @@ export async function runSystemExecute(
 
     const out = typeof stdout === 'string' ? stdout.trim() : String(stdout ?? '').trim();
     const err = typeof stderr === 'string' ? stderr.trim() : String(stderr ?? '').trim();
-
-    const content = [
-      `✅ **Command executed:** \`${cmd.slice(0, 100)}\``,
-      '',
-      out ? `**stdout:**\n\`\`\`\n${out.slice(0, 3000)}\n\`\`\`` : '',
-      err ? `**stderr:**\n\`\`\`\n${err.slice(0, 1000)}\n\`\`\`` : '',
-    ].filter(Boolean).join('\n');
-
-    const result: ExecuteResult = {
+    return {
       ok: true,
-      content,
-      stdout: out,
-      stderr: err,
+      content: formatExecutionResult({
+        command: redactOutput(input.command),
+        risk: input.risk,
+        approved: input.approved,
+        exitCode: 0,
+        stdout: out,
+        stderr: err,
+      }),
+      stdout: redactOutput(out),
+      stderr: redactOutput(err),
       exitCode: 0,
+      risk: input.risk,
     };
-
-    return result;
   } catch (e: unknown) {
     const err = e as {
       stdout?: string | Buffer;
@@ -667,32 +730,129 @@ export async function runSystemExecute(
       code?: number;
       message?: string;
     };
-
-    const out = typeof err.stdout === 'string'
-      ? err.stdout.trim()
-      : String(err.stdout ?? '').trim();
-
-    const serr = typeof err.stderr === 'string'
-      ? err.stderr.trim()
-      : String(err.stderr ?? '').trim();
-
-    const code = err.code ?? 1;
-    const msg = err.message ?? String(e);
-
-    const content = [
-      `⚠️ **Command exited with code ${code}:** \`${cmd.slice(0, 100)}\``,
-      '',
-      out ? `**stdout:**\n\`\`\`\n${out.slice(0, 2000)}\n\`\`\`` : '',
-      serr ? `**stderr:**\n\`\`\`\n${serr.slice(0, 1000)}\n\`\`\`` : '',
-      !out && !serr ? `Error: ${msg.slice(0, 300)}` : '',
-    ].filter(Boolean).join('\n');
-
+    const out = typeof err.stdout === 'string' ? err.stdout.trim() : String(err.stdout ?? '').trim();
+    const serr = typeof err.stderr === 'string' ? err.stderr.trim() : String(err.stderr ?? '').trim();
+    const code = typeof err.code === 'number' ? err.code : 1;
+    const message = err.message ?? String(e);
+    const stderr = serr || message;
     return {
       ok: code === 0,
-      content,
-      stdout: out,
-      stderr: serr,
+      content: formatExecutionResult({
+        command: redactOutput(input.command),
+        risk: input.risk,
+        approved: input.approved,
+        exitCode: code,
+        stdout: out,
+        stderr,
+      }),
+      stdout: redactOutput(out),
+      stderr: redactOutput(stderr),
       exitCode: code,
+      risk: input.risk,
     };
   }
+}
+
+export async function runSystemExecute(
+  input: ExecuteInput | string | Record<string, unknown>
+): Promise<ExecuteResult> {
+  if (!isSystemExecuteEnabled()) {
+    return { ok: false, content: 'System execution is disabled. Set SYSTEM_EXECUTE_ENABLED=true.' };
+  }
+
+  const opts: ExecuteInput = typeof input === 'string' ? { command: input } : input as ExecuteInput;
+
+  if (opts.saveAs && opts.command) {
+    const msg = await saveCustomCommand(opts.saveAs, opts.command, opts.description);
+    return { ok: true, content: msg };
+  }
+
+  if (opts.alias === 'list' || opts.command === 'list') {
+    return { ok: true, content: await listCustomCommands() };
+  }
+
+  let command = opts.command ?? '';
+  if (opts.alias) {
+    const registry = await loadRegistry();
+    const found = registry.find((c) => c.alias === opts.alias);
+    if (!found) {
+      return { ok: false, content: `Alias "${opts.alias}" not found. Use /tools or ask me to save it first.` };
+    }
+    command = found.command;
+    logger.info('custom command resolved', { alias: opts.alias, risk: classifyCommandRisk(command).risk });
+  }
+
+  if (!command.trim()) return { ok: false, content: 'No command provided.' };
+
+  const risk = classifyCommandRisk(command);
+  if (!allowArbitraryCommands() && !isSafeKnownCommand(command)) {
+    return {
+      ok: false,
+      content: 'Arbitrary command execution is disabled. Set SYSTEM_EXECUTE_ALLOW_ARBITRARY=true to allow risk-based execution.',
+      risk,
+    };
+  }
+
+  if (risk.risk === 'warning' && !warningAutoExecute()) {
+    return {
+      ok: false,
+      content: [
+        'Command classified as warning and warning auto-execute is disabled.',
+        `Risk: ${risk.risk}`,
+        `Reason: ${risk.reason}`,
+        '',
+        'Command:',
+        command,
+      ].join('\n'),
+      risk,
+    };
+  }
+
+  const approvalId = opts.approvalId?.trim() || opts.confirmId?.trim();
+  const legacyConfirmed = opts.confirm === true && !approvalId;
+  const explicitlyApproved = opts.approved === true || legacyConfirmed;
+
+  if (risk.risk === 'dangerous' && risk.requiresApproval && !explicitlyApproved) {
+    if (approvalId) {
+      const record = await findApproval(approvalId);
+      if (!record || record.command !== command || record.status !== 'approved') {
+        return {
+          ok: false,
+          content: 'Approval is invalid, expired, rejected, or does not match this command.',
+          risk,
+        };
+      }
+      return executeCommand({
+        command,
+        ...(opts.shell ?? record.shell ? { shell: opts.shell ?? record.shell } : {}),
+        ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+        ...(opts.cwd ?? record.cwd ? { cwd: opts.cwd ?? record.cwd } : {}),
+        risk,
+        approved: true,
+      });
+    }
+
+    const record = await savePendingApproval({
+      command,
+      ...(opts.shell ? { shell: opts.shell } : {}),
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      risk,
+      ...(opts.requestedBy ? { requestedBy: opts.requestedBy } : {}),
+    });
+    return {
+      ok: false,
+      content: approvalRequestContent(command, risk, record.id),
+      risk,
+      approvalId: record.id,
+    };
+  }
+
+  return executeCommand({
+    command,
+    ...(opts.shell ? { shell: opts.shell } : {}),
+    ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    risk,
+    approved: risk.risk === 'dangerous',
+  });
 }

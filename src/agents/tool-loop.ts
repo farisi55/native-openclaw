@@ -234,6 +234,41 @@ export function userRequiresEmail(input: string): boolean {
   return false;
 }
 
+function userExplicitlyRequestsLocalCommand(input: string): boolean {
+  const text = input.trim();
+  if (!text) return false;
+  return (
+    /\b(?:jalankan|eksekusi|execute|run)\s+(?:command|perintah|cmd|shell)?\b/i.test(text) ||
+    /\b(?:run|execute)\s+(?:this\s+)?(?:command|shell command|cmd)\b/i.test(text) ||
+    /\b(?:docker\s+(?:logs|ps|compose|restart)|git\s+(?:status|diff|log|show)|npm\s+(?:run|test|install)|ls\b|dir\b|pwd\b|whoami\b|cat\b|type\b|grep\b|select-string\b|get-childitem\b|get-content\b)/i.test(text) ||
+    /\b(?:cek|lihat|tampilkan|list|show)\b[\s\S]{0,80}\b(?:folder|directory|direktori|file|proses|process|container|docker|logs?|log)\b/i.test(text) ||
+    /\brestart\s+(?:container|service|layanan|komputer|computer|server|docker)\b/i.test(text)
+  );
+}
+
+function looksLikeGenericSystemExecuteRefusal(text: string): boolean {
+  return /(?:cannot|can't|tidak bisa|tidak dapat|unable|maaf)[\s\S]{0,160}(?:run|execute|menjalankan|akses|access|local system|sistem|command|perintah)/i.test(text) ||
+    /(?:keterbatasan|limitations|limited)[\s\S]{0,120}(?:akses|access|system|sistem|command|perintah)/i.test(text);
+}
+
+function buildSystemExecuteRepairPrompt(originalInput: string, refusedText: string): string {
+  return [
+    'The user explicitly requested a local command, and the system-execute tool is available.',
+    'Do NOT refuse because of local system access limitations.',
+    'Return ONLY a JSON tool_call for system-execute.',
+    'system-execute will classify risk: safe executes, warning executes with warning, dangerous returns an approval request.',
+    '',
+    'Original user request:',
+    originalInput,
+    '',
+    'Previous invalid refusal:',
+    refusedText.slice(0, 1200),
+    '',
+    'Return exactly one JSON object like:',
+    '{"type":"tool_call","tool":"system-execute","input":{"command":"<the local command to run>"}}',
+  ].join('\n');
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -623,6 +658,12 @@ function buildStrictToolContractBlock(
     lines.push('- If brevo-email returns ok=false, tell the user the send failed and summarize the safe error detail.');
     lines.push('- For email about current prices, today, latest news, or market updates: call web-fetch first when available, then call brevo-email using the fetched information.');
   }
+  if (availableTools.some((tool) => tool.name === 'system-execute')) {
+    lines.push('- For explicit local command requests, use system-execute instead of saying you cannot access the local system.');
+    lines.push('- system-execute uses risk-based policy: safe commands execute immediately, warning commands execute with warning, dangerous commands return an approval request.');
+    lines.push('- Do not block arbitrary commands merely because they are unknown or not predefined.');
+    lines.push('- Do not bypass approval for dangerous commands.');
+  }
   if (preferredTool) lines.push(`- Preferred tool hint: ${preferredTool}`);
   lines.push('');
 
@@ -744,8 +785,11 @@ export class ToolLoop {
     let repairAttempts = 0;
     let currentMessages = [...messages];
     let brevoWebFetchDone = false;
+    let commandRefusalRepairQueued = false;
     const originalInput = originalUserText(messages);
     const emailRequired = this.opts.isScheduledEmailJob || userRequiresEmail(originalInput);
+    const localCommandRequired =
+      availableTools.includes('system-execute') && userExplicitlyRequestsLocalCommand(originalInput);
     const recipientEmail = extractRecipientEmail(originalInput);
     const finish = (result: ToolLoopResult): ToolLoopResult =>
       toolLoopResult({
@@ -859,6 +903,24 @@ export class ToolLoop {
           flow,
         }),
       };
+    };
+
+    const guardCommandFinal = (
+      text: string,
+      step: number
+    ): { type: 'allow' } | { type: 'continue' } => {
+      if (!localCommandRequired || toolsUsed.includes('system-execute')) return { type: 'allow' };
+      if (commandRefusalRepairQueued || step >= this.opts.maxSteps) return { type: 'allow' };
+      if (!looksLikeGenericSystemExecuteRefusal(text)) return { type: 'allow' };
+
+      commandRefusalRepairQueued = true;
+      logger.warn('tool-loop: repairing generic local-command refusal', { step });
+      currentMessages = [
+        ...currentMessages,
+        createMessage({ role: 'assistant', content: text }),
+        createMessage({ role: 'user', content: buildSystemExecuteRepairPrompt(originalInput, text) }),
+      ];
+      return { type: 'continue' };
     };
 
     for (let step = 0; step <= this.opts.maxSteps; step++) {
@@ -1119,6 +1181,8 @@ export class ToolLoop {
         const emailGuard = await guardEmailFinal(candidateFinal, step);
         if (emailGuard.type === 'finish') return emailGuard.result;
         if (emailGuard.type === 'continue') continue;
+        const commandGuard = guardCommandFinal(candidateFinal, step);
+        if (commandGuard.type === 'continue') continue;
         logger.debug('tool-loop: structured final_response', { step, toolSteps });
         return finish({ finalText: candidateFinal, toolSteps, toolsUsed, stepMessages, flow });
       }
@@ -1140,6 +1204,8 @@ export class ToolLoop {
       const emailGuard = await guardEmailFinal(llmText, step);
       if (emailGuard.type === 'finish') return emailGuard.result;
       if (emailGuard.type === 'continue') continue;
+      const commandGuard = guardCommandFinal(llmText, step);
+      if (commandGuard.type === 'continue') continue;
       return finish({ finalText: llmText, toolSteps, toolsUsed, stepMessages, flow });
     }
 

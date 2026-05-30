@@ -10,8 +10,24 @@ export type { SystemResult } from './system';
 export { runApiClient }      from './api-client';
 export type { ApiResult, ApiClientInput } from './api-client';
 
-export { runSystemExecute, saveCustomCommand, listCustomCommands } from './system-execute';
-export type { ExecuteResult, ExecuteInput, CustomCommand } from './system-execute';
+export {
+  approveCommand,
+  classifyCommandRisk,
+  listCustomCommands,
+  listPendingCommandApprovals,
+  rejectCommand,
+  runSystemExecute,
+  saveCustomCommand,
+} from './system-execute';
+export type {
+  ApprovalStatus,
+  CommandRiskAssessment,
+  CommandRiskLevel,
+  CustomCommand,
+  ExecuteInput,
+  ExecuteResult,
+  PendingCommandApproval,
+} from './system-execute';
 
 export { browse, formatBrowsingResults } from './browsing';
 export type { BrowsingResult, BrowsingItem } from './browsing';

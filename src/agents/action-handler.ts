@@ -23,6 +23,7 @@ import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills/self-improving-actions';
 import { handleSelfHealingAction, isSelfUpgradeIntent, type SelfHealingActionContext } from '../self-healing';
+import { approveCommand, rejectCommand } from '../tools/system-execute';
 import {
   applicationDebugDiagnostic,
   isApplicationDebugFixRequest,
@@ -83,6 +84,8 @@ const USER_UPDATE = /^update\s+USER\.md\s+bahwa\s+(.+)$/i;
 const WORKSPACE_WRITE = /^(?:buat|create|tulis|write)\s+file\s+([A-Za-z0-9_.\-/\\]+)(?:\s+di\s+workspace)?\s+berisi\s+([\s\S]+)$/i;
 const WORKSPACE_WRITE_WITHOUT_CONTENT = /^(?:tulis|write)\s+file\s+([^\s]+)$/i;
 const REPORT_SAVE = /^(?:buat\s+laporan|buat\s+report)[\s\S]*?\s+simpan\s+di\s+([A-Za-z0-9_.\-/\\]+)$/i;
+const APPROVE_COMMAND = /^(?:approve|setujui|izinkan)\s+command\s+([A-Za-z0-9_-]+)$/i;
+const REJECT_COMMAND = /^(?:reject|tolak|batalkan)\s+command\s+([A-Za-z0-9_-]+)$/i;
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -304,6 +307,18 @@ export async function handleAction(
 ): Promise<ActionResult> {
   const trimmed = input.trim();
   const originalInput = compiledPrompt?.originalInput.trim() || trimmed;
+
+  const approveMatch = APPROVE_COMMAND.exec(trimmed);
+  if (approveMatch?.[1]) {
+    const result = await approveCommand(approveMatch[1]);
+    return { handled: true, response: result.content, actionType: 'command' };
+  }
+
+  const rejectMatch = REJECT_COMMAND.exec(trimmed);
+  if (rejectMatch?.[1]) {
+    const result = await rejectCommand(rejectMatch[1]);
+    return { handled: true, response: result.content, actionType: 'command' };
+  }
 
   if (compiledPrompt?.intent === 'self-upgrade') {
     if (!ctx.selfHealing) {

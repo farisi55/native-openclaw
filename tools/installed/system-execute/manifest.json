@@ -1,7 +1,7 @@
 {
   "name": "system-execute",
   "displayName": "System Execute",
-  "description": "Execute shell commands on the local machine and manage custom command aliases",
+  "description": "Execute local shell commands with risk-based safety: safe runs immediately, warning runs with warning, dangerous requires approval",
   "version": "1.0.0",
   "entry": "index.js",
   "enabled": true,
@@ -21,8 +21,12 @@
       "alias":       { "type": "string",  "description": "Name of a saved custom command" },
       "saveAs":      { "type": "string",  "description": "Save command under this alias name" },
       "description": { "type": "string",  "description": "Description for the saved command" },
+      "shell":       { "type": "string",  "description": "Optional shell: cmd, powershell, sh, or bash" },
       "timeout":     { "type": "number",  "description": "Timeout in milliseconds" },
-      "cwd":         { "type": "string",  "description": "Working directory" }
+      "cwd":         { "type": "string",  "description": "Working directory" },
+      "approvalId":  { "type": "string",  "description": "Approval id for a previously approved dangerous command" },
+      "approved":    { "type": "boolean", "description": "Internal approval flag; use only after explicit approval" },
+      "requestedBy": { "type": "string",  "description": "Optional requester/source for approval audit records" }
     }
   }
 }

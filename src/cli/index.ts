@@ -20,7 +20,7 @@ import {
   cmdHelp, cmdModels, cmdModel, cmdSkills,
   cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
   cmdCron, cmdNetwork, cmdMcp, cmdWorkflow, cmdSelfImprove, cmdHeal, cmdUpgrade,
-  cmdPromptOptimize,
+  cmdPromptOptimize, cmdSystemExecute,
   type CLIContext,
 } from './commands';
 
@@ -182,6 +182,7 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'heal': case 'self-heal': case 'fix': case 'restart': await cmdHeal(ctx, cmd === 'fix' ? ['run', ...args] : cmd === 'restart' ? ['restart', ...args] : args); break;
     case 'upgrade': case 'self-upgrade': await cmdUpgrade(ctx, args); break;
     case 'prompt-optimize': case 'po': await cmdPromptOptimize(ctx, args); break;
+    case 'system-execute': case 'exec': await cmdSystemExecute(ctx, args); break;
     case 'network': case 'net': await cmdNetwork(ctx, args); break;
     case 'mcp':                 await cmdMcp(ctx, args); break;
     case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;

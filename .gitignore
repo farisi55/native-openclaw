@@ -2,6 +2,7 @@ node_modules/
 dist/
 workspace/
 .data/
+.data-test*/
 data/
 tmp/
 data/skill-quality.json
