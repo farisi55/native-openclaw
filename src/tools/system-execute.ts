@@ -157,6 +157,9 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bmkfs\b/i,
   /\bdd\s+if=/i,
   /\bshutdown\b/i,
+  /\bshutdown(?:\.exe)?\b[\s\S]*(?:\/s|\/r|\/p|\/h)\b/i,
+  /\bRestart-Computer\b/i,
+  /\bStop-Computer\b/i,
   /\breboot\b/i,
   /\bhalt\b/i,
   /\bpoweroff\b/i,
@@ -173,7 +176,6 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bwget\b[\s\S]*\|\s*(?:sh|bash|zsh)\b/i,
   /(?:^|[;&|]\s*)eval\b/i,
   /:\(\)\s*\{\s*:\|\:\s*&\s*\}\s*;/,
-  /\bRemove-Item\b[\s\S]*\b-Recurse\b[\s\S]*\b-Force\b[\s\S]*(?:[a-zA-Z]:\\|\\|\*)/i,
   /\bdel\s+\/s\s+\/q\s+[a-zA-Z]:\\/i,
   /\bformat\b/i,
   /\bdiskpart\b/i,
@@ -184,6 +186,11 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bSet-ExecutionPolicy\s+Unrestricted\b/i,
   /\b(?:Invoke-Expression|iex)\b/i,
   /\biwr\b[\s\S]*\|\s*iex\b/i,
+  /\birm\b[\s\S]*\|\s*iex\b/i,
+  /\b(?:Invoke-WebRequest|Invoke-RestMethod)\b[\s\S]*\|\s*(?:Invoke-Expression|iex)\b/i,
+  /\b(?:powershell|pwsh)(?:\.exe)?\b[\s\S]*(?:^|\s)-(?:EncodedCommand|enc)\b/i,
+  /\bpowershell(?:\.exe)?\b[\s\S]*\b(?:Invoke-Expression|iex)\b/i,
+  /\bcurl\b[\s\S]*\|\s*powershell(?:\.exe)?\b/i,
   /\bdocker\s+system\s+prune\s+-a\b/i,
   /\bdocker\s+volume\s+rm\b/i,
   /\bdocker\s+rm\s+-f\b/i,
@@ -308,6 +315,30 @@ function warningRules(command: string): string[] {
   return matched;
 }
 
+function isDangerousPowerShellRemoveItem(command: string): boolean {
+  const normalized = command.toLowerCase();
+  if (!/\bremove-item\b/.test(normalized)) return false;
+
+  const hasRecurse = /(?:^|\s)-recurse\b/.test(normalized);
+  const hasForce = /(?:^|\s)-force\b/.test(normalized);
+  if (!hasRecurse || !hasForce) return false;
+
+  const dangerousTargetPatterns = [
+    /[a-z]:[\\/]/i,
+    /\$env:systemroot/i,
+    /\$env:userprofile/i,
+    /\bc:\\windows\b/i,
+    /\bc:\\users\b/i,
+    /\bc:\\program files\b/i,
+    /(?:^|\s)\*(?:\s|$)/,
+    /(?:^|\s)\\(?:\s|$)/,
+    /(?:^|\s)\/(?:\s|$)/,
+    /(?:^|\s)~(?:\s|$)/,
+  ];
+
+  return dangerousTargetPatterns.some((pattern) => pattern.test(command));
+}
+
 export function classifyCommandRisk(command: string): CommandRiskAssessment {
   const matchedSubshell = SUBSHELL_PATTERNS
     .map((pattern) => pattern.source)
@@ -330,6 +361,16 @@ export function classifyCommandRisk(command: string): CommandRiskAssessment {
       requiresApproval: false,
       warnings: [],
       matchedRules: ['read-only-or-build-test'],
+    };
+  }
+
+  if (isDangerousPowerShellRemoveItem(command)) {
+    return {
+      risk: 'dangerous',
+      reason: 'PowerShell Remove-Item targets a root, system, profile, or wildcard path with -Recurse and -Force.',
+      requiresApproval: requireApprovalForDangerous(),
+      warnings: ['This command can recursively delete critical files or user data.'],
+      matchedRules: ['powershell-remove-item-recursive-force-dangerous-target'],
     };
   }
 
