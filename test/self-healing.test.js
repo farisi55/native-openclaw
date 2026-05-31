@@ -10,6 +10,7 @@ const {
   SelfHealingEngine,
   SelfUpgradeEngine,
   SnapshotManager,
+  isRestartRequiredForChangedFiles,
   redactSecrets,
 } = require('../dist/self-healing');
 const { LifecycleManager } = require('../dist/runtime/lifecycle-manager');
@@ -258,6 +259,49 @@ async function prepareRoot(name) {
   }
 
   {
+    const redacted = redactSecrets([
+      'DATABASE_URL=postgresql://user:supersecretpass@localhost:5432/db',
+      'mysql://root:pass@localhost:3306/db',
+      'mongodb://user:pass@localhost:27017/db',
+      'redis://default:pass@localhost:6379',
+      'http://user:pass@example.com/path',
+      'https://user:pass@example.com/path',
+    ].join('\n'));
+    assert.match(redacted, /postgresql:\/\/user:\[REDACTED\]@localhost:5432\/db/);
+    assert.match(redacted, /mysql:\/\/root:\[REDACTED\]@localhost:3306\/db/);
+    assert.match(redacted, /mongodb:\/\/user:\[REDACTED\]@localhost:27017\/db/);
+    assert.match(redacted, /redis:\/\/default:\[REDACTED\]@localhost:6379/);
+    assert.match(redacted, /http:\/\/user:\[REDACTED\]@example.com\/path/);
+    assert.match(redacted, /https:\/\/user:\[REDACTED\]@example.com\/path/);
+    assert(!redacted.includes('supersecretpass'));
+  }
+
+  {
+    const source = [
+      'const token = accessToken; // use the token',
+      'const password = user.password;',
+      'let apiKey = config.apiKey;',
+      'token: token',
+      'password: password',
+    ].join('\n');
+    assert.equal(redactSecrets(source), source);
+  }
+
+  {
+    const redacted = redactSecrets([
+      'API_KEY=sk-proj-abcdef1234567890',
+      'BREVO_API_KEY=xkeysib-abcdefghijklmnopqrstuvwxyz',
+      'Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
+      'password=supersecret123',
+    ].join('\n'));
+    assert(!redacted.includes('sk-proj-abcdef1234567890'));
+    assert(!redacted.includes('xkeysib-abcdefghijklmnopqrstuvwxyz'));
+    assert(!redacted.includes('Bearer abcdefghijklmnopqrstuvwxyz'));
+    assert(!redacted.includes('supersecret123'));
+    assert.match(redacted, /API_KEY=\[REDACTED/);
+  }
+
+  {
     const qa = new QAAgent().analyze([
       commandResult('npm run build', 1, '', "error TS2307: Cannot find module 'lodash-es'"),
     ]);
@@ -422,6 +466,68 @@ async function prepareRoot(name) {
     lifecycle.manager.requestRestart({ reason: 'second' });
     assert.equal(lifecycle.manager.isRestartScheduled(), true);
     assert.equal(lifecycle.calls.schedules, 1);
+  }
+
+  {
+    assert.equal(isRestartRequiredForChangedFiles(['src/tools/new-tool.ts'], 'self-upgrade'), true);
+    assert.equal(isRestartRequiredForChangedFiles(['src/agents/orchestrator.ts'], 'self-upgrade'), true);
+    assert.equal(isRestartRequiredForChangedFiles(['README.md'], 'self-upgrade'), false);
+    assert.equal(isRestartRequiredForChangedFiles(['src/index.ts'], 'self-healing'), true);
+    assert.equal(isRestartRequiredForChangedFiles(['src/config/env.ts'], 'self-healing'), true);
+    assert.equal(isRestartRequiredForChangedFiles(['src/agents/orchestrator.ts'], 'self-healing'), false);
+  }
+
+  {
+    const root = await prepareRoot('legacy-upgrade-npm-view-fails');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      dependencies: { '@openclaw/core': '1.0.0' },
+    }));
+    await fs.writeFile(path.join(root, 'src', 'index.ts'), 'console.log("ok");\n');
+
+    const childProcess = require('node:child_process');
+    const originalExecSync = childProcess.execSync;
+    const originalCwd = process.cwd();
+    try {
+      childProcess.execSync = () => {
+        throw new Error('network unavailable');
+      };
+      process.chdir(root);
+      delete require.cache[require.resolve('../dist/core/selfUpgrade')];
+      const { performSelfUpgrade } = require('../dist/core/selfUpgrade');
+      const result = await performSelfUpgrade({ dryRun: true });
+      assert.equal(result, 'Could not fetch latest @openclaw/core version from npm registry.');
+    } finally {
+      process.chdir(originalCwd);
+      childProcess.execSync = originalExecSync;
+      delete require.cache[require.resolve('../dist/core/selfUpgrade')];
+    }
+  }
+
+  {
+    const root = await prepareRoot('legacy-upgrade-missing-index');
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      dependencies: { '@openclaw/core': '1.0.0' },
+    }));
+
+    const childProcess = require('node:child_process');
+    const originalExecSync = childProcess.execSync;
+    const originalCwd = process.cwd();
+    try {
+      childProcess.execSync = (command) => {
+        if (String(command).includes('npm view')) return '1.0.1';
+        throw new Error(`unexpected command: ${command}`);
+      };
+      process.chdir(root);
+      delete require.cache[require.resolve('../dist/core/selfUpgrade')];
+      const { performSelfUpgrade } = require('../dist/core/selfUpgrade');
+      const result = await performSelfUpgrade();
+      assert.equal(result, 'Could not perform self-upgrade: src/index.ts was not found.');
+    } finally {
+      process.chdir(originalCwd);
+      childProcess.execSync = originalExecSync;
+      delete require.cache[require.resolve('../dist/core/selfUpgrade')];
+    }
   }
 
   console.log('self-healing tests passed');

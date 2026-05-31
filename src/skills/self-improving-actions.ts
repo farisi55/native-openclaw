@@ -43,6 +43,10 @@ function disabledMessage(ctx: SelfImprovingActionContext): string {
   ].join('\n');
 }
 
+function engineNotReadyMessage(): string {
+  return 'Self-improvement sudah diaktifkan, tetapi engine belum siap atau belum terinisialisasi. Coba lagi setelah startup selesai atau cek log inisialisasi.';
+}
+
 function successRate(row: SelfImprovingSkillStatus): string {
   return `${Math.round(row.successRate * 100)}%`;
 }
@@ -94,8 +98,12 @@ export async function handleSelfImprovingAction(
     };
   }
 
-  if (!ctx.enabled || !ctx.engine) {
+  if (!ctx.enabled) {
     return { handled: true, response: disabledMessage(ctx) };
+  }
+
+  if (!ctx.engine) {
+    return { handled: true, response: engineNotReadyMessage() };
   }
 
   if (action === 'status') {

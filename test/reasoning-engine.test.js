@@ -208,3 +208,30 @@ test('ReasoningEngine does not route self-upgrade token requests to system-execu
   assert.equal(result.tool, null);
   assert.match(result.reason, /Self-upgrade request/);
 });
+
+test('isSelfUpgradeIntent detects explicit agent/capability upgrades without standalone upgrade false positives', () => {
+  const positives = [
+    '/upgrade run add feature',
+    'tambahkan fitur baru',
+    'optimalkan penggunaan token',
+    'cegah request too large',
+    'upgrade native-openclaw',
+    'upgrade kemampuan agent',
+  ];
+  const negatives = [
+    'upgrade plan ke premium',
+    'bagaimana cara upgrade OS?',
+    'upgrade database version?',
+    'saya mau upgrade paket internet',
+    'upgrade npm package apa?',
+    'upgrade akun',
+    'upgrade langganan',
+  ];
+
+  for (const input of positives) {
+    assert.equal(isSelfUpgradeIntent(input), true, input);
+  }
+  for (const input of negatives) {
+    assert.equal(isSelfUpgradeIntent(input), false, input);
+  }
+});

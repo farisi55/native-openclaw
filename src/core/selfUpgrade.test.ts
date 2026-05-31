@@ -1,5 +1,5 @@
 import { performSelfUpgrade } from './selfUpgrade';
-import { readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 
@@ -7,6 +7,7 @@ jest.mock('child_process');
 jest.mock('fs');
 
 const mockExecSync = execSync as jest.Mock;
+const mockExistsSync = existsSync as jest.Mock;
 const mockReadFileSync = readFileSync as jest.Mock;
 const mockWriteFileSync = writeFileSync as jest.Mock;
 
@@ -19,6 +20,7 @@ const mockPackageJson = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockExistsSync.mockReturnValue(true);
   mockReadFileSync.mockReturnValue(JSON.stringify(mockPackageJson));
   mockExecSync.mockReturnValue('1.0.1');
 });
@@ -41,6 +43,20 @@ test('should upgrade when versions differ', async () => {
     packageJsonPath,
     expect.stringContaining('1.0.1')
   );
+});
+
+test('should return clear error when npm registry lookup fails', async () => {
+  mockExecSync.mockImplementation(() => {
+    throw new Error('network unavailable');
+  });
+  const result = await performSelfUpgrade({ dryRun: true });
+  expect(result).toBe('Could not fetch latest @openclaw/core version from npm registry.');
+});
+
+test('should return clear error when src/index.ts is missing', async () => {
+  mockExistsSync.mockReturnValue(false);
+  const result = await performSelfUpgrade();
+  expect(result).toBe('Could not perform self-upgrade: src/index.ts was not found.');
 });
 
 test('should throw when @openclaw/core is not found', async () => {

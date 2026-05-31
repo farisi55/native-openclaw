@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 const SELF_UPGRADE_MARKER = '// @openclaw/self-upgrade-marker';
@@ -19,7 +19,12 @@ export async function performSelfUpgrade(options: SelfUpgradeOptions = {}): Prom
   }
 
   const currentVersion = packageJson.dependencies['@openclaw/core'];
-  const latestVersion = execSync('npm view @openclaw/core version').toString().trim();
+  let latestVersion: string;
+  try {
+    latestVersion = execSync('npm view @openclaw/core version').toString().trim();
+  } catch {
+    return 'Could not fetch latest @openclaw/core version from npm registry.';
+  }
 
   if (!force && currentVersion === latestVersion) {
     return `Already up to date (${currentVersion})`;
@@ -29,12 +34,16 @@ export async function performSelfUpgrade(options: SelfUpgradeOptions = {}): Prom
     return `Would upgrade from ${currentVersion} to ${latestVersion}`;
   }
 
+  const mainFilePath = join(process.cwd(), 'src', 'index.ts');
+  if (!existsSync(mainFilePath)) {
+    return 'Could not perform self-upgrade: src/index.ts was not found.';
+  }
+
   // Update package.json
   packageJson.dependencies['@openclaw/core'] = latestVersion;
   writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
 
   // Add marker to prevent circular upgrades
-  const mainFilePath = join(process.cwd(), 'src', 'index.ts');
   let mainFileContent = readFileSync(mainFilePath, 'utf-8');
   if (!mainFileContent.includes(SELF_UPGRADE_MARKER)) {
     mainFileContent = `${SELF_UPGRADE_MARKER}\n${mainFileContent}`;

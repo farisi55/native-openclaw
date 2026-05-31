@@ -12,6 +12,7 @@ import { PatchApplier } from './patch-applier';
 import { PatchPlanner } from './patch-planner';
 import { QAAgent } from './qa-agent';
 import { ReportWriter } from './report-writer';
+import { isRestartRequiredForChangedFiles, restartReasonForChangedFiles } from './restart-policy';
 import { SnapshotManager } from './snapshot-manager';
 import { TestRunner } from './test-runner';
 import type { LifecycleManager } from '../runtime/lifecycle-manager';
@@ -261,21 +262,12 @@ export class SelfHealingEngine {
   }
 
   private markRestartRequirement(run: HealingRun, changedFiles: string[]): void {
-    const requiresRestart = changedFiles.some((file) => {
-      const normalized = normalizePath(file);
-      return normalized === 'package.json' ||
-        normalized === 'package-lock.json' ||
-        normalized === 'tsconfig.json' ||
-        normalized === 'src/index.ts' ||
-        normalized.startsWith('src/config/') ||
-        normalized.startsWith('src/providers/') ||
-        normalized.startsWith('src/tools/tool-registry') ||
-        normalized.startsWith('src/tools/plugins/');
-    });
+    const requiresRestart = isRestartRequiredForChangedFiles(changedFiles, 'self-healing');
     run.restartRequired = requiresRestart;
     run.restartScheduled = false;
     if (requiresRestart) {
-      run.restartReason = 'self-healing changed bootstrap, provider, config, or tool registry files';
+      const reason = restartReasonForChangedFiles(changedFiles, 'self-healing');
+      if (reason) run.restartReason = reason;
     }
   }
 
@@ -306,10 +298,6 @@ export class SelfHealingEngine {
     }
     return base;
   }
-}
-
-function normalizePath(file: string): string {
-  return file.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 async function readCurrentFile(workdir: string, filePath: string): Promise<string | null> {

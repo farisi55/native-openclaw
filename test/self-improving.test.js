@@ -327,3 +327,18 @@ test('/self-improve status explains disabled configuration', async () => {
   assert.match(result.response, /SELF_IMPROVING=true/);
   assert.match(result.response, /\/skills\/auto-generated/);
 });
+
+test('/self-improve status explains enabled-but-not-ready engine state', async () => {
+  const ctx = {
+    enabled: true,
+    autoSkillsDir: '/skills/auto-generated',
+    qualityFilePath: '/data/skill-quality.json',
+    evaluationThreshold: 10,
+  };
+
+  const result = await handleSelfImprovingAction('/self-improve status', ctx);
+  assert.equal(result.handled, true);
+  assert.match(result.response, /sudah diaktifkan/);
+  assert.match(result.response, /engine belum siap/);
+  assert.doesNotMatch(result.response, /SELF_IMPROVING=true/);
+});

@@ -12,6 +12,7 @@ import { PatchApplier } from './patch-applier';
 import { PatchPlanner } from './patch-planner';
 import { QAAgent } from './qa-agent';
 import { ReportWriter } from './report-writer';
+import { isRestartRequiredForChangedFiles, restartReasonForChangedFiles } from './restart-policy';
 import { SnapshotManager } from './snapshot-manager';
 import { TestRunner } from './test-runner';
 import type { LifecycleManager } from '../runtime/lifecycle-manager';
@@ -257,11 +258,12 @@ export class SelfUpgradeEngine {
   }
 
   private markRestartRequirement(run: HealingRun, changedFiles: string[]): void {
-    const requiresRestart = changedFiles.some((file) => normalizePath(file).startsWith('src/'));
+    const requiresRestart = isRestartRequiredForChangedFiles(changedFiles, 'self-upgrade');
     run.restartRequired = requiresRestart;
     run.restartScheduled = false;
     if (requiresRestart) {
-      run.restartReason = 'self-upgrade changed source files; restart required for hot registration';
+      const reason = restartReasonForChangedFiles(changedFiles, 'self-upgrade');
+      if (reason) run.restartReason = reason;
     }
   }
 
@@ -293,10 +295,6 @@ export class SelfUpgradeEngine {
     }
     return 'Self-upgrade passed QA. Restart is not required.';
   }
-}
-
-function normalizePath(file: string): string {
-  return file.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 async function readCurrentFile(workdir: string, filePath: string): Promise<string | null> {
