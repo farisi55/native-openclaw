@@ -226,6 +226,9 @@ test('isSelfUpgradeIntent detects explicit agent/capability upgrades without sta
     'upgrade npm package apa?',
     'upgrade akun',
     'upgrade langganan',
+    'apa itu self-upgrade?',
+    'jelaskan self-upgrade',
+    'bagaimana cara kerja self-healing?',
   ];
 
   for (const input of positives) {

@@ -36,5 +36,5 @@ export { SelfUpgradeEngine } from './self-upgrade-engine';
 export type { SelfUpgradeEngineDeps } from './self-upgrade-engine';
 export { TestRunner } from './test-runner';
 export { redactSecrets } from './log-redactor';
-export { buildSelfUpgradeInstruction, handleSelfHealingAction, isSelfUpgradeIntent } from './actions';
+export { buildSelfUpgradeInstruction, handleSelfHealingAction, isInformationalCapabilityQuestion, isSelfUpgradeIntent } from './actions';
 export type { SelfHealingActionContext, SelfHealingActionResult } from './actions';

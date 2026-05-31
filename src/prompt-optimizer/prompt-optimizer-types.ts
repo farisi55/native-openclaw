@@ -16,6 +16,7 @@ export interface PromptReviewResult {
   originalInput: string;
   normalizedInput: string;
   intent: OptimizedIntent;
+  routingHint?: string;
   taskGoal: string;
   constraints: string[];
   requiredTools: string[];

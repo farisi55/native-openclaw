@@ -1,6 +1,6 @@
 import { isApplicationDebugRequest } from '../agents/application-debug-intent';
 import { looksLikeSchedulerRequest } from '../scheduler/scheduler-intent';
-import { buildSelfUpgradeInstruction, isSelfUpgradeIntent } from '../self-healing';
+import { buildSelfUpgradeInstruction, isInformationalCapabilityQuestion, isSelfUpgradeIntent } from '../self-healing';
 import { redactSecrets } from '../self-healing';
 import type { OptimizedIntent, PromptReviewResult } from './prompt-optimizer-types';
 
@@ -54,6 +54,22 @@ export class PromptReviewEngine {
           isAmbiguous: true,
           clarificationQuestion: 'Apa yang ingin kamu lakukan?',
         },
+      };
+    }
+
+    const explicitSelfUpgradeSlash = /^\/(?:upgrade|self-upgrade)\b/i.test(trimmed);
+    if (!explicitSelfUpgradeSlash && isInformationalCapabilityQuestion(trimmed)) {
+      return {
+        ...baseResult(input, 'chat'),
+        routingHint: 'explain-capability',
+        taskGoal: 'Explain Native OpenClaw self-improvement, self-healing, and self-upgrade capabilities without running autonomous engines.',
+        constraints: [
+          'Answer as normal chat.',
+          'Do not run SelfUpgradeEngine or SelfHealingEngine.',
+          'Do not use system-execute.',
+        ],
+        excludedTools: ['system-execute', 'SelfUpgradeEngine', 'SelfHealingEngine'],
+        requiredActions: ['explain the mentioned capability features clearly'],
       };
     }
 

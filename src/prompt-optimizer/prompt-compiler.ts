@@ -55,7 +55,7 @@ export class PromptCompiler {
     const contextBlock = compression.relevantContext.length > 0
       ? compression.relevantContext.map((item, index) => `Context ${index + 1}:\n${item}`).join('\n\n')
       : 'No additional context required.';
-    const hint = routingHint(review.intent);
+    const hint = review.routingHint ?? routingHint(review.intent);
     const expectedOutputFormat = outputRequirement(review.intent);
     const actionBlock = review.intent === 'self-upgrade'
       ? [

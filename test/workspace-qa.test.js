@@ -426,6 +426,51 @@ test('should_route_token_efficiency_upgrade_request_to_self_upgrade', async () =
   assert.match(calls[0].userInput, /context budgeting/i);
 });
 
+test('should_not_run_autonomous_engines_for_capability_explanation_questions', async () => {
+  const input = 'apa itu fitur self-improvment, self-healing, dan self-upgrade yang ada pada kamu';
+  const calls = { healing: 0, upgrade: 0 };
+  const context = {
+    ...workspaceActionContext(),
+    selfHealing: {
+      healingEnabled: true,
+      upgradeEnabled: true,
+      runsDir: 'workspace/self-healing/runs',
+      healingEngine: {
+        async run() {
+          calls.healing += 1;
+          throw new Error('self-healing should not run');
+        },
+      },
+      upgradeEngine: {
+        async run() {
+          calls.upgrade += 1;
+          throw new Error('self-upgrade should not run');
+        },
+      },
+    },
+  };
+
+  const misclassifiedPrompt = {
+    originalInput: input,
+    optimizedInput: 'Task: run SelfUpgradeEngine',
+    intent: 'self-upgrade',
+    routingHint: 'self-upgrade',
+    tokenBudget: { estimatedInputChars: 32, maxInputChars: 1000, compressionApplied: false },
+    requiredTools: ['SelfUpgradeEngine'],
+    excludedTools: [],
+    metadata: {},
+  };
+
+  const action = await handleAction(input, context, misclassifiedPrompt);
+
+  assert.equal(action.handled, true);
+  assert.equal(action.actionType, 'other');
+  assert.match(action.response, /Self-improvement/);
+  assert.match(action.response, /Self-healing/);
+  assert.match(action.response, /Self-upgrade/);
+  assert.deepEqual(calls, { healing: 0, upgrade: 0 });
+});
+
 test('should_detect_token_optimization_as_self_upgrade_intent', () => {
   assert.equal(isSelfUpgradeIntent('optimalkan penggunaan token agar tidak Request too large'), true);
 });

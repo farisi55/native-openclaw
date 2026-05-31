@@ -61,6 +61,54 @@ test('self-upgrade token request compiles to SelfUpgradeEngine routing', async (
   });
 });
 
+test('capability explanation question stays normal chat with explain-capability routing hint', async () => {
+  await withOptimizer(async (optimizer) => {
+    const input = 'apa itu fitur self-improvment, self-healing, dan self-upgrade yang ada pada kamu';
+    const result = await optimizer.optimize({ userInput: input });
+
+    assert.equal(result.compiled.intent, 'chat');
+    assert.equal(result.compiled.routingHint, 'explain-capability');
+    assert.ok(!result.compiled.requiredTools.includes('SelfUpgradeEngine'));
+    assert.ok(!result.compiled.requiredTools.includes('SelfHealingEngine'));
+    assert.match(result.compiled.optimizedInput, /Do not run SelfUpgradeEngine or SelfHealingEngine/i);
+  });
+});
+
+test('self-upgrade and self-healing explanation questions do not trigger autonomous actions', async () => {
+  await withOptimizer(async (optimizer) => {
+    const inputs = [
+      'apa itu self-upgrade?',
+      'jelaskan perbedaan self-improvement, self-healing, self-upgrade',
+      'bagaimana cara kerja self-healing?',
+      'what is self-upgrade?',
+      'explain the self-healing feature',
+    ];
+
+    for (const input of inputs) {
+      const result = await optimizer.optimize({ userInput: input });
+      assert.equal(result.compiled.intent, 'chat', input);
+      assert.equal(result.compiled.routingHint, 'explain-capability', input);
+      assert.doesNotMatch(result.compiled.optimizedInput, /use SelfUpgradeEngine rather than normal chat/i, input);
+    }
+  });
+});
+
+test('self-upgrade action phrases still route to SelfUpgradeEngine', async () => {
+  await withOptimizer(async (optimizer) => {
+    const inputs = [
+      'jalankan self-upgrade untuk optimasi token',
+      'analisa lalu upgrade, cegah Request too large',
+      '/upgrade run add csv-reader tool',
+    ];
+
+    for (const input of inputs) {
+      const result = await optimizer.optimize({ userInput: input });
+      assert.equal(result.compiled.intent, 'self-upgrade', input);
+      assert.equal(result.compiled.routingHint, 'self-upgrade', input);
+    }
+  });
+});
+
 test('Telegram logging request is app-debug/self-healing, not system-execute', async () => {
   await withOptimizer(async (optimizer) => {
     const result = await optimizer.optimize({ userInput: 'hilangkan notif error : Telegram polling error' });

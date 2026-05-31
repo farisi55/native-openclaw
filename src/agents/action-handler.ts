@@ -22,7 +22,12 @@ import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills/self-improving-actions';
-import { handleSelfHealingAction, isSelfUpgradeIntent, type SelfHealingActionContext } from '../self-healing';
+import {
+  handleSelfHealingAction,
+  isInformationalCapabilityQuestion,
+  isSelfUpgradeIntent,
+  type SelfHealingActionContext,
+} from '../self-healing';
 import { approveCommand, rejectCommand } from '../tools/system-execute';
 import {
   applicationDebugDiagnostic,
@@ -35,6 +40,18 @@ import { createLogger } from '../utils/logger';
 import type { CompiledPrompt } from '../prompt-optimizer';
 
 const logger = createLogger('agent:action-handler');
+
+function capabilityExplanationResponse(): string {
+  return [
+    'Ini tiga fitur otonom Native OpenClaw:',
+    '',
+    '- Self-improvement: belajar dari workflow yang berhasil, membuat reusable skill, melacak kualitas skill, dan memperbaiki skill yang performanya rendah.',
+    '- Self-healing: menganalisis bug/error, mengubah kode secara terbatas, menjalankan build/test, mengulang sampai batas loop, lalu rollback kalau tetap gagal.',
+    '- Self-upgrade: menambahkan kemampuan, tool, atau mekanisme baru lewat perubahan kode, QA otomatis, dan restart opsional setelah lulus.',
+    '',
+    'Tidak ada engine otonom yang dijalankan untuk pertanyaan penjelasan seperti ini.',
+  ].join('\n');
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -318,6 +335,19 @@ export async function handleAction(
   if (rejectMatch?.[1]) {
     const result = await rejectCommand(rejectMatch[1]);
     return { handled: true, response: result.content, actionType: 'command' };
+  }
+
+  const infoCapabilityQuestion =
+    isInformationalCapabilityQuestion(originalInput) || isInformationalCapabilityQuestion(trimmed);
+  if (
+    infoCapabilityQuestion &&
+    (compiledPrompt?.intent === 'self-upgrade' || compiledPrompt?.intent === 'self-healing')
+  ) {
+    return {
+      handled: true,
+      response: capabilityExplanationResponse(),
+      actionType: 'other',
+    };
   }
 
   if (compiledPrompt?.intent === 'self-upgrade') {

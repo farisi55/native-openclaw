@@ -99,8 +99,14 @@ function parseSlash(input: string): { kind: 'heal' | 'upgrade' | 'restart'; acti
 const EXPLICIT_SYSTEM_COMMAND_RE =
   /\b(?:jalankan\s+command|jalankan\s+perintah|execute|run\s+command|restart(?:\s+container|\s+service|\s+process)?|kill\s+process|hapus\s+file|delete\s+file|cek\s+proses|check\s+process|docker\s+logs|docker\s+restart|docker\s+stop|systemctl|pm2|export\s+[A-Z_]+=)\b/i;
 
+const INFO_QUESTION_RE =
+  /\b(?:apa\s+itu|jelaskan|apa\s+bedanya|bagaimana\s+cara\s+kerja|fungsi|untuk\s+apa|what\s+is|explain|how\s+does|difference\s+between)\b/i;
+
+const CAPABILITY_TERM_RE =
+  /\b(?:self[-\s]?upgrade|self[-\s]?healing|self[-\s]?improv(?:e)?ment)\b/i;
+
 const UPGRADE_RE =
-  /\b(?:analisa\s+(?:lalu|dan)\s+upgrade|self[-\s]?upgrade|upgrade\s+yourself|upgrade\s+(?:native[-\s]?openclaw|openclaw|agent|sistem\s+ini|system\s+ini|kemampuan\s+agent)|tingkatkan\s+kemampuan(?:\s+agent)?|tambahkan\s+kemampuan|tambahkan\s+(?:fitur|tool|capability)|fitur\s+belum\s+ada|logic\s+belum\s+ada|tool\s+belum\s+ada|optimalkan\s+logic|optimalkan\s+penggunaan\s+token|efisiensi\s+penggunaan\s+token|perbaiki\s+arsitektur|buat\s+mekanisme\s+baru|tambahkan\s+mekanisme|tambahkan\s+guard\s+token|add\s+capability|add\s+feature|missing\s+capability|optimi[sz]e\s+token\s+usage|add\s+token\s+guard|add\s+context\s+budgeting|improve\s+context\s+compression)\b/i;
+  /\b(?:analisa\s+(?:lalu|dan)\s+upgrade|(?:jalankan|run|mulai|start|lakukan)\s+self[-\s]?upgrade|upgrade\s+yourself|upgrade\s+(?:native[-\s]?openclaw|openclaw|agent|sistem\s+ini|system\s+ini|kemampuan\s+agent)|tingkatkan\s+kemampuan(?:\s+agent)?|tambahkan\s+kemampuan|tambahkan\s+(?:fitur|tool|capability)|fitur\s+belum\s+ada|logic\s+belum\s+ada|tool\s+belum\s+ada|optimalkan\s+logic|optimalkan\s+penggunaan\s+token|efisiensi\s+penggunaan\s+token|perbaiki\s+arsitektur|buat\s+mekanisme\s+baru|tambahkan\s+mekanisme|tambahkan\s+guard\s+token|add\s+capability|add\s+feature|missing\s+capability|optimi[sz]e\s+token\s+usage|add\s+token\s+guard|add\s+context\s+budgeting|improve\s+context\s+compression)\b/i;
 
 const TOKEN_LIMIT_RE =
   /\b(?:request\s+too\s+large|token\s+terlalu\s+besar|konteks\s+terlalu\s+besar|context\s+terlalu\s+besar|context\s+too\s+large|token\s+budget|context\s+budget|context\s+budgeting|penggunaan\s+token|efisiensi\s+token|efisiensi\s+penggunaan\s+token)\b/i;
@@ -108,10 +114,17 @@ const TOKEN_LIMIT_RE =
 const TOKEN_LIMIT_PREVENTION_RE =
   /\b(?:jangan\s+sampai\s+ada\s+(?:notif\s*:?\s*)?request\s+too\s+large|cegah\s+request\s+too\s+large|hindari\s+request\s+too\s+large|prevent\s+request\s+too\s+large|avoid\s+request\s+too\s+large)\b/i;
 
+export function isInformationalCapabilityQuestion(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  return INFO_QUESTION_RE.test(trimmed) && CAPABILITY_TERM_RE.test(trimmed);
+}
+
 export function isSelfUpgradeIntent(input: string): boolean {
   const trimmed = input.trim();
   if (!trimmed) return false;
   if (parseSlash(trimmed)?.kind === 'upgrade') return true;
+  if (isInformationalCapabilityQuestion(trimmed)) return false;
   if (EXPLICIT_SYSTEM_COMMAND_RE.test(trimmed)) return false;
   if (UPGRADE_RE.test(trimmed)) return true;
   if (TOKEN_LIMIT_PREVENTION_RE.test(trimmed)) return true;
