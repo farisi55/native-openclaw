@@ -198,7 +198,7 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bdocker-compose\s+down\s+-v\b/i,
   /\bgit\s+reset\s+--hard\b/i,
   /\bgit\s+clean\s+-fdx\b/i,
-  /\bgit\s+push\s+--force\b/i,
+  /\bgit\s+push\b[\s\S]*(?:^|\s)(?:--force(?!-with-lease)(?=\s|$)|-f(?=\s|$))/i,
 ];
 
 export const SUBSHELL_PATTERNS: RegExp[] = [
@@ -270,6 +270,10 @@ function commandSegments(command: string): string[] {
     .filter(Boolean);
 }
 
+function shellTokens(segment: string): string[] {
+  return segment.match(/"[^"]*"|'[^']*'|\S+/g)?.map(stripCommandQuotes) ?? [];
+}
+
 function baseCommand(segment: string): string {
   const token = stripCommandQuotes(segment.split(/\s+/)[0] ?? '');
   return basename(token.replace(/\\/g, '/')).toLowerCase();
@@ -339,6 +343,75 @@ function isDangerousPowerShellRemoveItem(command: string): boolean {
   return dangerousTargetPatterns.some((pattern) => pattern.test(command));
 }
 
+function isDangerousRmTarget(target: string): boolean {
+  const normalized = stripCommandQuotes(target.trim());
+  const lower = normalized.toLowerCase();
+  return normalized === '/' ||
+    normalized === '\\' ||
+    normalized === '*' ||
+    normalized === '~' ||
+    normalized.startsWith('/') ||
+    normalized.startsWith('\\') ||
+    /^[a-z]:[\\/]/i.test(normalized) ||
+    lower === '$home' ||
+    lower === '${home}' ||
+    lower.startsWith('$home/') ||
+    lower.startsWith('$home\\') ||
+    lower.startsWith('${home}/') ||
+    lower.startsWith('${home}\\') ||
+    lower.startsWith('/home') ||
+    lower.startsWith('/etc') ||
+    lower.startsWith('/usr') ||
+    lower.startsWith('/var') ||
+    lower.startsWith('/opt') ||
+    lower.startsWith('/root');
+}
+
+function isRmRecursiveFlag(token: string): boolean {
+  if (token === '--recursive') return true;
+  if (!/^-[A-Za-z]+$/.test(token) || token.startsWith('--')) return false;
+  return /r/i.test(token);
+}
+
+function isRmForceFlag(token: string): boolean {
+  if (token === '--force') return true;
+  if (!/^-[A-Za-z]+$/.test(token) || token.startsWith('--')) return false;
+  return /f/.test(token);
+}
+
+function isRmOption(token: string): boolean {
+  return token === '--' || token.startsWith('-');
+}
+
+function isDangerousRmCommand(command: string): boolean {
+  return commandSegments(command).some((segment) => {
+    const tokens = shellTokens(segment);
+    if (tokens.length === 0 || baseCommand(tokens[0] ?? '') !== 'rm') return false;
+
+    let hasRecursive = false;
+    let hasForce = false;
+    const targets: string[] = [];
+    let optionsEnded = false;
+
+    for (const token of tokens.slice(1)) {
+      if (!optionsEnded && token === '--') {
+        optionsEnded = true;
+        continue;
+      }
+
+      if (!optionsEnded && isRmOption(token)) {
+        hasRecursive = hasRecursive || isRmRecursiveFlag(token);
+        hasForce = hasForce || isRmForceFlag(token);
+        continue;
+      }
+
+      targets.push(token);
+    }
+
+    return hasRecursive && hasForce && targets.some(isDangerousRmTarget);
+  });
+}
+
 export function classifyCommandRisk(command: string): CommandRiskAssessment {
   const matchedSubshell = SUBSHELL_PATTERNS
     .map((pattern) => pattern.source)
@@ -361,6 +434,16 @@ export function classifyCommandRisk(command: string): CommandRiskAssessment {
       requiresApproval: false,
       warnings: [],
       matchedRules: ['read-only-or-build-test'],
+    };
+  }
+
+  if (isDangerousRmCommand(command)) {
+    return {
+      risk: 'dangerous',
+      reason: 'rm targets a dangerous root, wildcard, system, or home path with recursive and force flags.',
+      requiresApproval: requireApprovalForDangerous(),
+      warnings: ['This command can recursively delete critical files or user data.'],
+      matchedRules: ['rm-recursive-force-dangerous-target'],
     };
   }
 
