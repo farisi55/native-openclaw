@@ -24,6 +24,7 @@ import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 import { jobRequiresEmail } from './scheduler/scheduler-engine';
+import { startWebUiServerIfEnabled, type StartedWebUiServer } from './web-ui';
 import {
   SelfHealingEngine,
   SelfUpgradeEngine,
@@ -250,10 +251,16 @@ async function bootstrap(): Promise<void> {
 
   let schedulerEngine: SchedulerEngine | undefined;
   let telegramIntegration: TelegramIntegration | null = null;
+  let webUiServer: StartedWebUiServer | null = null;
 
   const gracefulShutdown = async (signal: string): Promise<void> => {
     process.stderr.write(`\n[shutdown] ${signal} received - flushing memory...\n`);
     schedulerEngine?.stop();
+    await webUiServer?.close().catch((err: unknown) => {
+      logger.warn('Web UI shutdown failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     await semanticMemory.forceSave();
     process.exit(0);
   };
@@ -503,6 +510,23 @@ async function bootstrap(): Promise<void> {
     ...(mcpManager ? { mcpManager } : {}),
     scheduler,
     selfHealing: selfHealingContext,
+  });
+
+  webUiServer = await startWebUiServerIfEnabled({
+    providers,
+    skillRegistry,
+    sessions,
+    settings,
+    toolRegistry,
+    orchestrator,
+    ...(mcpManager ? { mcpManager } : {}),
+    scheduler,
+    selfHealing: selfHealingContext,
+  }).catch((err: unknown) => {
+    logger.error('Web UI failed to start', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   });
 
   telegramIntegration = await startTelegramIntegrationIfEnabled({

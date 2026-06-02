@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Native OpenClaw - Login</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <section class="login-card" aria-label="Native OpenClaw login">
+        <div class="brand-mark">NO</div>
+        <h1>Native OpenClaw</h1>
+        <p class="login-subtitle">Web Chat Console</p>
+        <p class="login-error" data-empty="{{ERROR}}">{{ERROR}}</p>
+        <form method="post" action="/login" class="login-form">
+          <label>
+            <span>Username</span>
+            <input name="username" autocomplete="username" required>
+          </label>
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">Login</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

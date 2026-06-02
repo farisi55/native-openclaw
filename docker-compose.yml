@@ -51,6 +51,13 @@ services:
 
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
 
+      WEB_UI_ENABLED: ${WEB_UI_ENABLED:-false}
+      WEB_UI_HOST: ${WEB_UI_HOST:-0.0.0.0}
+      WEB_UI_PORT: ${WEB_UI_PORT:-18790}
+      WEB_UI_USERNAME: ${WEB_UI_USERNAME:-admin}
+      WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:-change-me}
+      WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:-change-this-secret}
+
     volumes:
       - ./data:/data
       - ./skills:/skills
@@ -58,6 +65,7 @@ services:
 
     ports:
       - "${API_PORT:-18789}:18789"
+      - "${WEB_UI_PORT:-18790}:18790"
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

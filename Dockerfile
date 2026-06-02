@@ -31,6 +31,8 @@ COPY skills/ ./skills/
 COPY workspace/ ./workspace/
 
 RUN npm run build
+RUN mkdir -p dist/web-ui/public \
+ && cp -r src/web-ui/public/. dist/web-ui/public/
 
 RUN npm prune --production
 
@@ -66,6 +68,6 @@ USER openclaw
 
 VOLUME ["/data", "/skills", "/workspace"]
 
-EXPOSE 18789
+EXPOSE 18789 18790
 
 ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]

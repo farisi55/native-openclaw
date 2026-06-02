@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Native OpenClaw - Web Chat</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Hazana Corp Console</p>
+        <h1>Native OpenClaw / Jarpis</h1>
+      </div>
+      <div class="topbar-actions">
+        <span class="status-badge">Online</span>
+        <form method="post" action="/logout">
+          <button class="ghost-button" type="submit">Logout</button>
+        </form>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <section class="chat-card" aria-label="Native OpenClaw chat">
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <form id="chat-form" class="composer">
+          <textarea
+            id="message-input"
+            rows="3"
+            placeholder="Type your message..."
+            aria-label="Message"
+            maxlength="64000"></textarea>
+          <div class="composer-actions">
+            <button id="clear-button" type="button" class="secondary-button">Clear</button>
+            <button id="send-button" type="submit">Send</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

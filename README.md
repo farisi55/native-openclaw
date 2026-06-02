@@ -81,6 +81,48 @@ Once the REPL is running, type `/help` to see all commands.
 
 ---
 
+## Web UI
+
+Native OpenClaw includes an optional lightweight Web Chat UI. It uses vanilla
+HTML/CSS/JS, a signed HTTP-only cookie, and the same orchestrator pipeline as
+the CLI and HTTP API.
+
+Enable it in `.env`:
+
+```env
+WEB_UI_ENABLED=true
+WEB_UI_HOST=0.0.0.0
+WEB_UI_PORT=18790
+WEB_UI_USERNAME=admin
+WEB_UI_PASSWORD=change-me
+WEB_UI_SESSION_SECRET=change-this-secret
+```
+
+Run:
+
+```bash
+npm start
+```
+
+Open:
+
+```text
+http://localhost:18790
+```
+
+Login using the username/password from `.env`. The UI is optional; when
+`WEB_UI_ENABLED=false`, no Web UI listener is started.
+
+For Docker Compose, expose the port when needed:
+
+```yaml
+ports:
+  - "${API_PORT:-18789}:18789"
+  - "${WEB_UI_PORT:-18790}:18790"
+```
+
+---
+
 ## Skills
 
 Skills are plain Markdown files placed in the `skills/` directory. They are
@@ -242,6 +284,13 @@ API_ENABLED=true
 API_HOST=0.0.0.0
 API_PORT=18789
 API_AUTH_TOKEN=change_this_token
+
+WEB_UI_ENABLED=false
+WEB_UI_HOST=0.0.0.0
+WEB_UI_PORT=18790
+WEB_UI_USERNAME=admin
+WEB_UI_PASSWORD=change-me
+WEB_UI_SESSION_SECRET=change-this-secret
 
 # Proxy, only if your server requires proxy access.
 HTTP_PROXY=http://IP:port
@@ -466,6 +515,13 @@ services:
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-18789}
 
+      WEB_UI_ENABLED: ${WEB_UI_ENABLED:-false}
+      WEB_UI_HOST: ${WEB_UI_HOST:-0.0.0.0}
+      WEB_UI_PORT: ${WEB_UI_PORT:-18790}
+      WEB_UI_USERNAME: ${WEB_UI_USERNAME:-admin}
+      WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:-change-me}
+      WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:-change-this-secret}
+
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal}
@@ -486,6 +542,7 @@ services:
 
     ports:
       - "${API_PORT:-18789}:18789"
+      - "${WEB_UI_PORT:-18790}:18790"
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
