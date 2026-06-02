@@ -1,4 +1,5 @@
 import { isApplicationDebugRequest } from '../agents/application-debug-intent';
+import { isSimpleChatIntent } from '../agents/simple-chat-intent';
 import { looksLikeSchedulerRequest } from '../scheduler/scheduler-intent';
 import { buildSelfUpgradeInstruction, isInformationalCapabilityQuestion, isSelfUpgradeIntent } from '../self-healing';
 import { redactSecrets } from '../self-healing';
@@ -70,6 +71,21 @@ export class PromptReviewEngine {
         ],
         excludedTools: ['system-execute', 'SelfUpgradeEngine', 'SelfHealingEngine'],
         requiredActions: ['explain the mentioned capability features clearly'],
+      };
+    }
+
+    if (isSimpleChatIntent(trimmed)) {
+      return {
+        ...baseResult(input, 'chat'),
+        routingHint: 'simple-chat',
+        taskGoal: redactSecrets(trimmed),
+        constraints: [
+          'Answer briefly and directly.',
+          'Do not use tools or autonomous engines.',
+          'Do not inject unrelated memory, workspace context, or skills.',
+        ],
+        excludedTools: ['system-execute', 'SelfUpgradeEngine', 'SelfHealingEngine'],
+        requiredActions: ['answer as normal short chat'],
       };
     }
 

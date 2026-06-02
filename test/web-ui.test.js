@@ -1,8 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtemp, rm } = require('node:fs/promises');
+const { mkdtemp, readFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+const vm = require('node:vm');
 
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
@@ -105,6 +106,37 @@ function cookieFrom(response) {
   return raw.split(';')[0];
 }
 
+async function loadMarkdownHelpers() {
+  const source = await readFile(join(__dirname, '..', 'src', 'web-ui', 'public', 'app.js'), 'utf-8');
+  const context = { console, document: undefined };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  return context.NativeOpenClawMarkdown;
+}
+
+test('Web UI Markdown renderer formats assistant content and escapes HTML', async () => {
+  const helpers = await loadMarkdownHelpers();
+
+  assert.match(helpers.renderMarkdown('Hello **Boss**'), /<strong>Boss<\/strong>/);
+  assert.match(helpers.renderMarkdown('Use `npm run build`'), /<code>npm run build<\/code>/);
+  assert.match(helpers.renderMarkdown('```js\nconsole.log("hello")\n```'), /<pre><code class="language-js">console\.log\(&quot;hello&quot;\)<\/code><\/pre>/);
+
+  const malicious = helpers.renderMarkdown('<script>alert(1)</script>');
+  assert.doesNotMatch(malicious, /<script>/i);
+  assert.match(malicious, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+});
+
+test('Web UI renders user messages as plain escaped text, not Markdown', async () => {
+  const helpers = await loadMarkdownHelpers();
+  const rendered = helpers.renderMessageContent('user', '**Boss**\n<script>alert(1)</script>');
+
+  assert.doesNotMatch(rendered, /<strong>/);
+  assert.match(rendered, /\*\*Boss\*\*/);
+  assert.match(rendered, /<br>/);
+  assert.doesNotMatch(rendered, /<script>/i);
+});
+
 test('WEB_UI_ENABLED=false does not start Web UI server', async () => {
   await withDeps(async (deps) => {
     const started = await startWebUiServerIfEnabled(deps, config({ enabled: false }));
@@ -122,11 +154,45 @@ test('Web UI starts and health endpoint responds', async () => {
   });
 });
 
+test('Web UI serves favicon without authentication', async () => {
+  await withServer(async (server) => {
+    const response = await fetch(`${server.url}/favicon.ico`);
+    const body = await response.arrayBuffer();
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/x-icon');
+    assert.ok(body.byteLength > 0);
+  });
+});
+
 test('GET / without auth redirects to login', async () => {
   await withServer(async (server) => {
     const response = await fetch(`${server.url}/`, { redirect: 'manual' });
     assert.equal(response.status, 303);
     assert.equal(response.headers.get('location'), '/login');
+  });
+});
+
+test('Web UI pages use Antheon AI as primary brand and Hazana as subtle support brand', async () => {
+  await withServer(async (server) => {
+    const login = await fetch(`${server.url}/login`);
+    const loginHtml = await login.text();
+    assert.match(loginHtml, /Antheon AI/);
+    assert.match(loginHtml, /Powered by Hazana Corp/);
+    assert.doesNotMatch(loginHtml, /Hazana Corp Console/);
+
+    const auth = await fetch(`${server.url}/login`, {
+      method: 'POST',
+      body: new URLSearchParams({ username: 'admin', password: 'secret' }),
+      redirect: 'manual',
+    });
+    const chat = await fetch(`${server.url}/`, {
+      headers: { Cookie: cookieFrom(auth) },
+    });
+    const chatHtml = await chat.text();
+    assert.match(chatHtml, /Antheon AI/);
+    assert.match(chatHtml, /Powered by Hazana Corp/);
+    assert.doesNotMatch(chatHtml, /Native OpenClaw \/ Jarpis/);
   });
 });
 

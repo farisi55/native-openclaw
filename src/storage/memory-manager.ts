@@ -15,6 +15,7 @@ import { readFile, writeFile, mkdir, rename } from 'fs/promises';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
+import { normalizeUserNameCandidate } from '../memory/user-name';
 
 const logger = createLogger('storage:memory');
 
@@ -34,6 +35,10 @@ export interface SessionMemory {
 export interface MemoryStore {
   global: GlobalMemory;
   sessions: Record<string, SessionMemory>;
+}
+
+export interface BuildMemoryBlockOptions {
+  minimal?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -148,19 +153,22 @@ export class MemoryManager {
    * Build a human-readable MEMORY block for prompt injection.
    * Returns null if no memory facts exist.
    */
-  async buildMemoryBlock(sessionId?: string): Promise<string | null> {
+  async buildMemoryBlock(sessionId?: string, options: BuildMemoryBlockOptions = {}): Promise<string | null> {
     const store = await this.load();
     const lines: string[] = [];
+    const minimal = options.minimal ?? false;
 
     // Global facts
     const global = store.global;
     if (global.agentName) {
       lines.push(`- Your name is ${global.agentName}`);
     }
-    for (const [k, v] of Object.entries(global)) {
-      if (k === 'agentName') continue; // already added above
-      if (v !== null && v !== undefined) {
-        lines.push(`- ${k}: ${String(v)}`);
+    if (!minimal) {
+      for (const [k, v] of Object.entries(global)) {
+        if (k === 'agentName') continue; // already added above
+        if (v !== null && v !== undefined) {
+          lines.push(`- ${k}: ${String(v)}`);
+        }
       }
     }
 
@@ -169,6 +177,19 @@ export class MemoryManager {
       const sess = store.sessions[sessionId];
       if (sess?.facts) {
         for (const [k, v] of Object.entries(sess.facts)) {
+          if (k === 'userName') {
+            const validName = normalizeUserNameCandidate(v);
+            if (validName) {
+              lines.push(`- [this session] userName: ${validName}`);
+            } else {
+              logger.warn('ignored invalid stored userName', {
+                sessionId,
+                value: typeof v === 'string' ? v : String(v),
+              });
+            }
+            continue;
+          }
+          if (minimal) continue;
           if (v !== null && v !== undefined) {
             lines.push(`- [this session] ${k}: ${String(v)}`);
           }

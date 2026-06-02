@@ -32,6 +32,7 @@ import { buildSystemPrompt } from './prompt-builder';
 import { assembleMessages } from './message-assembler';
 import { handleAction, type ActionContext } from './action-handler';
 import { extractMemory } from './memory-extractor';
+import { isSimpleChatIntent } from './simple-chat-intent';
 import {
   SelfImprovingEngine,
   SkillEvaluator,
@@ -75,6 +76,14 @@ function sanitizeFlowReason(reason: string | undefined, fallback: string): strin
 
 function shouldIncludeWorkflowContext(input: string): boolean {
   return /\b(workflow|workflow\.md|jalankan workflow|laporan|report|autonomous|otomatis|otonom)\b/i.test(input);
+}
+
+function promptSkillRelevanceEnabled(): boolean {
+  return getEnvBool('PROMPT_SKILL_RELEVANCE_ENABLED', true);
+}
+
+function promptMaxActiveSkills(): number {
+  return getEnvInt('PROMPT_MAX_ACTIVE_SKILLS', 3);
 }
 
 function replaceLatestUserMessage(messages: Message[], optimizedInput: string): Message[] {
@@ -545,6 +554,9 @@ export class Orchestrator {
       await this.promptOptimizer.optimize({ userInput: input.userInput });
     const promptOptimization = toPromptOptimizationApiMetadata(promptOptimizationResult);
     const routingInput = promptOptimizationResult?.compiled.optimizedInput ?? input.userInput;
+    const simpleChat =
+      promptOptimizationResult?.compiled.routingHint === 'simple-chat' ||
+      isSimpleChatIntent(input.userInput);
 
     if (promptOptimization) {
       flow.push({
@@ -714,7 +726,7 @@ export class Orchestrator {
 
     let reasoningHint: string | null = null;
 
-    if (this.opts.useReasoning && this.toolRegistry.size > 0) {
+    if (!simpleChat && this.opts.useReasoning && this.toolRegistry.size > 0) {
       const reasoningResult = await this.reasoning.reason(
         routingInput,
         input.provider,
@@ -748,17 +760,22 @@ export class Orchestrator {
     }
 
     // ── 7. Build system prompt ────────────────────────────────────────────────
-    const activeSkills = this.skills.activeSkills();
+    const activeSkills = this.skills.relevantActiveSkills(routingInput, {
+      enabled: promptSkillRelevanceEnabled(),
+      maxSkills: promptMaxActiveSkills(),
+    });
     const activeSkillsUsed = activeSkills.map((skill) => ({
       id: skill.id,
       name: skill.name,
       filePath: skill.filePath,
     }));
-    const memoryBlock = await this.memory.buildMemoryBlock(session.id);
-    const workspaceContext = await this.workspace.buildContext({
-      includeWorkflow: shouldIncludeWorkflowContext(routingInput),
-    });
-    const toolsBlock = this.toolRegistry.buildToolsBlock();
+    const memoryBlock = await this.memory.buildMemoryBlock(session.id, { minimal: simpleChat });
+    const workspaceContext = simpleChat
+      ? null
+      : await this.workspace.buildContext({
+          includeWorkflow: shouldIncludeWorkflowContext(routingInput),
+        });
+    const toolsBlock = simpleChat ? null : this.toolRegistry.buildToolsBlock();
 
     const systemContext: SystemContextInput = {
       provider: input.provider,
@@ -933,7 +950,9 @@ export class Orchestrator {
     this._activeSessionId = session.id;
 
     // ── 12. Store semantic memory ─────────────────────────────────────────────
-    if (this.opts.useSemanticCompression) {
+    if (simpleChat) {
+      contextMessages = session.messages.slice(-4);
+    } else if (this.opts.useSemanticCompression) {
       Promise.resolve(
         this.contextCompressor.storeExchange(
           session.id,

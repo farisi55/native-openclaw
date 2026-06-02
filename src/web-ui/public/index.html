@@ -3,17 +3,27 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Native OpenClaw - Web Chat</title>
+    <title>Antheon AI - Web Chat</title>
+    <link rel="icon" href="/favicon.ico?v=antheon-ai" sizes="any">
+    <link rel="shortcut icon" href="/favicon.ico?v=antheon-ai" type="image/x-icon">
+    <link rel="apple-touch-icon" href="/assets/branding/antheon-icon.png">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Hazana Corp Console</p>
-        <h1>Native OpenClaw / Jarpis</h1>
+      <div class="brand-lockup">
+        <img
+          class="brand-logo"
+          src="/assets/branding/antheon-logo.png"
+          alt="Antheon AI"
+          onerror="this.style.display='none'">
+        <div>
+          <h1>Antheon AI</h1>
+          <p>Intelligent operations console</p>
+        </div>
       </div>
       <div class="topbar-actions">
-        <span class="status-badge">Online</span>
+        <span class="status-badge"><span aria-hidden="true"></span> Online</span>
         <form method="post" action="/logout">
           <button class="ghost-button" type="submit">Logout</button>
         </form>
@@ -21,13 +31,13 @@
     </header>
 
     <main class="chat-shell">
-      <section class="chat-card" aria-label="Native OpenClaw chat">
+      <section class="chat-card" aria-label="Antheon AI chat">
         <div id="messages" class="messages" aria-live="polite"></div>
         <form id="chat-form" class="composer">
           <textarea
             id="message-input"
             rows="3"
-            placeholder="Type your message..."
+            placeholder="Ask Antheon AI..."
             aria-label="Message"
             maxlength="64000"></textarea>
           <div class="composer-actions">
@@ -38,6 +48,7 @@
       </section>
     </main>
 
+    <div class="support-brand" aria-label="Supporting brand">Powered by Hazana Corp</div>
     <script src="/app.js"></script>
   </body>
 </html>

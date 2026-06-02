@@ -28,6 +28,7 @@
 
 import { createLogger } from '../utils/logger';
 import type { MemoryValue } from '../storage/memory-manager';
+import { normalizeUserNameCandidate } from '../memory/user-name';
 
 const logger = createLogger('agent:memory-extractor');
 
@@ -70,9 +71,15 @@ const AGENT_NAME_PATTERNS: RegExp[] = [
 
 /** Patterns that set the USER's name (stored in session memory). */
 const USER_NAME_PATTERNS: RegExp[] = [
-  /my\s+name\s+is\s+(.+)/i,
-  /i[\u2019\u2018'']?m\s+([a-zA-Z][a-zA-Z]+)(?:\s|$|[.,!?])/i,
-  /call\s+me\s+(.+)/i,
+  /\bnama\s+saya\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /\bsaya\s+bernama\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /\bpanggil\s+saya\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /\bnamaku\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /^(?:halo|hai|hi|hello)[,\s]+aku\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /\bmy\s+name\s+is\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /\bcall\s+me\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /^(?:hi|hello|hey)[,\s]+i\s+am\s+([A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/i,
+  /^i\s+am\s+([A-Z][A-Za-zÀ-ÖØ-öø-ÿ]+(?:\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ]+){0,3})(?=$|[.,!?])/,
 ];
 
 /** Generic fact patterns: "remember that <key> is <value>" */
@@ -108,11 +115,13 @@ export function extractMemory(userInput: string): MemoryUpdate[] {
   for (const pattern of USER_NAME_PATTERNS) {
     const match = pattern.exec(input);
     if (match?.[1]) {
-      const name = cleanName(match[1]);
-      if (name.length > 0 && name.length < 60) {
+      const name = normalizeUserNameCandidate(cleanName(match[1]));
+      if (name) {
         updates.push({ scope: 'session', key: 'userName', value: name });
         logger.info('memory extracted: userName', { value: name });
         break;
+      } else {
+        logger.debug('ignored low-confidence userName candidate', { candidate: cleanName(match[1]) });
       }
     }
   }

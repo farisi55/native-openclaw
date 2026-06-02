@@ -10,6 +10,7 @@ process.env.PROMPT_OPTIMIZER_STORE_RUNS = 'false';
 
 const { PromptOptimizer } = require('../dist/prompt-optimizer');
 const { cmdPromptOptimize } = require('../dist/cli/commands');
+const { SkillRegistry } = require('../dist/skills/registry');
 
 async function withOptimizer(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'openclaw-prompt-opt-'));
@@ -130,6 +131,56 @@ test('direct email request requires web-fetch then brevo-email verification', as
     assert.match(result.compiled.optimizedInput, /brevo-email/i);
     assert.match(result.compiled.optimizedInput, /before claiming/i);
   });
+});
+
+test('simple chat stays compact and does not route to tools or autonomous engines', async () => {
+  await withOptimizer(async (optimizer) => {
+    const input = 'hello kamu siapa';
+    const result = await optimizer.optimize({ userInput: input });
+
+    assert.equal(result.compiled.intent, 'chat');
+    assert.equal(result.compiled.routingHint, 'simple-chat');
+    assert.equal(result.compiled.optimizedInput, input);
+    assert.ok(result.compiled.optimizedInput.length <= input.length + 10);
+    assert.ok(!result.compiled.requiredTools.includes('SelfUpgradeEngine'));
+    assert.ok(!result.compiled.requiredTools.includes('SelfHealingEngine'));
+    assert.doesNotMatch(result.compiled.optimizedInput, /Task:|Required action:|Context:/);
+  });
+});
+
+function makeSkill(id, name, description, tags = []) {
+  return {
+    id,
+    name,
+    description,
+    filePath: `skills/${id}.md`,
+    frontmatter: {
+      name,
+      description,
+      version: '1.0.0',
+      tags,
+      priority: 1,
+      enabled: true,
+      raw: {},
+    },
+    body: 'Skill body.',
+  };
+}
+
+test('skill relevance avoids simple chat and caps relevant active skills', () => {
+  const registry = new SkillRegistry();
+  registry.registerAndActivate(makeSkill('auto-arsenal-email', 'Arsenal News Email', 'Fetch Arsenal news and send it by email.', ['arsenal', 'news', 'email']));
+  registry.registerAndActivate(makeSkill('telegram-log-fix', 'Telegram Log Troubleshooting', 'Fix Telegram polling log spam.', ['telegram', 'logging']));
+  registry.registerAndActivate(makeSkill('gold-email', 'Gold Price Email', 'Send harga emas report by email.', ['harga', 'emas', 'email']));
+
+  assert.equal(registry.relevantActiveSkills('hello kamu siapa', { enabled: true, maxSkills: 3 }).length, 0);
+
+  const selected = registry.relevantActiveSkills('kirim berita Arsenal terbaru ke email saya', {
+    enabled: true,
+    maxSkills: 2,
+  });
+  assert.ok(selected.some((skill) => /arsenal|email/i.test(`${skill.name} ${skill.description}`)));
+  assert.ok(selected.length <= 2);
 });
 
 test('scheduler request preserves relative time and email requirement', async () => {

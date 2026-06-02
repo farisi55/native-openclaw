@@ -14,6 +14,7 @@ const { MemoryManager } = require('../dist/storage/memory-manager');
 const { SessionManager } = require('../dist/storage/session-manager');
 const { createMessage } = require('../dist/types/message');
 const { WorkspaceManager } = require('../dist/workspace');
+const { extractMemory } = require('../dist/agents/memory-extractor');
 
 function provider(content = 'Hello from mock provider.') {
   return {
@@ -159,5 +160,25 @@ test('memory extraction writes durable facts to memory store', async () => {
     });
 
     assert.equal(await memory.getGlobalValue('favorite_color'), 'blue');
+  });
+});
+
+test('memory extractor only stores explicit user names', () => {
+  const noisyUpdates = extractMemory('kirimkan harga emas ke email saya');
+  assert.equal(noisyUpdates.some((update: any) => update.key === 'userName'), false);
+
+  const nameUpdates = extractMemory('nama saya Banu');
+  assert.deepEqual(
+    nameUpdates.filter((update: any) => update.key === 'userName').map((update: any) => update.value),
+    ['Banu']
+  );
+});
+
+test('memory block ignores invalid stored userName common nouns', async () => {
+  await withOrchestrator(async ({ memory }) => {
+    await memory.setSessionMemory('session-harga', 'userName', 'harga');
+    const block = await memory.buildMemoryBlock('session-harga');
+
+    assert.equal(block, null);
   });
 });

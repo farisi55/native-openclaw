@@ -3,15 +3,25 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Native OpenClaw - Login</title>
+    <title>Antheon AI - Login</title>
+    <link rel="icon" href="/favicon.ico?v=antheon-ai" sizes="any">
+    <link rel="shortcut icon" href="/favicon.ico?v=antheon-ai" type="image/x-icon">
+    <link rel="apple-touch-icon" href="/assets/branding/antheon-icon.png">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body class="login-page">
     <main class="login-shell">
-      <section class="login-card" aria-label="Native OpenClaw login">
-        <div class="brand-mark">NO</div>
-        <h1>Native OpenClaw</h1>
-        <p class="login-subtitle">Web Chat Console</p>
+      <section class="login-card" aria-label="Antheon AI login">
+        <div class="login-brand">
+          <img
+            class="login-logo"
+            src="/assets/branding/antheon-logo.png"
+            alt="Antheon AI"
+            onerror="this.style.display='none'">
+          <div class="brand-mark">A</div>
+        </div>
+        <h1>Antheon AI</h1>
+        <p class="login-subtitle">Secure web chat console</p>
         <p class="login-error" data-empty="{{ERROR}}">{{ERROR}}</p>
         <form method="post" action="/login" class="login-form">
           <label>
@@ -26,5 +36,6 @@
         </form>
       </section>
     </main>
+    <div class="support-brand" aria-label="Supporting brand">Powered by Hazana Corp</div>
   </body>
 </html>

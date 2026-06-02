@@ -142,7 +142,10 @@ async function handleRequest(
     return;
   }
 
-  if (req.method === 'GET' && ['/app.js', '/styles.css'].includes(url.pathname)) {
+  if (
+    req.method === 'GET' &&
+    (['/app.js', '/styles.css', '/favicon.ico'].includes(url.pathname) || url.pathname.startsWith('/assets/'))
+  ) {
     await sendStatic(res, publicDir, url.pathname.slice(1));
     return;
   }
@@ -320,6 +323,9 @@ function contentType(filePath: string): string {
   if (ext === '.css') return 'text/css; charset=utf-8';
   if (ext === '.js') return 'application/javascript; charset=utf-8';
   if (ext === '.html') return 'text/html; charset=utf-8';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.ico') return 'image/x-icon';
+  if (ext === '.svg') return 'image/svg+xml';
   return 'application/octet-stream';
 }
 

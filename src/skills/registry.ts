@@ -7,8 +7,85 @@
 import { loadSkills } from './loader';
 import type { Skill, LoadSkillsOptions } from './loader';
 import { createLogger } from '../utils/logger';
+import { isSimpleChatIntent } from '../agents/simple-chat-intent';
 
 const logger = createLogger('skills:registry');
+
+export interface SkillRelevanceOptions {
+  enabled?: boolean;
+  maxSkills?: number;
+}
+
+const STOPWORDS = new Set([
+  'aku',
+  'anda',
+  'dan',
+  'dari',
+  'for',
+  'ini',
+  'itu',
+  'kamu',
+  'ke',
+  'me',
+  'my',
+  'saya',
+  'send',
+  'the',
+  'to',
+  'yang',
+]);
+
+function tokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !STOPWORDS.has(token));
+}
+
+function skillSearchText(skill: Skill): string {
+  return [
+    skill.id,
+    skill.name,
+    skill.description,
+    skill.frontmatter.tags.join(' '),
+  ].join(' ').toLowerCase();
+}
+
+export function selectRelevantSkills(
+  input: string,
+  skills: Skill[],
+  options: SkillRelevanceOptions = {}
+): Skill[] {
+  const enabled = options.enabled ?? true;
+  if (!enabled) return skills;
+  if (isSimpleChatIntent(input)) return [];
+
+  const maxSkills = Math.max(0, options.maxSkills ?? 3);
+  if (maxSkills === 0) return [];
+
+  const inputTokens = tokens(input);
+  if (inputTokens.length === 0) return [];
+
+  const scored = skills
+    .map((skill) => {
+      const text = skillSearchText(skill);
+      let score = 0;
+      for (const token of inputTokens) {
+        if (text.includes(token)) score += 1;
+      }
+      for (const tag of skill.frontmatter.tags) {
+        const normalizedTag = tag.toLowerCase();
+        if (normalizedTag && input.toLowerCase().includes(normalizedTag)) score += 3;
+      }
+      if (skill.name && input.toLowerCase().includes(skill.name.toLowerCase())) score += 5;
+      return { skill, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || b.skill.frontmatter.priority - a.skill.frontmatter.priority);
+
+  return scored.slice(0, maxSkills).map((item) => item.skill);
+}
 
 export class SkillRegistry {
   private readonly _skills: Map<string, Skill> = new Map();
@@ -86,6 +163,10 @@ export class SkillRegistry {
     return this._activeIds
       .map((id) => this._skills.get(id))
       .filter((s): s is Skill => s !== undefined);
+  }
+
+  relevantActiveSkills(input: string, options: SkillRelevanceOptions = {}): Skill[] {
+    return selectRelevantSkills(input, this.activeSkills(), options);
   }
 
   get activeIds(): string[] {

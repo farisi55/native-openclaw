@@ -52,6 +52,32 @@ export class PromptCompiler {
   constructor(private readonly config: PromptOptimizerConfig) {}
 
   compile(review: PromptReviewResult, compression: PromptCompressionResult): CompiledPrompt {
+    if (review.routingHint === 'simple-chat') {
+      const optimizedInput = compression.compressedUserInput || review.normalizedInput;
+      return {
+        originalInput: review.originalInput,
+        optimizedInput,
+        intent: review.intent,
+        routingHint: 'simple-chat',
+        expectedOutputFormat: 'Answer briefly and directly.',
+        tokenBudget: {
+          estimatedInputChars: optimizedInput.length,
+          maxInputChars: this.config.maxContextChars,
+          compressionApplied: compression.compressionApplied,
+        },
+        requiredTools: [],
+        excludedTools: review.excludedTools,
+        metadata: {
+          mode: this.config.mode,
+          targetModelSmall: this.config.targetModelSmall,
+          simpleChat: true,
+          riskFlags: review.riskFlags,
+          ambiguity: review.ambiguity,
+          droppedContextCount: compression.droppedContext.length,
+        },
+      };
+    }
+
     const contextBlock = compression.relevantContext.length > 0
       ? compression.relevantContext.map((item, index) => `Context ${index + 1}:\n${item}`).join('\n\n')
       : 'No additional context required.';
