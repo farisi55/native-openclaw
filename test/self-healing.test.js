@@ -208,6 +208,82 @@ async function prepareRoot(name) {
   }
 
   {
+    const root = await prepareRoot('auto-apply-disabled');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    let applyCalls = 0;
+    const engine = new SelfHealingEngine(config(root, { autoApply: false }), {
+      analyzer: {
+        analyze: async () => ({
+          summary: 'analysis only',
+          likelyCause: 'bug found',
+          affectedFiles: ['src/should-not-change.ts'],
+          fixStrategy: 'would patch if autoApply were enabled',
+          confidence: 0.8,
+        }),
+      },
+      codingAgent: {
+        applyBugFix: async () => {
+          applyCalls += 1;
+          throw new Error('coding agent must not be called when autoApply=false');
+        },
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 0, 'ok', '')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'analyze without applying', source: 'system' });
+    assert.equal(run.status, 'passed');
+    assert.equal(applyCalls, 0);
+    assert.deepEqual(run.loops[0].changedFiles, []);
+    await assert.rejects(
+      () => fs.readFile(path.join(root, 'src', 'should-not-change.ts'), 'utf-8'),
+      /ENOENT/
+    );
+  }
+
+  {
+    const root = await prepareRoot('auto-install-disabled');
+    let installCalls = 0;
+    const engine = new SelfHealingEngine(config(root, {
+      autoInstall: false,
+      maxLoops: 1,
+      autoRollback: false,
+    }), {
+      analyzer: {
+        analyze: async () => ({
+          summary: 'missing dep',
+          likelyCause: 'package missing',
+          affectedFiles: [],
+          fixStrategy: 'install package',
+          confidence: 0.8,
+        }),
+      },
+      codingAgent: { applyBugFix: async () => [] },
+      dependencyResolver: {
+        install: async () => {
+          installCalls += 1;
+          throw new Error('dependency install must not be called when autoInstall=false');
+        },
+      },
+      testRunner: {
+        runAll: async () => [
+          commandResult('npm run build', 1, '', "Cannot find module 'axios'"),
+        ],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'fix missing dependency without install', source: 'system' });
+    assert.equal(run.status, 'failed');
+    assert.equal(installCalls, 0);
+    assert.equal(run.loops[0].qaReport.nextAction, 'install_dependency');
+    assert.deepEqual(run.loops[0].missingPackages, ['axios']);
+    assert.match(run.loops[0].error, /autoInstall=false/);
+    const report = await engine.getReport(run.id);
+    assert.match(report ?? '', /autoInstall=false/);
+  }
+
+  {
     const root = await prepareRoot('rollback');
     await fs.mkdir(path.join(root, 'src'), { recursive: true });
     await fs.writeFile(path.join(root, 'src', 'broken.ts'), 'export const value = 1;\n');

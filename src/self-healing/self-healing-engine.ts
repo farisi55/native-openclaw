@@ -140,6 +140,11 @@ export class SelfHealingEngine {
           qaReport = this.qaAgent.analyze(rerun);
           loop.status = 'dependency_installed';
         } else {
+          if (!qaReport.passed && qaReport.nextAction === 'install_dependency' && !this.config.autoInstall) {
+            loop.error = `Dependency install skipped because autoInstall=false. Missing packages: ${
+              qaReport.missingPackages.length > 0 ? qaReport.missingPackages.join(', ') : 'unknown'
+            }.`;
+          }
           loop.status = changedFiles.length > 0 ? 'patched' : 'failed';
         }
 

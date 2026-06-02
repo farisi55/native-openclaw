@@ -418,6 +418,40 @@ test('startup skip policy runs missed once job that never executed', async () =>
   });
 });
 
+test('startup misfire disabled policy leaves missed jobs untouched', async () => {
+  await withStore(async (store) => {
+    const runAt = new Date(Date.now() - 1000).toISOString();
+    const job = await store.createJob({
+      name: 'disabled-misfire-job',
+      scheduleType: 'once',
+      runAt,
+      timezone: 'Asia/Jakarta',
+      prompt: 'do not run missed job',
+      source: 'system',
+    });
+
+    let executed = false;
+    const engine = new SchedulerEngine({
+      store,
+      misfirePolicy: 'disabled',
+      tickMs: 60_000,
+      executor: async () => {
+        executed = true;
+        return { output: 'done' };
+      },
+    });
+
+    await engine.handleStartupMisfires();
+
+    const runs = await store.listRuns(job.id);
+    const updated = await store.getJob(job.id);
+    assert.equal(executed, false);
+    assert.equal(runs.length, 0);
+    assert.equal(updated.nextRunAt, runAt);
+    assert.equal(updated.runCount, 0);
+  });
+});
+
 test('tick can start newly due job while another job is running', async () => {
   await withStore(async (store) => {
     await store.createJob({
@@ -833,5 +867,47 @@ test('persists jobs across store instances', async () => {
     const job = await reloaded.getJob('persistent-job');
     assert.ok(job);
     assert.equal(job.name, 'persistent-job');
+  });
+});
+
+test('rejects invalid cron expressions on create and update', async () => {
+  await withStore(async (store) => {
+    const invalidExpressions = [
+      '* * * * * * * *',
+      '99 99 99 99 99',
+      'invalid cron',
+      '',
+    ];
+
+    for (const cronExpression of invalidExpressions) {
+      await assert.rejects(
+        () => store.createJob({
+          name: `invalid-cron-${invalidExpressions.indexOf(cronExpression)}`,
+          scheduleType: 'cron',
+          cronExpression,
+          timezone: 'Asia/Jakarta',
+          prompt: 'should not persist',
+          source: 'system',
+        }),
+        /invalid cron expression/i
+      );
+    }
+    assert.equal((await store.listJobs()).length, 0);
+
+    const valid = await store.createJob({
+      name: 'valid-cron',
+      scheduleType: 'cron',
+      cronExpression: '0 8 * * *',
+      timezone: 'Asia/Jakarta',
+      prompt: 'valid job',
+      source: 'system',
+    });
+
+    await assert.rejects(
+      () => store.updateJob(valid.id, { cronExpression: 'invalid cron' }),
+      /invalid cron expression/i
+    );
+    const unchanged = await store.getJob(valid.id);
+    assert.equal(unchanged.cronExpression, '0 8 * * *');
   });
 });

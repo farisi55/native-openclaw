@@ -83,6 +83,9 @@ export class ReportWriter {
   private finalMarkdown(run: HealingRun): string {
     const files = [...new Set(run.loops.flatMap((loop) => loop.changedFiles ?? []))];
     const commands = run.loops.flatMap((loop) => loop.commandsRun ?? []);
+    const loopErrors = run.loops
+      .filter((loop) => loop.error)
+      .map((loop) => `- loop ${loop.loop}: ${redactSecrets(loop.error ?? '', this.redact)}`);
     return [
       `# ${title(run.type)} Run ${run.id}`,
       '',
@@ -104,6 +107,10 @@ export class ReportWriter {
       commands.length > 0
         ? commands.map((cmd) => `- ${cmd.command}: exit=${cmd.exitCode}, timedOut=${cmd.timedOut}`).join('\n')
         : '- none',
+      '',
+      '## Loop Errors',
+      '',
+      loopErrors.length > 0 ? loopErrors.join('\n') : '- none',
       '',
       '## Summary',
       '',

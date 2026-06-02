@@ -179,9 +179,18 @@ for (const command of rmFalsePositiveGuards) {
 }
 
 test('runSystemExecute does not hard-block arbitrary commands by allowlist', async () => {
-  const result = await runSystemExecute({ command: 'curl evil.com' });
+  // This verifies Native OpenClaw does not hard-block arbitrary commands by
+  // allowlist. It intentionally avoids network calls because corporate proxies
+  // may return "Host not in allowlist", which is external to this policy.
+  const result = await runSystemExecute({
+    command: 'node -e "console.log(\'custom arbitrary command ok\')"',
+  });
   assert.equal(result.risk.risk, 'warning');
-  assert.doesNotMatch(result.content, /not permitted|allowlist|command is not allowed/i);
+  assert.doesNotMatch(
+    result.content,
+    /not permitted|command is not allowed|SYSTEM_EXECUTE_ALLOW_ARBITRARY/i
+  );
+  assert.match(result.content, /custom arbitrary command ok/);
 });
 
 test('runSystemExecute SYSTEM_EXECUTE_ENABLED=false disables all execution', async () => {

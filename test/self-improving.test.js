@@ -225,6 +225,32 @@ test('invalid extractor JSON does not crash or write skills', async () => {
   });
 });
 
+test('quality tracker persistence failure does not crash self-improvement turn processing', async () => {
+  await withTemp(async (root) => {
+    const skillsBaseDir = join(root, 'skills');
+    const autoSkillsDir = join(skillsBaseDir, 'auto-generated');
+    const blockedDataDir = join(root, 'blocked-data');
+    await writeFile(blockedDataDir, 'not a directory', 'utf-8');
+
+    const provider = providerReturning(noExtractionJson());
+    const extractor = new SkillExtractor(provider);
+    const writer = new SkillWriter(autoSkillsDir);
+    const tracker = new SkillQualityTracker(blockedDataDir, 10);
+    const evaluator = new SkillEvaluator(provider, writer, tracker);
+    const registry = new SkillRegistry();
+    const engine = new SelfImprovingEngine(extractor, writer, tracker, evaluator, registry, skillsBaseDir);
+
+    await assert.doesNotReject(() => engine.processCompletedTurn({
+      userInput: 'Catat tugas ini.',
+      agentResponse: 'Selesai.',
+      toolsUsed: [],
+      stepCount: 0,
+      sessionId: 'persist-failure',
+    }));
+    assert.equal((await writer.listAutoSkills()).length, 0);
+  });
+});
+
 test('active skill usage is tracked for skills injected before a turn', async () => {
   await withTemp(async (root) => {
     const parts = await createParts(root, providerReturning(noExtractionJson()));

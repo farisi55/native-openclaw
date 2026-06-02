@@ -145,6 +145,59 @@ test('API server starts and chat response has expected shape', async () => {
   });
 });
 
+test('API handles CORS OPTIONS preflight with security headers', async () => {
+  await withEnv({ API_CORS_ORIGIN: 'http://localhost:3000' }, async () => {
+    await withDeps(async (deps) => {
+      const api = await startApiServer(deps, {
+        enabled: true,
+        host: '127.0.0.1',
+        port: 0,
+      });
+
+      try {
+        const res = await fetch(`http://${api.host}:${api.port}/native-openclaw/v1/chat`, {
+          method: 'OPTIONS',
+        });
+
+        assert.equal(res.status, 204);
+        assert.equal(res.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+        assert.match(res.headers.get('access-control-allow-methods') ?? '', /POST/);
+        assert.match(res.headers.get('access-control-allow-methods') ?? '', /OPTIONS/);
+        assert.match(res.headers.get('access-control-allow-headers') ?? '', /Content-Type/);
+        assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.equal(res.headers.get('x-frame-options'), 'DENY');
+      } finally {
+        await api.close();
+      }
+    });
+  });
+});
+
+test('API includes security headers on chat responses', async () => {
+  await withDeps(async (deps) => {
+    const api = await startApiServer(deps, {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    try {
+      const res = await fetch(`http://${api.host}:${api.port}/native-openclaw/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hello' }),
+      });
+
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(res.headers.get('x-frame-options'), 'DENY');
+      assert.equal(res.headers.get('cache-control'), 'no-store');
+    } finally {
+      await api.close();
+    }
+  });
+});
+
 test('API supports CLI command messages like /help', async () => {
   await withDeps(async (deps) => {
     const api = await startApiServer(deps, {

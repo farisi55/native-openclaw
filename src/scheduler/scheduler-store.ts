@@ -144,6 +144,64 @@ export function parseDailyCronExpression(expression: string | undefined): { hour
   return { hour, minute };
 }
 
+function validateCronPart(part: string, min: number, max: number): boolean {
+  if (!part) return false;
+  if (part === '*') return true;
+
+  return part.split(',').every((segment) => {
+    if (!segment) return false;
+
+    const stepParts = segment.split('/');
+    if (stepParts.length > 2) return false;
+    const [rangePart, stepPart] = stepParts;
+    if (!rangePart) return false;
+    if (stepPart !== undefined) {
+      const step = Number(stepPart);
+      if (!Number.isInteger(step) || step <= 0) return false;
+    }
+
+    if (rangePart === '*') return true;
+
+    if (rangePart.includes('-')) {
+      const [startRaw, endRaw] = rangePart.split('-');
+      const start = Number(startRaw);
+      const end = Number(endRaw);
+      return (
+        Number.isInteger(start) &&
+        Number.isInteger(end) &&
+        start >= min &&
+        end <= max &&
+        start <= end
+      );
+    }
+
+    const value = Number(rangePart);
+    return Number.isInteger(value) && value >= min && value <= max;
+  });
+}
+
+export function validateCronExpression(expression: string | undefined): boolean {
+  if (!expression || !expression.trim()) return false;
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  return (
+    validateCronPart(parts[0] ?? '', 0, 59) &&
+    validateCronPart(parts[1] ?? '', 0, 23) &&
+    validateCronPart(parts[2] ?? '', 1, 31) &&
+    validateCronPart(parts[3] ?? '', 1, 12) &&
+    validateCronPart(parts[4] ?? '', 0, 7)
+  );
+}
+
+function assertValidCronSchedule(scheduleType: ScheduledJob['scheduleType'], cronExpression: string | undefined): void {
+  if (scheduleType === 'cron' && !cronExpression) {
+    throw new Error('Invalid cron expression: missing cron expression.');
+  }
+  if (cronExpression !== undefined && !validateCronExpression(cronExpression)) {
+    throw new Error(`Invalid cron expression: ${cronExpression}`);
+  }
+}
+
 function intervalMs(job: ScheduledJob): number | null {
   const raw = job.metadata?.['intervalMs'];
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
@@ -279,6 +337,7 @@ export class SchedulerStore {
     const requestedName = input.name.trim();
     if (!requestedName) throw new Error('Cronjob name is required.');
     if (!input.prompt.trim()) throw new Error('Cronjob prompt is required.');
+    assertValidCronSchedule(input.scheduleType, input.cronExpression);
 
     const existingNames = new Set((await this.listJobs()).map((job) => normalizeName(job.name)));
     let name = requestedName;
@@ -329,6 +388,11 @@ export class SchedulerStore {
         throw new Error(`Cronjob dengan nama "${patch.name}" sudah ada.`);
       }
     }
+
+    assertValidCronSchedule(
+      patch.scheduleType ?? existing.scheduleType,
+      patch.cronExpression ?? existing.cronExpression
+    );
 
     const updated: ScheduledJob = {
       ...existing,
