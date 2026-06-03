@@ -83,9 +83,20 @@ Once the REPL is running, type `/help` to see all commands.
 
 ## Web UI
 
-Native OpenClaw includes an optional lightweight Web Chat UI. It uses vanilla
-HTML/CSS/JS, a signed HTTP-only cookie, and the same orchestrator pipeline as
-the CLI and HTTP API.
+Native OpenClaw includes `smooth`, an optional lightweight Web Chat UI. It uses
+vanilla HTML/CSS/JS, a signed HTTP-only cookie, and the same orchestrator
+pipeline as the CLI and HTTP API.
+
+`smooth` is an autonomous AI agent console designed to make workflows feel
+effortless. The name means smooth, mulus, and lancar, while preserving the
+ant-inspired philosophy of hard work, persistence, collaboration, and
+intelligent automation.
+
+Tagline:
+
+```text
+Make your life easier
+```
 
 Enable it in `.env`:
 

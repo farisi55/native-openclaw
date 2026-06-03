@@ -173,12 +173,19 @@ test('GET / without auth redirects to login', async () => {
   });
 });
 
-test('Web UI pages use Antheon AI as primary brand and Hazana as subtle support brand', async () => {
+test('Web UI pages use smooth as primary brand and Hazana as subtle support brand', async () => {
   await withServer(async (server) => {
+    const oldBrand = ['Anth', 'eon AI'].join('');
+    const oldLogo = ['anth', 'eon-logo'].join('');
     const login = await fetch(`${server.url}/login`);
     const loginHtml = await login.text();
-    assert.match(loginHtml, /Antheon AI/);
+    assert.match(loginHtml, /smooth/);
+    assert.match(loginHtml, /Make your life easier/);
     assert.match(loginHtml, /Powered by Hazana Corp/);
+    assert.match(loginHtml, /smooth-logo\.png/);
+    assert.match(loginHtml, /smooth-icon\.png/);
+    assert.doesNotMatch(loginHtml, new RegExp(oldBrand));
+    assert.doesNotMatch(loginHtml, new RegExp(`${oldLogo}\\.png`));
     assert.doesNotMatch(loginHtml, /Hazana Corp Console/);
 
     const auth = await fetch(`${server.url}/login`, {
@@ -190,10 +197,21 @@ test('Web UI pages use Antheon AI as primary brand and Hazana as subtle support 
       headers: { Cookie: cookieFrom(auth) },
     });
     const chatHtml = await chat.text();
-    assert.match(chatHtml, /Antheon AI/);
+    assert.match(chatHtml, /smooth/);
+    assert.match(chatHtml, /Make your life easier/);
+    assert.match(chatHtml, /Ask smooth/);
     assert.match(chatHtml, /Powered by Hazana Corp/);
+    assert.doesNotMatch(chatHtml, new RegExp(oldBrand));
+    assert.doesNotMatch(chatHtml, new RegExp(`${oldLogo}\\.png`));
     assert.doesNotMatch(chatHtml, /Native OpenClaw \/ Jarpis/);
   });
+});
+
+test('Web UI client copy uses smooth loading and empty-state branding', async () => {
+  const source = await readFile(join(__dirname, '..', 'src', 'web-ui', 'public', 'app.js'), 'utf-8');
+  assert.match(source, /smooth is thinking/);
+  assert.match(source, /Start a conversation with smooth/);
+  assert.doesNotMatch(source, new RegExp(['Anth', 'eon AI'].join('')));
 });
 
 test('POST /login with wrong credentials returns login error', async () => {

@@ -102,7 +102,7 @@
     if (history.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
-      empty.textContent = 'Start a conversation with Antheon AI. Your browser keeps this page history only until you clear or reload it.';
+      empty.textContent = 'Start a conversation with smooth. Make your life easier. Your browser keeps this page history only until you clear or reload it.';
       messagesEl.appendChild(empty);
       return;
     }
@@ -115,7 +115,7 @@
       if (item.loading) {
         content.innerHTML = [
           '<div class="typing-indicator">',
-          '<span>Antheon AI is thinking</span>',
+          '<span>smooth is thinking</span>',
           '<span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>',
           '</div>',
         ].join('');
