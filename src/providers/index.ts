@@ -16,6 +16,7 @@ export { MistralProvider } from './mistral';
 export { GeminiProvider } from './gemini';
 export { SambaNovaProvider } from './sambanova';
 export { ZaiProvider } from './zai';
+export { PuterProvider } from './puter';
 
 const logger = createLogger('providers');
 
@@ -70,6 +71,13 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
     }, 'zai');
   }
 
+  if (isEnabled(process.env['PUTER_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { PuterProvider } = await import('./puter.js');
+      return new PuterProvider();
+    }, 'puter');
+  }
+
   if (registry.size === 0) {
     logger.warn('No providers registered. Set at least one API key or ensure Ollama is running.');
   } else {
@@ -77,6 +85,10 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
   }
 
   return registry;
+}
+
+function isEnabled(value: string | undefined): boolean {
+  return ['true', '1', 'yes'].includes((value ?? '').trim().toLowerCase());
 }
 
 async function tryRegister(

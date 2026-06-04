@@ -9,9 +9,21 @@ export interface WebUiConfig {
   sessionSecret: string;
   cookieName: string;
   sessionTtlMs: number;
+  puter: WebUiPuterConfig;
 }
 
 export interface WebUiDependencies extends ApiDependencies {}
+
+export interface WebUiPuterConfig {
+  enabled: boolean;
+  providerId: string;
+  defaultModel: string;
+}
+
+export interface WebUiPublicConfig {
+  appName: string;
+  puter: WebUiPuterConfig;
+}
 
 export interface StartedWebUiServer {
   host: string;
@@ -29,4 +41,7 @@ export interface WebUiChatResponse {
   tools: string[];
   sessionId: string | null;
   error: string | null;
+  preferredProvider?: string | null;
+  preferredModel?: string | null;
+  fallbackUsed?: boolean;
 }

@@ -68,6 +68,18 @@ test('Primary provider throws then fallback provider is used', async () => {
   });
 });
 
+test('Preferred provider is attempted before fallback providers', async () => {
+  const preferred = provider('puter', 'fail');
+  const fallback = provider('groq');
+  await withRouter(new Map([['puter', preferred], ['groq', fallback]]), true, async (router: any) => {
+    const result = await router.chat(preferred, 'gpt-5-nano', { messages: [], systemPrompt: '' });
+    assert.equal((preferred as any).calls, 1);
+    assert.equal((fallback as any).calls, 1);
+    assert.equal(result.providerId, 'groq');
+    assert.equal(result.usedFallback, true);
+  });
+});
+
 test('All providers throw propagates error', async () => {
   const primary = provider('primary', 'fail');
   const fallback = provider('fallback', 'fail');

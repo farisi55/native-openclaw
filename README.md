@@ -132,6 +132,54 @@ ports:
   - "${WEB_UI_PORT:-18790}:18790"
 ```
 
+### Web UI Puter Provider Mode
+
+Puter.ai can be configured as the preferred model provider for Web UI requests.
+The Web UI still sends every message to the smooth backend, so the orchestrator,
+prompt optimizer, reasoning engine, tool-loop, tools, memory, scheduler,
+self-healing, self-upgrade, and ProviderRouter fallback all remain available.
+
+```env
+PUTER_ENABLED=true
+PUTER_API_KEY=
+PUTER_BASE_URL=
+PUTER_DEFAULT_MODEL=gpt-5.5
+PUTER_DISABLE_TEMPERATURE=true
+PUTER_TEMPERATURE=
+PUTER_REASONING_MODELS_DISABLE_TEMPERATURE=true
+
+WEB_UI_PUTER_ENABLED=true
+WEB_UI_PUTER_PROVIDER_ID=puter
+WEB_UI_PUTER_DEFAULT_MODEL=gpt-5-nano
+```
+
+Behavior:
+
+- Web UI requests include `preferredProvider=puter` and the configured model.
+- Puter is used through the backend ProviderRouter when the backend provider is
+  registered.
+- If Puter is unavailable or fails, ProviderRouter can fall back to the normal
+  backend providers.
+- CLI, Telegram, and direct API clients remain unaffected unless they explicitly
+  pass a preferred provider.
+
+Direct frontend Puter.js final-answer mode is not supported because it bypasses
+Native OpenClaw tools and orchestration.
+
+Some Puter models, including GPT-5-style reasoning models, reject custom
+temperature values. By default, smooth omits temperature for Puter requests:
+
+```env
+PUTER_DISABLE_TEMPERATURE=true
+```
+
+If you know a Puter model supports temperature, opt in explicitly:
+
+```env
+PUTER_DISABLE_TEMPERATURE=false
+PUTER_TEMPERATURE=0.2
+```
+
 ---
 
 ## Skills

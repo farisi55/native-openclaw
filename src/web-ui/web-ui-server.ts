@@ -12,7 +12,13 @@ import {
   isAuthenticated,
   validateCredentials,
 } from './web-ui-auth';
-import type { StartedWebUiServer, WebUiChatResponse, WebUiConfig, WebUiDependencies } from './web-ui-types';
+import type {
+  StartedWebUiServer,
+  WebUiChatResponse,
+  WebUiConfig,
+  WebUiDependencies,
+  WebUiPublicConfig,
+} from './web-ui-types';
 
 const logger = createLogger('web-ui');
 const CHAT_BODY_LIMIT_BYTES = 64 * 1024;
@@ -37,6 +43,11 @@ export function loadWebUiConfig(): WebUiConfig {
     sessionSecret: getOptionalEnv('WEB_UI_SESSION_SECRET', 'change-this-secret') ?? 'change-this-secret',
     cookieName: getOptionalEnv('WEB_UI_COOKIE_NAME', 'native_openclaw_webui') ?? 'native_openclaw_webui',
     sessionTtlMs: getEnvInt('WEB_UI_SESSION_TTL_MS', 86_400_000),
+    puter: {
+      enabled: getEnvBool('WEB_UI_PUTER_ENABLED', false),
+      providerId: getOptionalEnv('WEB_UI_PUTER_PROVIDER_ID', 'puter') ?? 'puter',
+      defaultModel: getOptionalEnv('WEB_UI_PUTER_DEFAULT_MODEL', 'gpt-5-nano') ?? 'gpt-5-nano',
+    },
   };
 }
 
@@ -108,6 +119,15 @@ async function handleRequest(
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/config') {
+    if (!isAuthenticated(req.headers.cookie, config)) {
+      sendJson(res, 401, { ok: false, error: 'Authentication required.' });
+      return;
+    }
+    sendJson(res, 200, getPublicWebUiConfig(config));
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/login') {
     if (isAuthenticated(req.headers.cookie, config)) {
       redirect(res, '/');
@@ -151,6 +171,17 @@ async function handleRequest(
   }
 
   sendJson(res, 404, { ok: false, error: 'Not found.' });
+}
+
+function getPublicWebUiConfig(config: WebUiConfig): WebUiPublicConfig {
+  return {
+    appName: 'smooth',
+    puter: {
+      enabled: config.puter?.enabled ?? false,
+      providerId: config.puter?.providerId ?? 'puter',
+      defaultModel: config.puter?.defaultModel ?? 'gpt-5-nano',
+    },
+  };
 }
 
 async function handleLogin(
@@ -227,6 +258,13 @@ async function handleChat(
     {
       message,
       ...(typeof body['sessionId'] === 'string' ? { sessionId: body['sessionId'] } : {}),
+      source: 'web-ui',
+      ...(config.puter.enabled
+        ? {
+            preferredProvider: config.puter.providerId,
+            preferredModel: config.puter.defaultModel,
+          }
+        : {}),
     },
     deps,
     state
@@ -241,6 +279,9 @@ async function handleChat(
     tools: result.body.tools,
     sessionId: result.body.sessionId,
     error,
+    ...(result.body.preferredProvider ? { preferredProvider: result.body.preferredProvider } : {}),
+    ...(result.body.preferredModel ? { preferredModel: result.body.preferredModel } : {}),
+    ...(result.body.fallbackUsed !== undefined ? { fallbackUsed: result.body.fallbackUsed } : {}),
   };
   sendJson(res, result.status, response);
 }

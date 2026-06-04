@@ -75,6 +75,45 @@
     return escapeHtml(content).replace(/\r?\n/g, '<br>');
   }
 
+  function createDefaultWebConfig() {
+    return {
+      appName: 'smooth',
+      puter: {
+        enabled: false,
+        providerId: 'puter',
+        defaultModel: 'gpt-5-nano',
+      },
+    };
+  }
+
+  function normalizeWebConfig(value) {
+    const fallback = createDefaultWebConfig();
+    const puter = value && typeof value === 'object' ? value.puter : null;
+    return {
+      appName: typeof value?.appName === 'string' ? value.appName : fallback.appName,
+      puter: {
+        enabled: typeof puter?.enabled === 'boolean' ? puter.enabled : fallback.puter.enabled,
+        providerId: typeof puter?.providerId === 'string' && puter.providerId.trim()
+          ? puter.providerId.trim()
+          : fallback.puter.providerId,
+        defaultModel: typeof puter?.defaultModel === 'string' && puter.defaultModel.trim()
+          ? puter.defaultModel.trim()
+          : fallback.puter.defaultModel,
+      },
+    };
+  }
+
+  function buildChatPayload(message, activeSessionId, config) {
+    const payload = { message };
+    if (activeSessionId) payload.sessionId = activeSessionId;
+    if (config.puter.enabled) {
+      payload.source = 'web-ui';
+      payload.preferredProvider = config.puter.providerId;
+      payload.preferredModel = config.puter.defaultModel;
+    }
+    return payload;
+  }
+
   const markdownApi = {
     escapeHtml,
     renderMarkdown,
@@ -83,6 +122,11 @@
 
   if (typeof globalThis !== 'undefined') {
     globalThis.NativeOpenClawMarkdown = markdownApi;
+    globalThis.SmoothWebUiClient = {
+      createDefaultWebConfig,
+      normalizeWebConfig,
+      buildChatPayload,
+    };
   }
 
   if (typeof document === 'undefined') return;
@@ -95,7 +139,16 @@
 
   let sessionId = null;
   let pending = false;
+  let webConfig = createDefaultWebConfig();
   const history = [];
+
+  const configReady = fetch('/config')
+    .then((response) => response.ok ? response.json() : createDefaultWebConfig())
+    .then((data) => {
+      webConfig = normalizeWebConfig(data);
+      return webConfig;
+    })
+    .catch(() => webConfig);
 
   function render() {
     messagesEl.innerHTML = '';
@@ -113,9 +166,10 @@
       const content = document.createElement('div');
       content.className = 'message-content';
       if (item.loading) {
+        const loadingText = item.loadingText || 'smooth is thinking';
         content.innerHTML = [
           '<div class="typing-indicator">',
-          '<span>smooth is thinking</span>',
+          `<span>${escapeHtml(loadingText)}</span>`,
           '<span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>',
           '</div>',
         ].join('');
@@ -133,10 +187,13 @@
         const meta = document.createElement('div');
         meta.textContent = [
           item.meta.provider ? `Provider: ${item.meta.provider}` : null,
+          item.meta.preferredProvider ? `Preferred provider: ${item.meta.preferredProvider}` : null,
           item.meta.model ? `Model: ${item.meta.model}` : null,
+          item.meta.preferredModel ? `Preferred model: ${item.meta.preferredModel}` : null,
           item.meta.responseTime ? `Response time: ${item.meta.responseTime}` : null,
           item.meta.tools?.length ? `Tools: ${item.meta.tools.join(', ')}` : 'Tools: none',
           item.meta.sessionId ? `Session: ${item.meta.sessionId}` : null,
+          item.meta.fallbackUsed ? 'Fallback: preferred provider was unavailable or failed; backend router used another provider.' : null,
         ].filter(Boolean).join('\n');
         details.appendChild(meta);
         bubble.appendChild(details);
@@ -164,6 +221,52 @@
     }
   }
 
+  async function sendMessageToBackend(message) {
+    const config = await configReady;
+    const response = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildChatPayload(message, sessionId, config)),
+    });
+    const data = await response.json();
+    if (data.sessionId) sessionId = data.sessionId;
+    return {
+      ok: Boolean(data.ok),
+      result: data.result || data.error || 'No response.',
+      error: data.error || null,
+      model: data.model,
+      provider: data.provider,
+      responseTime: data.responseTime,
+      tools: data.tools || [],
+      sessionId: data.sessionId,
+      preferredProvider: data.preferredProvider,
+      preferredModel: data.preferredModel,
+      fallbackUsed: Boolean(data.fallbackUsed),
+    };
+  }
+
+  function renderAssistantResult(loadingId, data) {
+    replaceMessage(loadingId, {
+      role: 'assistant',
+      content: data.result || data.error || 'No response.',
+      error: !data.ok,
+      meta: {
+        model: data.model,
+        provider: data.provider,
+        preferredProvider: data.preferredProvider,
+        preferredModel: data.preferredModel,
+        responseTime: data.responseTime,
+        tools: data.tools || [],
+        sessionId: data.sessionId,
+        fallbackUsed: Boolean(data.fallbackUsed),
+      },
+    });
+  }
+
+  async function resolveChatResponse(message) {
+    return sendMessageToBackend(message);
+  }
+
   async function sendMessage(message) {
     if (pending) return;
     const loadingId = `loading-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -173,26 +276,8 @@
     setLoading(true);
 
     try {
-      const response = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, sessionId }),
-      });
-      const data = await response.json();
-      if (data.sessionId) sessionId = data.sessionId;
-
-      replaceMessage(loadingId, {
-        role: 'assistant',
-        content: data.result || data.error || 'No response.',
-        error: !data.ok,
-        meta: {
-          model: data.model,
-          provider: data.provider,
-          responseTime: data.responseTime,
-          tools: data.tools || [],
-          sessionId: data.sessionId,
-        },
-      });
+      const data = await resolveChatResponse(message);
+      renderAssistantResult(loadingId, data);
     } catch (err) {
       replaceMessage(loadingId, {
         role: 'assistant',

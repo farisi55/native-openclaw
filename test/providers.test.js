@@ -11,6 +11,7 @@ const {
   OllamaProvider,
   OpenRouterProvider,
   SambaNovaProvider,
+  PuterProvider,
 } = require('../dist/providers');
 const { createMessage } = require('../dist/types/message');
 
@@ -29,6 +30,13 @@ const originalEnv = {
   OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,
   SAMBANOVA_API_KEY: process.env.SAMBANOVA_API_KEY,
   SAMBANOVA_BASE_URL: process.env.SAMBANOVA_BASE_URL,
+  PUTER_ENABLED: process.env.PUTER_ENABLED,
+  PUTER_API_KEY: process.env.PUTER_API_KEY,
+  PUTER_BASE_URL: process.env.PUTER_BASE_URL,
+  PUTER_DEFAULT_MODEL: process.env.PUTER_DEFAULT_MODEL,
+  PUTER_DISABLE_TEMPERATURE: process.env.PUTER_DISABLE_TEMPERATURE,
+  PUTER_TEMPERATURE: process.env.PUTER_TEMPERATURE,
+  PUTER_REASONING_MODELS_DISABLE_TEMPERATURE: process.env.PUTER_REASONING_MODELS_DISABLE_TEMPERATURE,
 };
 
 function restoreEnv() {
@@ -77,12 +85,36 @@ function openAiChatResponse(content) {
   });
 }
 
+function badRequestText(value) {
+  return {
+    ok: false,
+    status: 400,
+    async text() {
+      return value;
+    },
+  };
+}
+
 function chatOptions() {
   return {
     model: 'test-model',
     systemPrompt: 'Be concise.',
     messages: [createMessage({ role: 'user', content: 'hello' })],
   };
+}
+
+function setPuterEnv(overrides = {}) {
+  process.env.PUTER_API_KEY = 'test-key-xxx';
+  process.env.PUTER_BASE_URL = 'https://puter.example.test/v1';
+  process.env.PUTER_DEFAULT_MODEL = 'gpt-5.5';
+  delete process.env.PUTER_DISABLE_TEMPERATURE;
+  delete process.env.PUTER_TEMPERATURE;
+  delete process.env.PUTER_REASONING_MODELS_DISABLE_TEMPERATURE;
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
 }
 
 const openAiProviders = [
@@ -116,6 +148,14 @@ const openAiProviders = [
     keyEnv: 'OPENROUTER_API_KEY',
     baseEnv: 'OPENROUTER_BASE_URL',
     baseUrl: 'https://openrouter.example.test/api/v1',
+    auth: 'Authorization',
+  },
+  {
+    name: 'Puter',
+    Provider: PuterProvider,
+    keyEnv: 'PUTER_API_KEY',
+    baseEnv: 'PUTER_BASE_URL',
+    baseUrl: 'https://puter.example.test/v1',
     auth: 'Authorization',
   },
 ];
@@ -163,6 +203,120 @@ for (const spec of openAiProviders) {
     assert.ok(Array.isArray(models));
   });
 }
+
+test('Puter omits global default temperature for gpt-5.5', async () => {
+  setPuterEnv();
+  let requestBody = null;
+  mockFetch((_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return openAiChatResponse('hello world');
+  });
+
+  const provider = new PuterProvider();
+  await provider.chat({
+    ...chatOptions(),
+    model: 'gpt-5.5',
+    temperature: 0.7,
+  });
+
+  assert.equal(Object.hasOwn(requestBody, 'temperature'), false);
+});
+
+test('Puter omits temperature for any model when PUTER_DISABLE_TEMPERATURE=true', async () => {
+  setPuterEnv({ PUTER_DISABLE_TEMPERATURE: 'true', PUTER_TEMPERATURE: '0.2' });
+  let requestBody = null;
+  mockFetch((_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return openAiChatResponse('hello world');
+  });
+
+  const provider = new PuterProvider();
+  await provider.chat({
+    ...chatOptions(),
+    model: 'some-compatible-model',
+    temperature: 0.7,
+  });
+
+  assert.equal(Object.hasOwn(requestBody, 'temperature'), false);
+});
+
+test('Puter sends configured temperature only when enabled and model supports it', async () => {
+  setPuterEnv({ PUTER_DISABLE_TEMPERATURE: 'false', PUTER_TEMPERATURE: '0.2' });
+  let requestBody = null;
+  mockFetch((_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return openAiChatResponse('hello world');
+  });
+
+  const provider = new PuterProvider();
+  await provider.chat({
+    ...chatOptions(),
+    model: 'some-compatible-model',
+    temperature: 0.7,
+  });
+
+  assert.equal(requestBody.temperature, 0.2);
+});
+
+test('Puter omits temperature for gpt-5 models even when temperature is configured', async () => {
+  setPuterEnv({ PUTER_DISABLE_TEMPERATURE: 'false', PUTER_TEMPERATURE: '0.2' });
+  let requestBody = null;
+  mockFetch((_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return openAiChatResponse('hello world');
+  });
+
+  const provider = new PuterProvider();
+  await provider.chat({
+    ...chatOptions(),
+    model: 'gpt-5-mini',
+    temperature: 0.7,
+  });
+
+  assert.equal(Object.hasOwn(requestBody, 'temperature'), false);
+});
+
+test('Puter retries once without temperature when the provider rejects temperature', async () => {
+  setPuterEnv({ PUTER_DISABLE_TEMPERATURE: 'false', PUTER_TEMPERATURE: '0.2' });
+  const bodies = [];
+  mockFetch((_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    if (bodies.length === 1) {
+      return badRequestText('{ "error": "400 Unsupported value: \'temperature\' does not support 0.2 with this model" }');
+    }
+    return openAiChatResponse('retry ok');
+  });
+
+  const provider = new PuterProvider();
+  const response = await provider.chat({
+    ...chatOptions(),
+    model: 'some-compatible-model',
+  });
+
+  assert.equal(response.message.content, 'retry ok');
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].temperature, 0.2);
+  assert.equal(Object.hasOwn(bodies[1], 'temperature'), false);
+});
+
+test('Puter throws when retry without temperature also fails', async () => {
+  setPuterEnv({ PUTER_DISABLE_TEMPERATURE: 'false', PUTER_TEMPERATURE: '0.2' });
+  let calls = 0;
+  mockFetch(() => {
+    calls += 1;
+    return badRequestText('{ "error": "400 Unsupported value: \'temperature\' does not support this model" }');
+  });
+
+  const provider = new PuterProvider();
+  await assert.rejects(
+    () => provider.chat({
+      ...chatOptions(),
+      model: 'some-compatible-model',
+    }),
+    /Unsupported value/
+  );
+  assert.equal(calls, 2);
+});
 
 test('Gemini chat() sends correct API key query parameter', async () => {
   process.env.GEMINI_API_KEY = 'test-key-xxx';

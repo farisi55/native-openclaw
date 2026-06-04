@@ -37,6 +37,9 @@ export interface ApiRuntimeState {
 export interface ChatRequestBody {
   message?: unknown;
   sessionId?: unknown;
+  source?: unknown;
+  preferredProvider?: unknown;
+  preferredModel?: unknown;
 }
 
 export interface ChatApiResponse {
@@ -50,4 +53,7 @@ export interface ChatApiResponse {
   sessionId: string | null;
   error_detail: string[];
   promptOptimization?: PromptOptimizationApiMetadata;
+  preferredProvider?: string | null;
+  preferredModel?: string | null;
+  fallbackUsed?: boolean;
 }

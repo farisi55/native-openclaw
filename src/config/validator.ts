@@ -197,14 +197,15 @@ export function validateConfig(): Readonly<AppConfig> {
     Boolean(process.env['GROQ_API_KEY']) ||
     Boolean(process.env['MISTRAL_API_KEY']) ||
     Boolean(process.env['OPENROUTER_API_KEY']) ||
-    Boolean(process.env['ZAI_API_KEY']);
+    Boolean(process.env['ZAI_API_KEY']) ||
+    Boolean(process.env['PUTER_API_KEY']);
   const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']);
 
   if (!hasLegacyProvider && !hasExternalProvider && !hasOllama) {
     throw new Error(
       '[config] No provider API keys found. Set at least one of:\n' +
         '  OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,\n' +
-        '  GROQ_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, ZAI_API_KEY,\n' +
+        '  GROQ_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, ZAI_API_KEY, PUTER_API_KEY,\n' +
         '  or OLLAMA_BASE_URL'
     );
   }

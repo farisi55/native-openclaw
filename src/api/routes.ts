@@ -23,8 +23,10 @@ import {
 import type { ApiDependencies, ApiRuntimeState, ChatApiResponse, ChatRequestBody } from './types';
 import type { IProvider } from '../types/provider';
 import { resolveStartupSession } from '../cli';
+import { createLogger } from '../utils/logger';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const logger = createLogger('api:routes');
 
 export interface ChatRouteOptions {
   signal?: AbortSignal;
@@ -56,6 +58,71 @@ function makeResponse(fields: Partial<ChatApiResponse>): ChatApiResponse {
     sessionId: fields.sessionId ?? null,
     error_detail: fields.error_detail ?? [],
     ...(fields.promptOptimization ? { promptOptimization: fields.promptOptimization } : {}),
+    ...(fields.preferredProvider !== undefined ? { preferredProvider: fields.preferredProvider } : {}),
+    ...(fields.preferredModel !== undefined ? { preferredModel: fields.preferredModel } : {}),
+    ...(fields.fallbackUsed !== undefined ? { fallbackUsed: fields.fallbackUsed } : {}),
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+async function defaultModelForProvider(
+  provider: IProvider,
+  deps: ApiDependencies
+): Promise<string> {
+  const configured =
+    (await deps.settings.getDefaultModelForProvider(provider.id)) ??
+    process.env[`${provider.id.toUpperCase()}_DEFAULT_MODEL`];
+  if (configured?.trim()) return configured.trim();
+  const models = await provider.listModels();
+  return models[0]?.id ?? 'default';
+}
+
+async function resolveRequestProvider(
+  body: ChatRequestBody,
+  deps: ApiDependencies,
+  state: ApiRuntimeState
+): Promise<{
+  provider: IProvider;
+  model: string;
+  preferredProvider?: string;
+  preferredModel?: string;
+  preferredUnavailable: boolean;
+}> {
+  const preferredProvider = optionalString(body.preferredProvider)?.toLowerCase();
+  const preferredModel = optionalString(body.preferredModel);
+
+  if (!preferredProvider) {
+    return {
+      provider: state.activeProvider,
+      model: state.activeModel,
+      preferredUnavailable: false,
+    };
+  }
+
+  const provider = deps.providers.get(preferredProvider);
+  if (!provider) {
+    logger.warn('preferred provider unavailable; using active provider', {
+      preferredProvider,
+      activeProvider: state.activeProvider.id,
+    });
+    return {
+      provider: state.activeProvider,
+      model: state.activeModel,
+      preferredProvider,
+      ...(preferredModel ? { preferredModel } : {}),
+      preferredUnavailable: true,
+    };
+  }
+
+  return {
+    provider,
+    model: preferredModel ?? await defaultModelForProvider(provider, deps),
+    preferredProvider,
+    ...(preferredModel ? { preferredModel } : {}),
+    preferredUnavailable: false,
   };
 }
 
@@ -225,6 +292,7 @@ export async function handleChatRoute(
   const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim()
     ? body.sessionId.trim()
     : undefined;
+  const providerSelection = await resolveRequestProvider(body, deps, state);
 
   if (!message) {
     return {
@@ -249,8 +317,8 @@ export async function handleChatRoute(
       const session = await resolveStartupSession(
         deps.sessions,
         deps.settings,
-        state.activeProvider,
-        state.activeModel,
+        providerSelection.provider,
+        providerSelection.model,
         deps.skillRegistry.activeIds
       );
       activeSessionId = session.id;
@@ -258,8 +326,8 @@ export async function handleChatRoute(
 
     const result = await deps.orchestrator.turn({
       userInput: message,
-      provider: state.activeProvider,
-      model: state.activeModel,
+      provider: providerSelection.provider,
+      model: providerSelection.model,
       sessionId: activeSessionId,
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -273,8 +341,8 @@ export async function handleChatRoute(
       body: makeResponse({
         provider: result.usedFallback && result.fallbackProvider
           ? result.fallbackProvider
-          : state.activeProvider.id,
-        model: result.chatResponse?.model ?? state.activeModel,
+          : providerSelection.provider.id,
+        model: result.chatResponse?.model ?? providerSelection.model,
         result: result.assistantText,
         token: usage ? `${usage.totalTokens} token` : null,
         responseTime: `${result.chatResponse?.latencyMs ?? Date.now() - startedAt} ms`,
@@ -282,6 +350,9 @@ export async function handleChatRoute(
         flow: result.flow,
         sessionId: result.session.id,
         ...(result.promptOptimization ? { promptOptimization: result.promptOptimization } : {}),
+        ...(providerSelection.preferredProvider ? { preferredProvider: providerSelection.preferredProvider } : {}),
+        ...(providerSelection.preferredModel ? { preferredModel: providerSelection.preferredModel } : {}),
+        fallbackUsed: providerSelection.preferredUnavailable || Boolean(result.usedFallback),
       }),
     };
   } catch (err) {
@@ -294,6 +365,9 @@ export async function handleChatRoute(
         responseTime: `${Date.now() - startedAt} ms`,
         sessionId: state.activeSessionId,
         error_detail: [messageText],
+        ...(providerSelection.preferredProvider ? { preferredProvider: providerSelection.preferredProvider } : {}),
+        ...(providerSelection.preferredModel ? { preferredModel: providerSelection.preferredModel } : {}),
+        fallbackUsed: providerSelection.preferredUnavailable,
       }),
     };
   }

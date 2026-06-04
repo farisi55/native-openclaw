@@ -14,6 +14,7 @@ const PROVIDER_ENV_KEYS = [
   'GROQ_API_KEY',
   'MISTRAL_API_KEY',
   'OPENROUTER_API_KEY',
+  'PUTER_API_KEY',
   'OLLAMA_BASE_URL',
 ];
 
@@ -52,6 +53,12 @@ test('validateConfig does NOT throw when OLLAMA_BASE_URL is set', () => {
 
 test('validateConfig does NOT throw when OPENAI_API_KEY is set', () => {
   withProviderEnv({ OPENAI_API_KEY: 'test-openai-key' }, () => {
+    assert.doesNotThrow(() => validateConfig());
+  });
+});
+
+test('validateConfig does NOT throw when PUTER_API_KEY is set', () => {
+  withProviderEnv({ PUTER_API_KEY: 'test-puter-key' }, () => {
     assert.doesNotThrow(() => validateConfig());
   });
 });
