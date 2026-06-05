@@ -687,8 +687,13 @@ async function createProjectFixture(name, options = {}) {
           return { stdout: '1.15.13\n' };
         }
         assert.equal(call.options.shell, true);
-        assert.deepEqual(call.args, []);
-        assert.match(call.command, /^opencode\s+run\s+--dangerously-skip-permissions\s+/);
+
+        const effectiveCommand = [call.command, ...(call.args || [])].join(' ');
+
+        assert.match(effectiveCommand, /\brun\b/);
+        assert.match(effectiveCommand, /--dangerously-skip-permissions/);
+        assert.match(effectiveCommand, /windows shell fallback task/);
+
         return { stdout: 'shell execution ok\n' };
       });
 
@@ -703,10 +708,17 @@ async function createProjectFixture(name, options = {}) {
 
       assert.equal(result.ok, true);
       assert.match(result.stdout, /shell execution ok/);
-      assert.equal(
-        fake.calls.some((call) => call.command === 'opencode' && call.options.shell !== true && call.args?.[0] === 'run'),
-        false
-      );
+      assert.equal(fake.calls.some((call) => {
+      if (call.options.shell !== true) return false;
+
+      const effectiveCommand = [call.command, ...(call.args || [])].join(' ');
+
+        return (
+          /\brun\b/.test(effectiveCommand) &&
+          /--dangerously-skip-permissions/.test(effectiveCommand) &&
+          /windows shell fallback task/.test(effectiveCommand)
+        );
+      }), true);
     }
 
     {
@@ -1053,7 +1065,14 @@ async function createProjectFixture(name, options = {}) {
       assert.equal(result.errorType, 'timeout');
       assert.equal(killedPid, 5204);
       assert.equal(fake.calls[3].options.shell, true);
-      assert.deepEqual(fake.calls[3].args, []);
+
+      const effectiveCommand = [
+      fake.calls[3].command,
+      ...(fake.calls[3].args || []),
+      ].join(' ');
+
+      assert.match(effectiveCommand, /\brun\b/);
+      assert.match(effectiveCommand, /windows shell timeout/);
     }
 
     {

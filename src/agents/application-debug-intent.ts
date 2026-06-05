@@ -46,7 +46,7 @@ export function applicationDebugDiagnostic(selfHealingEnabled: boolean): string 
     '- TELEGRAM_RECOVERY_LOG_ENABLED=false (suppress log recovery)',
     '- TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true (hanya berlaku saat logPollingErrors=true)',
     '',
-    'Kemungkinan akar masalah: handlePollingError tetap mencetak error pertama meskipun logPollingErrors=false.',
+    'Status: handlePollingError sudah menggunakan logPollingErrors sebagai master switch (tidak ada lagi kebocoran else-if). Jika masih muncul, periksa LOG_LEVEL dan pastikan .env sudah dibaca dengan benar.',
   ];
 
   if (selfHealingEnabled) {
