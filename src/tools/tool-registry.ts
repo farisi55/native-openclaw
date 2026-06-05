@@ -312,6 +312,7 @@ export class ToolRegistry {
     if (this.registry.size === 0) return null;
     const hasWebFetch = this.registry.has('web-fetch');
     const hasBrevoEmail = this.registry.has('brevo-email');
+    const hasOpenCodeAgent = this.registry.has('opencode-agent');
 
     const sections: string[] = [
       '## AVAILABLE TOOLS',
@@ -361,6 +362,19 @@ export class ToolRegistry {
         '- Never claim an email was sent unless brevo-email returns ok=true.',
         '- If brevo-email returns ok=false, tell the user sending failed and summarize the safe error detail.',
         '- For email about current prices, today, latest news, or market updates, use web-fetch first when available, then call brevo-email with the fetched information.',
+        '',
+        '---'
+      );
+    }
+
+    if (hasOpenCodeAgent) {
+      sections.push(
+        'OPENCODE AGENT RULES:',
+        '- OpenCode is an external coding agent tool, not a chat model provider.',
+        '- Use `opencode-agent` only for coding-oriented analyze, patch, test, or review tasks.',
+        '- Do not use `opencode-agent` for general chat, email, news, scheduler requests, or simple questions.',
+        '- For normal model fallback, use ProviderRouter providers; do not treat OpenCode as a ProviderRouter model.',
+        '- If OpenCode is disabled or fails, continue with the normal Native OpenClaw coding/self-healing/self-upgrade flow.',
         '',
         '---'
       );

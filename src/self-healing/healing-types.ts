@@ -33,6 +33,14 @@ export interface HealingRun {
   restartScheduled?: boolean;
   restartReason?: string;
   fileDiffs?: FileDiffSummary[];
+  openCodeAttempted?: boolean;
+  openCodeAttempts?: number;
+  openCodeFallbackUsed?: boolean;
+  opencodeUnavailable?: boolean;
+  opencodeUnavailableReason?: string;
+  opencodeError?: string;
+  opencodeErrorType?: string;
+  opencodeSuggestion?: string;
 }
 
 export interface HealingLoopResult {

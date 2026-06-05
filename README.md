@@ -182,6 +182,290 @@ PUTER_TEMPERATURE=0.2
 
 ---
 
+## OpenCode Agent Tool
+
+OpenCode can be integrated as an optional external coding agent tool. It is not
+a normal LLM provider and is not used as general chat fallback.
+
+Example:
+
+```env
+OPENCODE_AGENT_ENABLED=true
+OPENCODE_AGENT_COMMAND=opencode
+OPENCODE_AGENT_CWD=
+OPENCODE_AGENT_DIRECT_MODE=true
+OPENCODE_AGENT_INJECT_SAFETY_PREAMBLE=false
+OPENCODE_AGENT_ARGS_TEMPLATE=run --dangerously-skip-permissions "{{task}}"
+OPENCODE_AGENT_TIMEOUT_MS=900000
+OPENCODE_AGENT_IDLE_TIMEOUT_MS=0
+OPENCODE_AGENT_KILL_GRACE_MS=10000
+OPENCODE_AGENT_KILL_TREE=true
+OPENCODE_AGENT_USE_FOR_SELF_HEALING=true
+OPENCODE_AGENT_USE_FOR_SELF_UPGRADE=true
+```
+
+Use cases:
+
+- self-healing patch generation
+- self-upgrade implementation work
+- code review
+- coding task analysis
+
+For general fallback models, configure the actual ProviderRouter providers
+directly. If OpenCode is disabled or fails, Native OpenClaw continues through
+the existing self-healing/self-upgrade coding flow.
+
+### OpenCode Agent Setup
+
+Manual auth setup:
+
+```bash
+opencode run /connect
+```
+
+Or configure OpenCode Zen auth through smooth `.env`:
+
+```env
+OPENCODE_AUTH_BOOTSTRAP=true
+OPENCODE_ZEN_API_KEY=your_key_here
+OPENCODE_AUTH_PROVIDER=opencode
+```
+
+`OPENCODE_AUTH_PROVIDER` should be `opencode`, not `opencode-zen`.
+smooth never logs `OPENCODE_ZEN_API_KEY`.
+
+### OpenCode Working Directory
+
+`OPENCODE_AGENT_CWD` is optional. Recommended:
+
+```env
+OPENCODE_AGENT_CWD=
+```
+
+When empty, smooth auto-detects the project root by walking upward from
+`process.cwd()` and looking for `package.json`, `tsconfig.json`, `src/`,
+`dist/`, `workspace/`, or `skills/` markers. In Docker, because the Dockerfile
+uses `WORKDIR /app`, this usually resolves to `/app`.
+
+Manual override is still available if auto-detection picks the wrong folder:
+
+```env
+OPENCODE_AGENT_CWD=/app
+```
+
+On Windows, Linux, and macOS, auto-detection uses native path resolution and
+does not assume `/app`.
+
+Windows troubleshooting:
+
+- If `opencode --version` works in your terminal but smooth logs
+  `spawn opencode ENOENT`, smooth will try to reuse the detected execution
+  strategy by resolving `opencode.cmd` or using a Windows shell fallback.
+- If your environment still cannot resolve it, set:
+
+```env
+OPENCODE_AGENT_COMMAND=opencode.cmd
+```
+
+- You may also use the absolute path to `opencode.cmd`.
+
+### OpenCode Model Config
+
+Use the `opencode/` provider prefix in `opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai",
+  "model": "opencode/deepseek-v4-flash-free",
+  "small_model": "opencode/mimo-v2.5-free",
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  }
+}
+```
+
+Common error:
+
+```text
+Model not found: opencode-zen/deepseek-v4-flash-free
+```
+
+Fix:
+
+- Use `opencode/deepseek-v4-flash-free`.
+- Do not use `opencode-zen/deepseek-v4-flash-free`.
+
+If OpenCode returns `Unexpected server error` or auth/API key errors, connect
+the CLI or enable auth bootstrap:
+
+```bash
+opencode run /connect
+```
+
+```env
+OPENCODE_AUTH_BOOTSTRAP=true
+OPENCODE_ZEN_API_KEY=your_key_here
+OPENCODE_AUTH_PROVIDER=opencode
+```
+
+Smoke test:
+
+```bash
+opencode run "hello"
+```
+
+OpenCode `run` uses positional message arguments. Do not configure
+`OPENCODE_AGENT_ARGS_TEMPLATE` with `run --prompt "{{task}}"`.
+
+For manual-equivalent OpenCode execution, keep direct mode enabled. In this
+mode smooth sends the raw task through your `OPENCODE_AGENT_ARGS_TEMPLATE`,
+adds only the project path, does not prepend the internal safety wrapper, and
+disables idle timeout by default. The hard timeout and process-tree kill remain
+active so runaway OpenCode processes are still terminated.
+
+For smooth automation in trusted dev or isolated environments:
+
+```env
+OPENCODE_AGENT_DIRECT_MODE=true
+OPENCODE_AGENT_INJECT_SAFETY_PREAMBLE=false
+OPENCODE_AGENT_ARGS_TEMPLATE=run --dangerously-skip-permissions "{{task}}"
+OPENCODE_AGENT_TIMEOUT_MS=900000
+OPENCODE_AGENT_IDLE_TIMEOUT_MS=0
+OPENCODE_AGENT_KILL_GRACE_MS=10000
+OPENCODE_AGENT_KILL_TREE=true
+```
+
+This template is supported and intentionally passes
+`--dangerously-skip-permissions` to OpenCode. Warning:
+`--dangerously-skip-permissions` auto-approves OpenCode permissions. Use it
+only where the repository and runtime environment are trusted.
+
+For safer mode:
+
+```env
+OPENCODE_AGENT_DIRECT_MODE=true
+OPENCODE_AGENT_ARGS_TEMPLATE=run "{{task}}"
+```
+
+You can also run:
+
+```text
+/opencode doctor
+/opencode doctor --smoke
+```
+
+Troubleshooting checks:
+
+- `Args preview` should include `run` and `--dangerously-skip-permissions`
+  when the automation template above is configured.
+- `Args template` must not contain `--prompt`; OpenCode 1.15.x uses
+  positional message arguments.
+- `Auth provider` should be `opencode`.
+- OpenCode Zen model IDs should use the `opencode/` prefix, for example
+  `opencode/deepseek-v4-flash-free`.
+
+If OpenCode hangs, smooth enforces both a hard timeout and an idle timeout:
+
+```env
+OPENCODE_AGENT_TIMEOUT_MS=900000
+OPENCODE_AGENT_IDLE_TIMEOUT_MS=0
+OPENCODE_AGENT_KILL_GRACE_MS=10000
+OPENCODE_AGENT_KILL_TREE=true
+```
+
+`OPENCODE_AGENT_IDLE_TIMEOUT_MS=0` disables the idle timer. This is recommended
+for direct mode because OpenCode can work silently for long periods. Set a
+positive idle timeout only when you explicitly want silent work to be killed.
+
+On Windows, smooth terminates OpenCode with `taskkill /PID <pid> /T /F` so the
+shell and child process tree are stopped. On Unix-like systems, smooth starts
+OpenCode in a detached process group when process-tree killing is enabled and
+terminates that group on timeout.
+
+Manual Windows diagnosis:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -match "opencode" } |
+  Select-Object ProcessId, CommandLine
+```
+
+Manual Windows kill:
+
+```powershell
+taskkill /PID <PID> /T /F
+```
+
+### OpenCode Auto Install
+
+If OpenCode is not installed, smooth can detect it and optionally install it.
+
+Recommended manual install:
+
+```bash
+npm install -g opencode-ai
+```
+
+Auto-install:
+
+```env
+OPENCODE_AUTO_INSTALL=true
+OPENCODE_INSTALL_STRATEGY=npm-global
+OPENCODE_INSTALL_REQUIRE_APPROVAL=true
+```
+
+Windows:
+
+- Requires Node.js/npm.
+- Default install command is `npm install -g opencode-ai`.
+
+Linux/macOS:
+
+- Uses npm global install by default.
+- If permission is denied, install manually, configure a user npm prefix, or
+  install in your deployment image.
+- smooth does not automatically use `sudo` unless explicitly configured and
+  approved.
+
+Docker:
+
+- Preferred production approach is installing OpenCode in the Dockerfile:
+
+```dockerfile
+RUN npm install -g opencode-ai
+```
+
+- Or use an optional build argument in your own Dockerfile:
+
+```dockerfile
+ARG INSTALL_OPENCODE=false
+RUN if [ "$INSTALL_OPENCODE" = "true" ]; then npm install -g opencode-ai; fi
+```
+
+Runtime auto-install inside Docker is possible, but it installs inside the
+running container and may not persist across rebuilds or recreated containers.
+
+For non-interactive Docker auth, either bootstrap from env:
+
+```env
+OPENCODE_AUTH_BOOTSTRAP=true
+OPENCODE_ZEN_API_KEY=your_key_here
+OPENCODE_AUTH_PROVIDER=opencode
+```
+
+or mount the OpenCode auth directory:
+
+```yaml
+volumes:
+  - ./data/opencode:/home/openclaw/.local/share/opencode
+```
+
+The runtime image sets `HOME=/home/openclaw`, so the default OpenCode auth file
+is `/home/openclaw/.local/share/opencode/auth.json`.
+
+---
+
 ## Skills
 
 Skills are plain Markdown files placed in the `skills/` directory. They are
@@ -635,6 +919,60 @@ Disable this behavior with:
 SELF_UPGRADE_AUTO_RESTART=false
 AUTONOMOUS_RESTART_MODE=disabled
 ```
+
+### Restart Notifications
+
+When self-healing or self-upgrade passes QA and a restart is required, smooth
+can notify you before it exits with code `42`. This is especially useful when
+running manually with `npm start`, where no supervisor may restart the process.
+
+Enable notifications:
+
+```env
+RESTART_NOTIFICATION_ENABLED=true
+RESTART_NOTIFY_TELEGRAM=true
+RESTART_NOTIFY_EMAIL=true
+```
+
+Telegram can use an explicit chat ID:
+
+```env
+RESTART_TELEGRAM_CHAT_ID=123456789
+```
+
+Email can use a restart-specific recipient:
+
+```env
+RESTART_EMAIL_RECIPIENT=you@example.com
+```
+
+or the normal Brevo default recipient:
+
+```env
+BREVO_RECIPIENT_EMAIL=you@example.com
+RESTART_EMAIL_USE_BREVO_DEFAULTS=true
+```
+
+If smooth was started with `npm start`, it may exit and stay stopped after a
+successful self-healing or self-upgrade restart request. Restart manually with:
+
+```bash
+npm start
+npm run start:watch:win
+npm run start:watch:unix
+docker compose up -d
+pm2 restart smooth
+```
+
+Docker Compose should use:
+
+```yaml
+restart: unless-stopped
+```
+
+With `RESTART_NOTIFY_AFTER_START=true`, smooth writes a small
+`restart-pending.json` marker before exit and sends a best-effort "restarted
+successfully" notification after the next startup.
 
 ### Docker Compose operations
 

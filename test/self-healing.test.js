@@ -10,6 +10,7 @@ const {
   SelfHealingEngine,
   SelfUpgradeEngine,
   SnapshotManager,
+  filterRestartRelevantChangedFiles,
   isRestartRequiredForChangedFiles,
   redactSecrets,
 } = require('../dist/self-healing');
@@ -65,6 +66,17 @@ function commandResult(command, exitCode, stdout = '', stderr = '') {
     durationMs: 1,
     timedOut: false,
   };
+}
+
+function saveEnv(keys) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreSavedEnv(saved) {
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 }
 
 async function prepareRoot(name) {
@@ -205,6 +217,71 @@ async function prepareRoot(name) {
     const run = await engine.run({ userInput: 'fix missing dependency', source: 'system' });
     assert.equal(run.status, 'passed');
     assert.deepEqual(installed, ['lodash-es']);
+  }
+
+  {
+    const root = await prepareRoot('permission-warning-qa-pass');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    const engine = new SelfHealingEngine(config(root, { maxLoops: 1 }), {
+      analyzer: {
+        analyze: async () => ({
+          summary: 'permission warning',
+          likelyCause: 'OpenCode touched source but reported permission rejection',
+          affectedFiles: ['src/permission-warning.ts'],
+          fixStrategy: 'accept only if QA passes',
+          confidence: 0.9,
+        }),
+      },
+      codingAgent: {
+        applyBugFix: async ({ patchApplier, openCodeState }) => {
+          openCodeState.lastErrorType = 'permission-warning';
+          openCodeState.lastError = 'OpenCode permission rejected after changing files';
+          return patchApplier.applyAll([
+            { path: 'src/permission-warning.ts', action: 'create', content: 'export const ok = true;\n' },
+          ]);
+        },
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 0, 'ok', '')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'fix with permission warning', source: 'system' });
+    assert.equal(run.status, 'passed');
+    assert.match(run.finalSummary, /permission-rejected but produced meaningful changes/);
+    await fs.access(path.join(root, 'src', 'permission-warning.ts'));
+  }
+
+  {
+    const root = await prepareRoot('permission-warning-qa-fail');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    const engine = new SelfHealingEngine(config(root, { maxLoops: 1 }), {
+      analyzer: {
+        analyze: async () => ({
+          summary: 'permission warning fails QA',
+          likelyCause: 'OpenCode touched source but QA still fails',
+          affectedFiles: ['src/permission-warning-fail.ts'],
+          fixStrategy: 'rollback after max loops',
+          confidence: 0.9,
+        }),
+      },
+      codingAgent: {
+        applyBugFix: async ({ patchApplier, openCodeState }) => {
+          openCodeState.lastErrorType = 'permission-warning';
+          openCodeState.lastError = 'OpenCode permission rejected after changing files';
+          return patchApplier.applyAll([
+            { path: 'src/permission-warning-fail.ts', action: 'create', content: 'export const broken = true;\n' },
+          ]);
+        },
+      },
+      testRunner: {
+        runAll: async () => [commandResult('npm run build', 1, '', 'still failing')],
+      },
+    });
+
+    const run = await engine.run({ userInput: 'fix with permission warning but failing QA', source: 'system' });
+    assert.equal(run.status, 'rolled_back');
+    await assert.rejects(() => fs.access(path.join(root, 'src', 'permission-warning-fail.ts')));
   }
 
   {
@@ -419,6 +496,171 @@ async function prepareRoot(name) {
   }
 
   {
+    const envKeys = [
+      'OPENCODE_AGENT_ENABLED',
+      'OPENCODE_AGENT_COMMAND',
+      'OPENCODE_AGENT_CWD',
+      'OPENCODE_AUTO_INSTALL',
+      'OPENCODE_AUTH_BOOTSTRAP',
+      'OPENCODE_AGENT_USE_FOR_SELF_HEALING',
+    ];
+    const savedEnv = saveEnv(envKeys);
+    try {
+      process.env.OPENCODE_AGENT_ENABLED = 'true';
+      process.env.OPENCODE_AGENT_COMMAND = `missing-opencode-${Date.now()}`;
+      process.env.OPENCODE_AGENT_CWD = '';
+      process.env.OPENCODE_AUTO_INSTALL = 'false';
+      process.env.OPENCODE_AUTH_BOOTSTRAP = 'false';
+      process.env.OPENCODE_AGENT_USE_FOR_SELF_HEALING = 'true';
+
+      const root = await prepareRoot('healing-opencode-unavailable');
+      await fs.mkdir(path.join(root, 'src'), { recursive: true });
+      let providerCalls = 0;
+      let qaCalls = 0;
+      const provider = {
+        id: 'mock',
+        displayName: 'Mock Provider',
+        listModels: async () => [],
+        chat: async () => {
+          providerCalls += 1;
+          return {
+            message: {
+              content: JSON.stringify({
+                files: [
+                  {
+                    path: 'src/opencode-unavailable.ts',
+                    action: 'create',
+                    content: `export const loop = ${providerCalls};\n`,
+                  },
+                ],
+              }),
+            },
+            model: 'mock',
+            latencyMs: 1,
+          };
+        },
+      };
+      const engine = new SelfHealingEngine(config(root), {
+        provider,
+        analyzer: {
+          analyze: async () => ({
+            summary: 'bug',
+            likelyCause: 'fixture fails',
+            affectedFiles: ['src/opencode-unavailable.ts'],
+            fixStrategy: 'use fallback provider',
+            confidence: 0.9,
+          }),
+        },
+        testRunner: {
+          runAll: async () => {
+            qaCalls += 1;
+            return qaCalls === 1
+              ? [commandResult('npm run build', 1, '', 'still failing')]
+              : [commandResult('npm run build', 0, 'ok', '')];
+          },
+        },
+      });
+
+      const run = await engine.run({ userInput: 'fix with opencode unavailable', source: 'system' });
+      assert.equal(run.status, 'passed');
+      assert.equal(providerCalls, 2);
+      assert.equal(run.openCodeAttempted, true);
+      assert.equal(run.openCodeAttempts, 1);
+      assert.equal(run.opencodeUnavailable, true);
+      assert.equal(run.openCodeFallbackUsed, true);
+      assert.match(run.opencodeUnavailableReason, /not installed|ENOENT|not found|not recognized|EPERM/i);
+      assert.match(run.finalSummary, /OpenCode was attempted but unavailable/);
+      assert.match(run.finalSummary, /internal CodingAgent fallback was used/);
+    } finally {
+      restoreSavedEnv(savedEnv);
+    }
+  }
+
+  {
+    const envKeys = [
+      'OPENCODE_AGENT_ENABLED',
+      'OPENCODE_AGENT_COMMAND',
+      'OPENCODE_AGENT_CWD',
+      'OPENCODE_AUTO_INSTALL',
+      'OPENCODE_AUTH_BOOTSTRAP',
+      'OPENCODE_AGENT_USE_FOR_SELF_UPGRADE',
+    ];
+    const savedEnv = saveEnv(envKeys);
+    try {
+      process.env.OPENCODE_AGENT_ENABLED = 'true';
+      process.env.OPENCODE_AGENT_COMMAND = `missing-opencode-${Date.now()}`;
+      process.env.OPENCODE_AGENT_CWD = '';
+      process.env.OPENCODE_AUTO_INSTALL = 'false';
+      process.env.OPENCODE_AUTH_BOOTSTRAP = 'false';
+      process.env.OPENCODE_AGENT_USE_FOR_SELF_UPGRADE = 'true';
+
+      const root = await prepareRoot('upgrade-opencode-unavailable');
+      await fs.mkdir(path.join(root, 'src'), { recursive: true });
+      let providerCalls = 0;
+      let qaCalls = 0;
+      const provider = {
+        id: 'mock',
+        displayName: 'Mock Provider',
+        listModels: async () => [],
+        chat: async () => {
+          providerCalls += 1;
+          return {
+            message: {
+              content: JSON.stringify({
+                files: [
+                  {
+                    path: 'src/opencode-upgrade-unavailable.ts',
+                    action: 'create',
+                    content: `export const upgradeLoop = ${providerCalls};\n`,
+                  },
+                ],
+              }),
+            },
+            model: 'mock',
+            latencyMs: 1,
+          };
+        },
+      };
+      const engine = new SelfUpgradeEngine({
+        ...config(root),
+        autoRegister: true,
+        allowedTargets: ['repo'],
+      }, {
+        provider,
+        analyzer: {
+          analyzeUpgrade: async () => ({
+            summary: 'upgrade',
+            missingCapability: 'fixture upgrade',
+            feasible: true,
+            targetFiles: ['src/opencode-upgrade-unavailable.ts'],
+            implementationStrategy: 'use fallback provider',
+            confidence: 0.9,
+          }),
+        },
+        testRunner: {
+          runAll: async () => {
+            qaCalls += 1;
+            return qaCalls === 1
+              ? [commandResult('npm run build', 1, '', 'still failing')]
+              : [commandResult('npm run build', 0, 'ok', '')];
+          },
+        },
+      });
+
+      const run = await engine.run({ userInput: 'upgrade with opencode unavailable', source: 'system' });
+      assert.equal(run.status, 'passed');
+      assert.equal(providerCalls, 2);
+      assert.equal(run.openCodeAttempted, true);
+      assert.equal(run.openCodeAttempts, 1);
+      assert.equal(run.opencodeUnavailable, true);
+      assert.equal(run.openCodeFallbackUsed, true);
+      assert.match(run.finalSummary, /OpenCode was attempted but unavailable/);
+    } finally {
+      restoreSavedEnv(savedEnv);
+    }
+  }
+
+  {
     const root = await prepareRoot('upgrade-restart');
     await fs.mkdir(path.join(root, 'src', 'tools'), { recursive: true });
     const lifecycle = fakeLifecycle();
@@ -551,6 +793,17 @@ async function prepareRoot(name) {
     assert.equal(isRestartRequiredForChangedFiles(['src/index.ts'], 'self-healing'), true);
     assert.equal(isRestartRequiredForChangedFiles(['src/config/env.ts'], 'self-healing'), true);
     assert.equal(isRestartRequiredForChangedFiles(['src/agents/orchestrator.ts'], 'self-healing'), false);
+    assert.deepEqual(filterRestartRelevantChangedFiles([
+      '.data-test-run/session.json',
+      'data/test-run/output.json',
+      'coverage/lcov.info',
+      'dist/index.js',
+      'node_modules/pkg/index.js',
+      'runtime.log',
+      'src/tools/new-tool.ts',
+    ]), ['src/tools/new-tool.ts']);
+    assert.equal(isRestartRequiredForChangedFiles(['.data-test-run/session.json'], 'self-upgrade'), false);
+    assert.equal(isRestartRequiredForChangedFiles(['runtime.log'], 'self-healing'), false);
   }
 
   {

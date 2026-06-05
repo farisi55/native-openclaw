@@ -26,7 +26,12 @@ export { PatchApplier } from './patch-applier';
 export { PatchPlanner } from './patch-planner';
 export { QAAgent } from './qa-agent';
 export { ReportWriter } from './report-writer';
-export { isRestartRequiredForChangedFiles, restartReasonForChangedFiles } from './restart-policy';
+export {
+  filterRestartRelevantChangedFiles,
+  isIgnoredChangedFile,
+  isRestartRequiredForChangedFiles,
+  restartReasonForChangedFiles,
+} from './restart-policy';
 export type { RestartRequirementMode } from './restart-policy';
 export { SafetyPolicy } from './safety-policy';
 export { SnapshotManager } from './snapshot-manager';

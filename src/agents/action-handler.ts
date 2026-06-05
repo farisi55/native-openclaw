@@ -29,6 +29,8 @@ import {
   type SelfHealingActionContext,
 } from '../self-healing';
 import { approveCommand, rejectCommand } from '../tools/system-execute';
+import { approveOpenCodeInstall, rejectOpenCodeInstall, type OpenCodeInstallResult } from '../tools/opencode-installer';
+import { runOpenCodeDoctor, type OpenCodeDoctorResult } from '../tools/opencode-agent';
 import {
   applicationDebugDiagnostic,
   isApplicationDebugFixRequest,
@@ -103,6 +105,87 @@ const WORKSPACE_WRITE_WITHOUT_CONTENT = /^(?:tulis|write)\s+file\s+([^\s]+)$/i;
 const REPORT_SAVE = /^(?:buat\s+laporan|buat\s+report)[\s\S]*?\s+simpan\s+di\s+([A-Za-z0-9_.\-/\\]+)$/i;
 const APPROVE_COMMAND = /^(?:approve|setujui|izinkan)\s+command\s+([A-Za-z0-9_-]+)$/i;
 const REJECT_COMMAND = /^(?:reject|tolak|batalkan)\s+command\s+([A-Za-z0-9_-]+)$/i;
+const APPROVE_OPENCODE_INSTALL = /^(?:approve|setujui|izinkan)\s+opencode\s+install\s+([A-Za-z0-9_-]+)$/i;
+const REJECT_OPENCODE_INSTALL = /^(?:reject|tolak|batalkan)\s+opencode\s+install\s+([A-Za-z0-9_-]+)$/i;
+const OPENCODE_DOCTOR = /^\/?opencode\s+doctor(?:\s+(--smoke))?$/i;
+
+function formatOpenCodeInstallResult(result: OpenCodeInstallResult): string {
+  if (!result.ok) {
+    return result.error ?? 'OpenCode installation was not executed.';
+  }
+  return [
+    'OpenCode installation completed.',
+    '',
+    `Strategy: ${result.strategy}`,
+    'Command:',
+    result.command,
+    '',
+    result.detectedAfterInstall?.installed
+      ? `Detected version: ${result.detectedAfterInstall.version ?? 'unknown'}`
+      : 'OpenCode detection after install was not available.',
+  ].join('\n');
+}
+
+function formatOpenCodeDoctorResult(result: OpenCodeDoctorResult): string {
+  const existingConfigs = result.configFiles.filter((config) => config.exists);
+  const lines = [
+    result.ok ? 'OpenCode doctor passed.' : 'OpenCode doctor found issues.',
+    '',
+    `Installed: ${result.installed ? 'yes' : 'no'}`,
+    `Command: ${result.command}`,
+    result.version ? `Version: ${result.version}` : '',
+    `Resolved cwd: ${result.cwd}`,
+    `Cwd valid: ${result.cwdValid ? 'yes' : 'no'} (${result.cwdReason})`,
+    `Args template: ${result.argsTemplate}`,
+    `Args preview: ${JSON.stringify(result.argsPreview)}`,
+    `Direct mode: ${result.directMode ? 'enabled' : 'disabled'}`,
+    `Inject safety preamble: ${result.injectSafetyPreamble ? 'yes' : 'no'}`,
+    `Hard timeout ms: ${result.hardTimeoutMs}`,
+    `Idle timeout ms: ${result.idleTimeoutMs}`,
+    `Template valid: ${result.templateValid ? 'yes' : 'no'}`,
+    `Prompt mode: ${result.promptMode}`,
+    `Dangerous skip permissions: ${result.dangerousSkipPermissions ? 'enabled' : 'disabled'}`,
+    `Auth bootstrap enabled: ${result.authBootstrapEnabled ? 'yes' : 'no'}`,
+    `OPENCODE_ZEN_API_KEY present: ${result.zenApiKeyPresent ? 'yes' : 'no'}`,
+    `Auth provider: ${result.authProvider}`,
+    `Auth file: ${result.authFile}`,
+    `Auth file exists: ${result.authFileExists ? 'yes' : 'no'}`,
+    `Auth provider exists: ${result.authProviderExists ? 'yes' : 'no'}`,
+    `run --help: ${result.runHelpOk ? 'ok' : 'failed'}`,
+    existingConfigs.length > 0
+      ? `Config files: ${existingConfigs.map((config) => config.path).join(', ')}`
+      : 'Config files: none found',
+  ].filter(Boolean);
+
+  if (result.templateWarnings.length > 0) {
+    lines.push('', 'Template warnings:', ...result.templateWarnings.map((warning) => `- ${warning}`));
+  }
+
+  if (result.dangerousSkipPermissions) {
+    lines.push('', 'Dangerous skip permissions warning:', '- Enabled. Use only in trusted dev/isolated environments.');
+  }
+
+  if (result.warnings.length > 0) {
+    lines.push('', 'Warnings:', ...result.warnings.map((warning) => `- ${warning}`));
+  }
+
+  if (result.suggestions.length > 0) {
+    lines.push('', 'Suggestions:', ...result.suggestions.map((suggestion) => `- ${suggestion}`));
+  }
+
+  if (result.smokeTest) {
+    lines.push(
+      '',
+      `Smoke test: ${result.smokeTest.ok ? 'ok' : 'failed'}`,
+      result.smokeTest.summary
+    );
+    if (result.smokeTest.stderr) {
+      lines.push('', 'Smoke stderr:', result.smokeTest.stderr.slice(0, 2000));
+    }
+  }
+
+  return lines.join('\n');
+}
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -335,6 +418,24 @@ export async function handleAction(
   if (rejectMatch?.[1]) {
     const result = await rejectCommand(rejectMatch[1]);
     return { handled: true, response: result.content, actionType: 'command' };
+  }
+
+  const approveOpenCodeMatch = APPROVE_OPENCODE_INSTALL.exec(trimmed);
+  if (approveOpenCodeMatch?.[1]) {
+    const result = await approveOpenCodeInstall(approveOpenCodeMatch[1]);
+    return { handled: true, response: formatOpenCodeInstallResult(result), actionType: 'command' };
+  }
+
+  const rejectOpenCodeMatch = REJECT_OPENCODE_INSTALL.exec(trimmed);
+  if (rejectOpenCodeMatch?.[1]) {
+    const result = await rejectOpenCodeInstall(rejectOpenCodeMatch[1]);
+    return { handled: true, response: formatOpenCodeInstallResult(result), actionType: 'command' };
+  }
+
+  const opencodeDoctorMatch = OPENCODE_DOCTOR.exec(trimmed);
+  if (opencodeDoctorMatch) {
+    const result = await runOpenCodeDoctor({ smokeTest: Boolean(opencodeDoctorMatch[1]) });
+    return { handled: true, response: formatOpenCodeDoctorResult(result), actionType: 'command' };
   }
 
   const infoCapabilityQuestion =

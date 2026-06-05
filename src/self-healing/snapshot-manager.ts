@@ -42,6 +42,24 @@ export class SnapshotManager {
     await this.writeManifest();
   }
 
+  async snapshotContent(filePath: string, content: string | null): Promise<void> {
+    const absolute = this.policy.assertSafeFilePath(filePath);
+    const rel = this.policy.relativePath(absolute);
+    if (this.entries.has(rel)) return;
+
+    const snapshotPath = join(this.snapshotDir, 'files', rel);
+    await mkdir(dirname(snapshotPath), { recursive: true });
+
+    if (content === null) {
+      this.entries.set(rel, { path: absolute, snapshotPath, existed: false });
+    } else {
+      await writeFile(snapshotPath, content, 'utf-8');
+      this.entries.set(rel, { path: absolute, snapshotPath, existed: true });
+    }
+
+    await this.writeManifest();
+  }
+
   async rollback(): Promise<void> {
     for (const entry of [...this.entries.values()].reverse()) {
       if (entry.existed) {

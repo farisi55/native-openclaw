@@ -1,0 +1,1 @@
+{"level": "INFO", "telegram": {"enabled": true, "polling": {"enabled": true, "errors": {"enabled": true}}, "recovery": {"enabled": true}}}

@@ -13,6 +13,7 @@ services:
         http_proxy: ${HTTP_PROXY:-}
         https_proxy: ${HTTPS_PROXY:-}
         no_proxy: ${NO_PROXY:-}
+        INSTALL_OPENCODE: ${INSTALL_OPENCODE:-false}
 
     image: native-openclaw:latest
     container_name: native-openclaw
@@ -58,10 +59,17 @@ services:
       WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:-change-me}
       WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:-change-this-secret}
 
+      OPENCODE_AUTH_BOOTSTRAP: ${OPENCODE_AUTH_BOOTSTRAP:-false}
+      OPENCODE_AUTH_PROVIDER: ${OPENCODE_AUTH_PROVIDER:-opencode}
+      OPENCODE_AUTH_FILE: ${OPENCODE_AUTH_FILE:-}
+      OPENCODE_AUTH_OVERWRITE: ${OPENCODE_AUTH_OVERWRITE:-false}
+      OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
+
     volumes:
       - ./data:/data
       - ./skills:/skills
       - ./workspace:/workspace
+      - ./data/opencode:/home/openclaw/.local/share/opencode
 
     ports:
       - "${API_PORT:-18789}:18789"

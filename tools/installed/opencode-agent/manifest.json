@@ -1,0 +1,49 @@
+{
+  "name": "opencode-agent",
+  "displayName": "OpenCode Agent",
+  "description": "Runs OpenCode as an external coding agent for analyze/patch/review/test tasks.",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "enabled": true,
+  "examples": [
+    "analyze a bug with OpenCode",
+    "review source changes with OpenCode",
+    "generate a coding patch with OpenCode",
+    "run an OpenCode coding task"
+  ],
+  "triggers": [
+    "opencode",
+    "coding agent",
+    "code review",
+    "patch generation"
+  ],
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "task": {
+        "type": "string",
+        "description": "Coding-oriented task for OpenCode"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Optional working directory inside repo/workspace"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Optional timeout in milliseconds"
+      },
+      "mode": {
+        "type": "string",
+        "description": "analyze | patch | test | review"
+      },
+      "context": {
+        "type": "string",
+        "description": "Optional code/test context"
+      }
+    },
+    "required": [
+      "task"
+    ]
+  }
+}
+

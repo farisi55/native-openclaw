@@ -3,7 +3,7 @@ import { join, resolve } from 'path';
 import type { IProvider } from '../types/provider';
 import { createLogger } from '../utils/logger';
 import { BugAnalyzerAgent } from './bug-analyzer-agent';
-import { CodingAgent } from './coding-agent';
+import { CodingAgent, type OpenCodeFallbackState } from './coding-agent';
 import { DependencyResolver } from './dependency-resolver';
 import { DiffGenerator } from './diff-generator';
 import { HealingStore } from './healing-store';
@@ -12,7 +12,7 @@ import { PatchApplier } from './patch-applier';
 import { PatchPlanner } from './patch-planner';
 import { QAAgent } from './qa-agent';
 import { ReportWriter } from './report-writer';
-import { isRestartRequiredForChangedFiles, restartReasonForChangedFiles } from './restart-policy';
+import { filterRestartRelevantChangedFiles, isRestartRequiredForChangedFiles, restartReasonForChangedFiles } from './restart-policy';
 import { SnapshotManager } from './snapshot-manager';
 import { TestRunner } from './test-runner';
 import type { LifecycleManager } from '../runtime/lifecycle-manager';
@@ -90,6 +90,7 @@ export class SelfHealingEngine {
     const testRunner = this.createTestRunner(workdir);
     const dependencyResolver = this.createDependencyResolver(workdir);
     let previousQa: QAReport | undefined;
+    const openCodeState: OpenCodeFallbackState = {};
 
     await this.reportWriter.writeStart(run, {
       maxLoops: this.config.maxLoops,
@@ -123,8 +124,12 @@ export class SelfHealingEngine {
               ...(previousQa ? { previousQa } : {}),
               ...(input.errorLog ? { errorLog: input.errorLog } : {}),
               patchApplier,
+              runId: run.id,
+              loop: loopNo,
+              openCodeState,
             })
           : [];
+        this.syncOpenCodeState(run, openCodeState);
 
         const commands = await testRunner.runAll(this.config.testCommands);
         let qaReport = this.qaAgent.analyze(commands);
@@ -167,6 +172,7 @@ export class SelfHealingEngine {
 
         previousQa = qaReport;
       } catch (err) {
+        this.syncOpenCodeState(run, openCodeState);
         loop.error = err instanceof Error ? err.message : String(err);
         loop.finishedAt = new Date().toISOString();
         run.loops.push(loop);
@@ -239,7 +245,7 @@ export class SelfHealingEngine {
   private async finish(run: HealingRun, status: HealingRun['status'], summary: string): Promise<HealingRun> {
     run.status = status;
     run.finishedAt = new Date().toISOString();
-    run.finalSummary = summary;
+    run.finalSummary = this.withOpenCodeSummary(run, summary);
     await this.reportWriter.writeFinal(run).catch((err: unknown) => {
       logger.warn('self-healing report write failed', { error: err instanceof Error ? err.message : String(err) });
     });
@@ -252,9 +258,12 @@ export class SelfHealingEngine {
         reason: run.restartReason ?? 'self-healing passed and restart is required',
         runId: run.id,
         runType: run.type,
+        restartRequired: run.restartRequired,
+        changedFiles: this.restartNotificationFiles(run),
+        summary: run.finalSummary ?? summary,
       });
       run.restartScheduled = this.lifecycleManager.isRestartScheduled();
-      run.finalSummary = this.successSummary(run, run.currentLoop);
+      run.finalSummary = this.withOpenCodeSummary(run, this.successSummary(run, run.currentLoop));
       await this.reportWriter.writeFinal(run).catch((err: unknown) => {
         logger.warn('self-healing restart report update failed', { error: err instanceof Error ? err.message : String(err) });
       });
@@ -267,13 +276,45 @@ export class SelfHealingEngine {
   }
 
   private markRestartRequirement(run: HealingRun, changedFiles: string[]): void {
-    const requiresRestart = isRestartRequiredForChangedFiles(changedFiles, 'self-healing');
+    const restartFiles = filterRestartRelevantChangedFiles(changedFiles);
+    const requiresRestart = isRestartRequiredForChangedFiles(restartFiles, 'self-healing');
     run.restartRequired = requiresRestart;
     run.restartScheduled = false;
     if (requiresRestart) {
-      const reason = restartReasonForChangedFiles(changedFiles, 'self-healing');
+      const reason = restartReasonForChangedFiles(restartFiles, 'self-healing');
       if (reason) run.restartReason = reason;
     }
+  }
+
+  private syncOpenCodeState(run: HealingRun, state: OpenCodeFallbackState): void {
+    if (state.attempted !== undefined) run.openCodeAttempted = state.attempted;
+    if (state.attempts !== undefined) run.openCodeAttempts = state.attempts;
+    if (state.fallbackUsed !== undefined) run.openCodeFallbackUsed = state.fallbackUsed;
+    if (state.unavailable !== undefined) run.opencodeUnavailable = state.unavailable;
+    if (state.unavailableReason) run.opencodeUnavailableReason = state.unavailableReason;
+    if (state.lastError) run.opencodeError = state.lastError;
+    if (state.lastErrorType) run.opencodeErrorType = state.lastErrorType;
+    if (state.lastSuggestion) run.opencodeSuggestion = state.lastSuggestion;
+  }
+
+  private withOpenCodeSummary(run: HealingRun, summary: string): string {
+    if (run.opencodeErrorType === 'timed-out-with-changes') {
+      return `${summary} OpenCode timed out after making changes. QA passed, so changes were accepted.`;
+    }
+    if (run.opencodeErrorType === 'permission-warning') {
+      return `${summary} OpenCode reported permission-rejected but produced meaningful changes. QA passed, so changes were accepted.`;
+    }
+    if (run.openCodeFallbackUsed && run.opencodeErrorType) {
+      const suggestion = run.opencodeSuggestion ? ` Suggestion: ${run.opencodeSuggestion}` : '';
+      return `${summary} OpenCode failed: ${run.opencodeErrorType}.${suggestion} Internal CodingAgent fallback was used.`;
+    }
+    if (run.openCodeFallbackUsed && run.opencodeUnavailableReason) {
+      return `${summary} OpenCode was attempted but unavailable (${run.opencodeUnavailableReason}), so internal CodingAgent fallback was used.`;
+    }
+    if (run.openCodeFallbackUsed) {
+      return `${summary} OpenCode was attempted and internal CodingAgent fallback was used.`;
+    }
+    return summary;
   }
 
   private async attachRunDiffs(run: HealingRun, snapshot: SnapshotManager, workdir: string): Promise<void> {
@@ -302,6 +343,12 @@ export class SelfHealingEngine {
       return this.config.autoRestart ? `${base} Restart is required, but no lifecycle restart was scheduled.` : `${base} Restart is required.`;
     }
     return base;
+  }
+
+  private restartNotificationFiles(run: HealingRun): string[] {
+    const fromDiffs = run.fileDiffs?.map((diff) => diff.path) ?? [];
+    const fromLoops = run.loops.flatMap((loop) => loop.changedFiles ?? []);
+    return filterRestartRelevantChangedFiles([...fromDiffs, ...fromLoops]);
   }
 }
 

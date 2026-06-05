@@ -1,4 +1,10 @@
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
+import {
+  sendRestartNotifications,
+  writeRestartPendingNotification,
+  type RestartNotificationInput,
+  type RestartNotificationResult,
+} from './restart-notifier';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('runtime:lifecycle');
@@ -6,7 +12,10 @@ const logger = createLogger('runtime:lifecycle');
 export interface RestartRequest {
   reason: string;
   runId?: string;
-  runType?: string;
+  runType?: 'self-healing' | 'self-upgrade' | string;
+  changedFiles?: string[];
+  summary?: string;
+  restartRequired?: boolean;
   delayMs?: number;
   exitCode?: number;
 }
@@ -18,7 +27,9 @@ interface LifecycleManagerOptions {
   manualEnabled?: boolean;
   isTestRuntime?: boolean;
   exitFn?: (code?: number) => never | void;
-  setTimeoutFn?: (callback: () => void, delayMs: number) => unknown;
+  setTimeoutFn?: (callback: () => void | Promise<void>, delayMs: number) => unknown;
+  notifyRestartFn?: (input: RestartNotificationInput) => Promise<RestartNotificationResult>;
+  writePendingRestartFn?: (input: RestartNotificationInput) => Promise<void>;
 }
 
 export function isTestRuntime(): boolean {
@@ -73,9 +84,13 @@ export class LifecycleManager {
       exitCode,
     });
 
-    const schedule = this.options.setTimeoutFn ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
+    const notificationInput = this.buildRestartNotificationInput(input, delayMs, exitCode);
+    const schedule = this.options.setTimeoutFn ?? ((callback: () => void | Promise<void>, ms: number) => setTimeout(callback, ms));
     const exit = this.options.exitFn ?? ((code?: number) => process.exit(code));
-    schedule(() => {
+    schedule(async () => {
+      if (notificationInput) {
+        await this.notifyBeforeExit(notificationInput);
+      }
       process.exitCode = exitCode;
       exit(exitCode);
     }, delayMs);
@@ -104,6 +119,65 @@ export class LifecycleManager {
       manualEnabled: this.isManualRestartEnabled(),
       testRuntime: this.options.isTestRuntime ?? isTestRuntime(),
     };
+  }
+
+  private buildRestartNotificationInput(
+    input: RestartRequest,
+    delayMs: number,
+    exitCode: number
+  ): RestartNotificationInput | null {
+    if (input.runType !== 'self-healing' && input.runType !== 'self-upgrade') return null;
+    if (!input.runId) return null;
+
+    return {
+      runId: input.runId,
+      runType: input.runType,
+      status: 'passed',
+      restartRequired: input.restartRequired ?? true,
+      autoRestartScheduled: true,
+      delayMs,
+      exitCode,
+      reason: input.reason,
+      changedFiles: [...new Set(input.changedFiles ?? [])].sort(),
+      summary: input.summary ?? input.reason,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async notifyBeforeExit(input: RestartNotificationInput): Promise<void> {
+    const writePending = this.options.writePendingRestartFn ?? writeRestartPendingNotification;
+    const notify = this.options.notifyRestartFn ?? sendRestartNotifications;
+
+    try {
+      await writePending(input);
+    } catch (err) {
+      logger.warn('restart pending marker write failed', {
+        runId: input.runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const result = await notify(input);
+      if (result.ok) {
+        logger.info('restart notifications completed', {
+          runId: input.runId,
+          telegram: result.telegram?.ok ?? false,
+          email: result.email?.ok ?? false,
+          errors: result.errors,
+        });
+      } else {
+        logger.warn('restart notifications failed but restart will continue', {
+          runId: input.runId,
+          errors: result.errors,
+        });
+      }
+    } catch (err) {
+      logger.warn('restart notification threw but restart will continue', {
+        runId: input.runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 

@@ -33,6 +33,7 @@ import {
   type UpgradeEngineConfig,
 } from './self-healing';
 import { LifecycleManager } from './runtime/lifecycle-manager';
+import { sendPendingRestartNotificationIfAny } from './runtime/restart-notifier';
 
 const autonomousLogger = createLogger('bootstrap:autonomous');
 
@@ -540,6 +541,22 @@ async function bootstrap(): Promise<void> {
     scheduler,
     selfHealing: selfHealingContext,
   }, config.storage.dataDir);
+
+  await sendPendingRestartNotificationIfAny()
+    .then((result) => {
+      if (!result) return;
+      logger.info('restart after-start notification processed', {
+        ok: result.ok,
+        telegram: result.telegram?.ok ?? false,
+        email: result.email?.ok ?? false,
+        errors: result.errors,
+      });
+    })
+    .catch((err: unknown) => {
+      logger.warn('restart after-start notification failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
   await startCLI({
     providers,

@@ -51,6 +51,14 @@ export class PatchApplier {
     return [...new Set(changed)].sort();
   }
 
+  async snapshotFile(filePath: string): Promise<void> {
+    await this.snapshot.snapshotFile(filePath);
+  }
+
+  async snapshotOriginalContent(filePath: string, content: string | null): Promise<void> {
+    await this.snapshot.snapshotContent(filePath, content);
+  }
+
   getChangedFiles(): string[] {
     return this.snapshot.getChangedFiles();
   }

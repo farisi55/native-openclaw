@@ -11,6 +11,48 @@ export { runApiClient }      from './api-client';
 export type { ApiResult, ApiClientInput } from './api-client';
 
 export {
+  classifyOpenCodeError,
+  buildOpenCodeArgsPreview,
+  previewOpenCodeArgs,
+  runOpenCodeAgent,
+  runOpenCodeDoctor,
+  validateOpenCodeArgsTemplate,
+} from './opencode-agent';
+export type {
+  OpenCodeAgentInput,
+  OpenCodeAgentMode,
+  OpenCodeAgentResult,
+  OpenCodeArgsTemplateValidation,
+  OpenCodeDoctorResult,
+  OpenCodeErrorDiagnostic,
+  OpenCodeErrorType,
+} from './opencode-agent';
+export {
+  bootstrapOpenCodeAuthFromEnv,
+  defaultOpenCodeAuthFile,
+  getOpenCodeAuthStatus,
+  openCodeAuthHasProvider,
+  resolveOpenCodeAuthFile,
+} from './opencode-auth';
+export type {
+  OpenCodeAuthBootstrapResult,
+  OpenCodeAuthStatus,
+} from './opencode-auth';
+export {
+  approveOpenCodeInstall,
+  detectOpenCode,
+  getOpenCodeInstallCommand,
+  installOpenCode,
+  rejectOpenCodeInstall,
+} from './opencode-installer';
+export type {
+  OpenCodeDetectionResult,
+  OpenCodeInstallCommand,
+  OpenCodeInstallResult,
+  OpenCodeInstallStrategy,
+} from './opencode-installer';
+
+export {
   approveCommand,
   classifyCommandRisk,
   listCustomCommands,
