@@ -382,10 +382,6 @@ export function quoteWindowsArg(arg: string): string {
     .replace(/%/g, '%%')}"`;
 }
 
-function buildWindowsShellCommand(command: string, args: string[]): string {
-  return [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(' ');
-}
-
 function buildExecutionCommand(input: {
   detection: OpenCodeDetectionResult;
   fallbackCommand: string;
@@ -394,9 +390,13 @@ function buildExecutionCommand(input: {
   const executionCommand = input.detection.resolvedCommand || input.fallbackCommand;
   const executionShell = input.detection.shell ?? false;
   if (executionShell && input.detection.executionStrategy === 'windows-shell') {
+    // Keep command and args separate. Passing one fully concatenated command
+    // string to cmd.exe breaks nested quotes around the long task argument and
+    // can leave OpenCode waiting forever with no stdout/stderr. Let Node's
+    // shell execution handle argument quoting instead.
     return {
-      command: buildWindowsShellCommand(executionCommand, input.args),
-      args: [],
+      command: executionCommand,
+      args: input.args,
       shell: true,
     };
   }
@@ -458,6 +458,7 @@ function runDetectedOpenCodeCommand(input: {
         shell: execution.shell,
         windowsHide: true,
         env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
         detached: killTree && platform !== 'win32',
       });
     } catch (error) {
@@ -954,6 +955,7 @@ export async function runOpenCodeAgent(input: OpenCodeAgentInput | string): Prom
         shell: execution.shell,
         windowsHide: true,
         env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
         detached: killTree && platform !== 'win32',
       });
     } catch (error) {

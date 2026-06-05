@@ -338,12 +338,34 @@ test('Telegram processing timeout sends friendly timeout response', async () => 
   });
 });
 
-test('Telegram polling conflict logs first warning and suppresses repeated conflicts', async () => {
+test('Telegram polling errors are completely suppressed when logPollingErrors=false', async () => {
   await withDeps(async (deps, dataDir) => {
     const integration = new TelegramIntegration(
       deps,
       telegramConfig({
         logPollingErrors: false,
+        suppressConflictErrors: true,
+        conflictBackoffMs: 60000,
+      }),
+      dataDir
+    );
+
+    const conflict = captureStream(process.stderr, () => integration.handlePollingError(conflictError, 1));
+    const secondConflict = captureStream(process.stderr, () => integration.handlePollingError(conflictError, 2));
+    const nonConflict = captureStream(process.stderr, () => integration.handlePollingError(new Error('network timeout'), 1));
+
+    assert.equal(conflict.output, '');
+    assert.equal(secondConflict.output, '');
+    assert.equal(nonConflict.output, '');
+  });
+});
+
+test('Telegram polling conflict throttled when logPollingErrors=true', async () => {
+  await withDeps(async (deps, dataDir) => {
+    const integration = new TelegramIntegration(
+      deps,
+      telegramConfig({
+        logPollingErrors: true,
         suppressConflictErrors: true,
         conflictBackoffMs: 60000,
       }),
@@ -385,7 +407,7 @@ test('Telegram polling recovery log is disabled by default', async () => {
   });
 });
 
-test('Telegram verbose polling errors log every conflict', async () => {
+test('Telegram verbose polling errors log every non-conflict error', async () => {
   await withDeps(async (deps, dataDir) => {
     const integration = new TelegramIntegration(
       deps,
@@ -394,8 +416,8 @@ test('Telegram verbose polling errors log every conflict', async () => {
     );
 
     const { output } = captureStream(process.stderr, () => {
-      integration.handlePollingError(conflictError, 1);
-      integration.handlePollingError(conflictError, 2);
+      integration.handlePollingError(new Error('network timeout'), 1);
+      integration.handlePollingError(new Error('network timeout'), 2);
     });
 
     const matches = output.match(/Telegram polling error/g) ?? [];

@@ -229,6 +229,7 @@ function runSpawn(input: {
         shell: input.shell ?? false,
         windowsHide: true,
         env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -325,6 +326,48 @@ export async function detectOpenCode(
           resolvedCommand: cmdCommand,
           shell: false,
         };
+      }
+
+      // npm global binaries on Windows are often available to cmd.exe but not
+      // resolvable by direct spawn through PATH. Resolve the actual .cmd path
+      // with `where` and then execute that path with shell=false. This avoids
+      // nested cmd quoting issues for long OpenCode prompts.
+      const whereResult = await runSpawn({
+        command: 'where',
+        args: ['opencode'],
+        timeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+        shell: true,
+        deps,
+      });
+      if (whereResult.ok) {
+        const candidates = whereResult.stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const resolved = candidates.find((line) => /\.cmd$/i.test(line))
+          ?? candidates.find((line) => /\.exe$/i.test(line))
+          ?? candidates[0];
+        if (resolved) {
+          const resolvedResult = await runSpawn({
+            command: resolved,
+            args: ['--version'],
+            timeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+            deps,
+          });
+          if (resolvedResult.ok) {
+            const version = resolvedResult.stdout || resolvedResult.stderr || 'unknown';
+            logger.info('OpenCode detected through Windows where resolution', { command: binary, resolvedCommand: resolved, version });
+            return {
+              installed: true,
+              command: binary,
+              version,
+              path: resolved,
+              executionStrategy: 'resolved-cmd',
+              resolvedCommand: resolved,
+              shell: false,
+            };
+          }
+        }
       }
     }
 

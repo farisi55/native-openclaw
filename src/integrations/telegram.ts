@@ -153,7 +153,6 @@ export class TelegramIntegration {
   private readonly chatQueues = new Map<string, Promise<void>>();
   private lastConflictLogAt = 0;
   private conflictErrorCount = 0;
-  private lastPollingErrorMessage: string | null = null;
 
   constructor(
     private readonly deps: ApiDependencies,
@@ -332,7 +331,6 @@ export class TelegramIntegration {
         this.logPollingRecovery(consecutiveErrors);
 
         consecutiveErrors = 0;
-        this.lastPollingErrorMessage = null;
 
         for (const update of updates) {
           this.offset = Math.max(this.offset, update.update_id + 1);
@@ -354,23 +352,15 @@ export class TelegramIntegration {
     const isConflict = isTelegramConflictError(err);
 
     if (this.runtime.logPollingErrors) {
-      logger.warn('Telegram polling error', {
-        error: message,
-        consecutiveErrors,
-      });
-    } else if (isConflict && this.runtime.suppressConflictErrors) {
-      this.logTelegramConflict(consecutiveErrors);
-    } else if (
-      consecutiveErrors === 1 ||
-      message !== this.lastPollingErrorMessage
-    ) {
-      logger.warn('Telegram polling error', {
-        error: message,
-        consecutiveErrors,
-      });
+      if (isConflict && this.runtime.suppressConflictErrors) {
+        this.logTelegramConflict(consecutiveErrors);
+      } else {
+        logger.warn('Telegram polling error', {
+          error: message,
+          consecutiveErrors,
+        });
+      }
     }
-
-    this.lastPollingErrorMessage = message;
 
     if (isConflict) return this.runtime.conflictBackoffMs;
     return Math.min(

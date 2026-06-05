@@ -29,10 +29,10 @@ export function isApplicationDebugFixRequest(input: string): boolean {
 export function telegramPollingLogFixInstruction(): string {
   return [
     'Fix Native OpenClaw Telegram polling error/recovery log spam.',
-    'Ensure TELEGRAM_LOG_POLLING_ERRORS=false suppresses repeated polling errors.',
+    'Ensure TELEGRAM_LOG_POLLING_ERRORS=false suppresses all polling errors (master switch).',
     'Ensure TELEGRAM_RECOVERY_LOG_ENABLED=false suppresses polling recovered logs.',
-    'Ensure TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true suppresses repeated Telegram 409 getUpdates conflict warnings.',
-    'Inspect src/integrations/telegram.ts and keep normal non-conflict error handling intact.',
+    'When TELEGRAM_LOG_POLLING_ERRORS=true, TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true throttles repeated Telegram 409 getUpdates conflict warnings.',
+    'Inspect src/integrations/telegram.ts handlePollingError to verify logPollingErrors gates all error logging.',
   ].join(' ');
 }
 
@@ -41,13 +41,12 @@ export function applicationDebugDiagnostic(selfHealingEnabled: boolean): string 
     'Ini bukan permintaan menjalankan OS command. Ini terlihat seperti issue logging/config Native OpenClaw.',
     '',
     'Area yang perlu dianalisis:',
-    '- src/integrations/telegram.ts',
-    '- TELEGRAM_LOG_POLLING_ERRORS=false',
-    '- TELEGRAM_RECOVERY_LOG_ENABLED=false',
-    '- TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true',
-    '- suppression untuk conflict 409 getUpdates dan log "Telegram polling recovered"',
+    '- src/integrations/telegram.ts: handlePollingError — logPollingErrors harus menjadi master switch',
+    '- TELEGRAM_LOG_POLLING_ERRORS=false (suppress semua polling error)',
+    '- TELEGRAM_RECOVERY_LOG_ENABLED=false (suppress log recovery)',
+    '- TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true (hanya berlaku saat logPollingErrors=true)',
     '',
-    'Kemungkinan akar masalah: integrasi Telegram masih mencetak polling error/recovered walaupun flag suppression sudah diatur.',
+    'Kemungkinan akar masalah: handlePollingError tetap mencetak error pertama meskipun logPollingErrors=false.',
   ];
 
   if (selfHealingEnabled) {
