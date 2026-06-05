@@ -2,7 +2,35 @@
 
 > Multi-provider AI agent terminal — native TypeScript, zero framework lock-in.
 
-Runs a fully interactive chat REPL against any combination of Groq, Mistral, OpenRouter, OpenAI, Anthropic, Gemini, or a local Ollama server. Conversation history persists to disk as plain JSON. Skills are plain Markdown files with YAML frontmatter injected into every system prompt.
+Interactive chat REPL dengan arsitektur reasoning-first yang mendukung 10 provider LLM secara bersamaan. Setiap percakapan disimpan sebagai plain JSON. Skill system berbasis file Markdown. Dilengkapi HTTP API, Web UI, Telegram bot, cronjob scheduler, semantic memory, self-healing, dan self-upgrade.
+
+---
+
+## Features
+
+- **Multi-provider router** — 10 provider aktif bersamaan, auto-fallback, task-aware routing
+- **Reasoning-first orchestrator** — internal reasoning sebelum setiap tool call
+- **Semantic memory** — TF-IDF local (tanpa vector DB eksternal), persisten antar sesi
+- **ReAct loop** — Reason → Action → Observe → Answer, hingga 4 steps per turn
+- **Prompt optimizer** — compresses context, classifies intent, optimizes token usage
+- **Workspace** — local-first agent home dengan MEMORY.md, WORKFLOW.md, HEARTBEAT.md
+- **Scheduler** — cronjob dari natural language, timezone-aware, email notification
+- **Self-Improving** — ekstraksi skill otomatis dari setiap percakapan
+- **Self-Healing** — deteksi bug → patch → QA → rollback, fully autonomous
+- **Self-Upgrade** — implementasi fitur baru ke codebase sendiri
+- **MCP** — Model Context Protocol dengan preset server (tavily, firecrawl, brevo, e2b)
+- **HTTP API** — REST endpoint dengan auth token dan rate limiting
+- **Web UI** — lightweight chat UI (smooth) berbasis vanilla HTML/CSS/JS
+- **Telegram** — full bot integration dengan polling dan queue management
+
+---
+
+## Requirements
+
+| Tool | Minimum |
+|------|---------|
+| Node.js | >= 20.0.0 |
+| npm | >= 10.0.0 |
 
 ---
 
@@ -14,137 +42,511 @@ cd native-openclaw
 npm install
 
 cp .env.example .env
-$EDITOR .env   # add at least one API key
+# Edit .env — tambahkan minimal satu API key provider
 
-npm run dev    # development (no build)
-# or
+npm run dev      # development, tanpa build step
+# atau
 npm run build && npm start
 ```
 
 ---
 
-## Requirements
-
-| Tool | Version |
-|------|---------|
-| Node.js | >= 20.0.0 |
-| npm | >= 10.0.0 |
-
----
-
 ## Providers
 
-Set the appropriate key in `.env`. Multiple providers can be active simultaneously. Switch at runtime with `/provider <id>`.
+Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runtime dengan `/provider <id>`.
 
-| Provider | Env Variable | Notes |
-|----------|-------------|-------|
-| Groq | `GROQ_API_KEY` | Fastest inference |
-| OpenRouter | `OPENROUTER_API_KEY` | 200+ models |
-| Mistral | `MISTRAL_API_KEY` | EU-hosted |
-| OpenAI | `OPENAI_API_KEY` | GPT-4o, o1 |
-| Anthropic | `ANTHROPIC_API_KEY` | Claude |
-| Gemini | `GEMINI_API_KEY` | Gemini 2.0 |
-| Ollama | *(none)* | `OLLAMA_BASE_URL` default: `http://localhost:11434` |
+| Provider | Env Variable | Default Model | Notes |
+|----------|-------------|---------------|-------|
+| Groq | `GROQ_API_KEY` | `llama-3.3-70b-versatile` | Fastest inference |
+| OpenRouter | `OPENROUTER_API_KEY` | `openai/gpt-4o` | 200+ models |
+| Mistral | `MISTRAL_API_KEY` | `mistral-large-latest` | EU-hosted |
+| OpenAI | `OPENAI_API_KEY` | `gpt-4o` | GPT-4o, o1 |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-4-20250514` | Claude |
+| Gemini | `GEMINI_API_KEY` | `gemini-2.0-flash` | Vision support |
+| Z.ai | `ZAI_API_KEY` | `glm-4.5` | `ZAI_BASE_URL` required |
+| SambaNova | `SAMBANOVA_API_KEY` | `DeepSeek-V3.1` | Reasoning-optimized |
+| Puter | `PUTER_API_KEY` | `gpt-5.5` | Backend ProviderRouter only |
+| Ollama | *(none)* | — | `OLLAMA_BASE_URL=http://localhost:11434` |
 
----
+### Smart Router
 
-## CLI Commands
+`ProviderRouter` memilih provider terbaik per task secara otomatis:
 
-Type `/help` inside the REPL to see all commands.
+| Task Type | Priority Order |
+|-----------|----------------|
+| `fast_chat` | groq → sambanova → openrouter → mistral → ollama |
+| `reasoning` | sambanova → gemini → openrouter → groq → ollama |
+| `coding` | sambanova → groq → mistral → openrouter → ollama |
+| `vision` | gemini → openrouter → ollama |
+| `local` | ollama |
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show command reference |
-| `/models [provider]` | List all models, or filter by provider |
-| `/skills` | Show registered skills and status |
-| `/skills on <id>` | Activate a skill |
-| `/skills off <id>` | Deactivate a skill |
-| `/session` | Show current session info |
-| `/session new` | Start a fresh session |
-| `/session list` | List all saved sessions |
-| `/session <id>` | Resume a session by partial ID |
-| `/provider` | Show current + all available providers |
-| `/provider <id>` | Switch provider |
-| `/exit` | Quit |
-
----
-
-## Web UI (smooth)
-
-`smooth` is an optional lightweight Web Chat UI (vanilla HTML/CSS/JS) that shares the same orchestrator pipeline as the CLI and HTTP API.
-
-Enable in `.env`:
+Router melacak health setiap provider (latency, error rate). Jika provider utama gagal, auto-fallback ke provider berikutnya — transparan tanpa interrupsi.
 
 ```env
-WEB_UI_ENABLED=true
-WEB_UI_HOST=0.0.0.0
-WEB_UI_PORT=18790
-WEB_UI_USERNAME=admin
-WEB_UI_PASSWORD=change-me
-WEB_UI_SESSION_SECRET=change-this-secret
+ROUTER_ENABLED=true    # aktifkan multi-provider router
+AUTO_FALLBACK=true     # auto-switch ke provider lain saat gagal
+AUTO_SWITCH=true       # proactive switching berdasarkan task type
 ```
-
-Run `npm start`, then open `http://localhost:18790`.
-
-### Puter Provider Mode
-
-Puter.ai can be used as the preferred model provider for Web UI requests while keeping all orchestration (tools, memory, scheduler, self-healing) on the backend.
-
-```env
-PUTER_ENABLED=true
-PUTER_API_KEY=
-PUTER_BASE_URL=
-PUTER_DEFAULT_MODEL=gpt-5.5
-PUTER_DISABLE_TEMPERATURE=true   # some Puter models reject custom temperature
-
-WEB_UI_PUTER_ENABLED=true
-WEB_UI_PUTER_PROVIDER_ID=puter
-WEB_UI_PUTER_DEFAULT_MODEL=gpt-5-nano
-```
-
-**Notes:**
-- CLI, Telegram, and direct API clients are unaffected unless they explicitly pass `preferredProvider=puter`.
-- If Puter fails, ProviderRouter falls back to normal backend providers.
-- Direct frontend Puter.js final-answer mode is not supported (it bypasses orchestration).
-- To opt in to temperature on a supported model: set `PUTER_DISABLE_TEMPERATURE=false` and `PUTER_TEMPERATURE=0.2`.
 
 ---
 
-## OpenCode Agent Tool
+## Architecture
 
-OpenCode is an optional external coding agent — not a general chat fallback provider.
+```
+User Input
+    │
+    ▼
+Memory Extractor       ← extract & persist learned facts from conversation
+    │
+    ▼
+Capability Installer   ← deteksi natural-language install intent
+    │
+    ▼
+Action Handler         ← CLI management actions (/session, /skills, dst)
+    │
+    ▼
+Reasoning Engine       ← internal micro-LLM: tool needed? which one? (temp=0)
+    │
+    ▼
+Context Compressor     ← TF-IDF semantic retrieval + sliding window
+    │
+    ▼
+Prompt Builder         ← base prompt + memory + workspace + skills + tools
+    │
+    ▼
+ReAct Loop / ToolLoop  ← LLM via ProviderRouter → tool calls → observe → repeat
+    │
+    ▼
+Semantic Memory Store  ← index exchange untuk future retrieval
+    │
+    ▼
+Response
+```
 
-**Use cases:** self-healing patch generation, self-upgrade, code review, coding task analysis.
+**ReAct Loop** internal per turn:
+1. **REASON** — LLM memutuskan action (JSON internal, `temp=0`)
+2. **ACTION** — jalankan tool / browse / shell command / direct answer
+3. **OBSERVE** — inject tool result ke LLM
+4. **REASON** — LLM bisa ambil step berikutnya (maks `REACT_MAX_STEPS=4`)
+5. **ANSWER** — LLM generate final response ke user
+
+---
+
+## CLI Reference
+
+Jalankan `/help` di dalam REPL untuk melihat semua command.
+
+### Providers & Models
+
+| Command | Keterangan |
+|---------|-----------|
+| `/provider` | Tampilkan provider aktif |
+| `/providers` | Tampilkan semua provider |
+| `/provider <id>` | Ganti provider |
+| `/model` | Tampilkan model aktif |
+| `/model <model-id>` | Ganti model |
+| `/models` | List semua model dari semua provider |
+| `/models <provider>` | List model untuk satu provider |
+
+### Sessions
+
+| Command | Keterangan |
+|---------|-----------|
+| `/session` | Info session aktif |
+| `/session new` | Mulai session baru |
+| `/session list` | List semua session tersimpan |
+| `/session <id>` | Resume session |
+| `/session switch <id>` | Resume session by ID |
+| `/session delete <id>` | Hapus session |
+
+### Skills
+
+| Command | Keterangan |
+|---------|-----------|
+| `/skills` | List semua skill dan status |
+| `/skills on <id>` | Aktifkan skill |
+| `/skills off <id>` | Nonaktifkan skill |
+
+### Workspace
+
+| Command | Keterangan |
+|---------|-----------|
+| `/workspace` | Info workspace |
+| `/workspace info` | Status workspace |
+| `/workspace init` | Buat file workspace yang hilang |
+| `/workspace reload` | Reload workspace context |
+| `/workspace list` | List file workspace |
+| `/workspace tree` | Tampilkan tree workspace |
+| `/workspace read <file>` | Baca file workspace |
+| `/workspace write <file> <text>` | Tulis file workspace |
+| `/workspace append <file> <text>` | Append ke file workspace |
+| `/workspace mkdir <folder>` | Buat folder workspace |
+| `/workspace trash <file>` | Pindah path ke trash |
+| `/workspace backup` | Buat backup workspace |
+
+### Memory
+
+| Command | Keterangan |
+|---------|-----------|
+| `/memory` | Tampilkan perintah memory |
+| `/memory show` | Baca MEMORY.md |
+| `/memory daily` | Baca daily memory log hari ini |
+| `/heartbeat` | Tampilkan HEARTBEAT.md checklist |
+
+### MCP
+
+| Command | Keterangan |
+|---------|-----------|
+| `/mcp` | Tampilkan help MCP |
+| `/mcp list` | List MCP server yang dikonfigurasi |
+| `/mcp add <name> [json]` | Tambah MCP server preset atau custom |
+| `/mcp start <name>` | Start MCP server |
+| `/mcp stop <name>` | Stop MCP server |
+| `/mcp tools [name]` | List MCP tools |
+
+### Workflows & Scheduler
+
+| Command | Keterangan |
+|---------|-----------|
+| `/workflow` | Help workflow |
+| `/workflow show` | Tampilkan ringkasan WORKFLOW.md |
+| `/workflow run` | Eksekusi WORKFLOW.md |
+| `/workflow validate` | Validasi WORKFLOW.md |
+| `/cron` | Help cronjob |
+| `/cron list` | List semua cronjob |
+| `/cron create <text>` | Buat cronjob dari natural language |
+| `/cron run <id-or-name>` | Jalankan cronjob sekarang |
+
+### Self-Improve, Self-Heal, Upgrade
+
+| Command | Keterangan |
+|---------|-----------|
+| `/self-improve status` | Status self-improvement loop |
+| `/self-improve skills` | List auto-generated skills |
+| `/self-improve evaluate` | Jalankan skill self-evaluation |
+| `/heal` | Trigger self-healing (debug mode) |
+| `/upgrade` | Trigger self-upgrade |
+
+### Tools, Settings, Network
+
+| Command | Keterangan |
+|---------|-----------|
+| `/tools` | List semua tool terinstall |
+| `/tools install <name>` | Install tool dari `tools/available/` |
+| `/tools enable <name>` | Enable tool yang dinonaktifkan |
+| `/tools disable <name>` | Disable tool (tetap terinstall) |
+| `/settings` | Tampilkan persistent settings |
+| `/settings default-model <id>` | Set default model untuk provider aktif |
+| `/settings default-provider <id>` | Set default provider |
+| `/network` | Help network diagnostics |
+| `/network dns` | DNS server yang dikonfigurasi |
+| `/network check <host>` | Resolve hostname |
+| `/network proxy` | Tampilkan proxy config |
+| `/exit` | Keluar |
+
+### Natural Language Actions (Tanpa Slash)
+
+```text
+list skills               → sama seperti /skills
+use skill <id>            → aktifkan skill
+install skill <id>        → install skill
+disable skill <id>        → nonaktifkan skill
+delete session <id>       → hapus session
+what time is it?          → system time (via tool)
+what is the news?         → web search (via browsing tool)
+fetch url <url>           → web fetch
+get data from API /path   → internal API client
+```
+
+---
+
+## Built-in Tools
+
+Tool tersedia otomatis untuk LLM selama percakapan.
+
+| Tool | Fungsi |
+|------|--------|
+| `web-fetch` | Fetch URL dan ekstrak konten (Tavily → Firecrawl fallback) |
+| `system-execute` | Eksekusi shell command lokal dengan risk classification |
+| `api-client` | HTTP request ke internal/external API |
+| `opencode-agent` | External coding agent (opsional, perlu instalasi) |
+| `system-time` | Waktu dan tanggal sistem |
+| `brevo-email` | Kirim email via Brevo API |
+| `workspace-read` | Baca file workspace |
+| `workspace-write` | Tulis file workspace |
+| `workspace-append` | Append ke file workspace |
+| `workspace-list` | List isi workspace |
+| `workspace-tree` | Tree struktur workspace |
+| `workspace-info` | Info dan statistik workspace |
+| `workspace-mkdir` | Buat direktori workspace |
+| `workspace-trash` | Pindah file ke trash |
+| `workspace-backup` | Backup workspace |
+
+### System Execute Security
+
+`system-execute` menggunakan risk-based policy:
+
+```env
+SYSTEM_EXECUTE_ENABLED=true
+SYSTEM_EXECUTE_POLICY=risk-based
+SYSTEM_EXECUTE_ALLOW_ARBITRARY=true
+SYSTEM_EXECUTE_REQUIRE_APPROVAL_FOR_DANGEROUS=true   # dangerous commands perlu approval
+SYSTEM_EXECUTE_TIMEOUT=30000
+SYSTEM_EXECUTE_REDACT_SECRETS=true                   # redact env var dari logs
+```
+
+### Browsing
+
+Tavily sebagai primary, Firecrawl sebagai fallback:
+
+```env
+TAVILY_API_KEY=
+FIRECRAWL_API_KEY=
+BROWSING_TIMEOUT_MS=15000
+BROWSING_MAX_RESULTS=5
+```
+
+---
+
+## Skills
+
+Skill adalah file Markdown di direktori `skills/` yang diinjeksi ke setiap system prompt.
+
+### Frontmatter Schema
+
+```yaml
+---
+name: Code Reviewer          # wajib
+description: Reviews code    # wajib
+version: 1.0.0
+tags: [coding, review]
+priority: 10                 # lebih tinggi = diinjeksi lebih awal (default: 0)
+enabled: true
+---
+
+Konten Markdown — diinjeksi verbatim ke system prompt.
+```
+
+### Contoh Skill
+
+```markdown
+---
+name: Concise Responder
+description: Selalu menjawab secara singkat dan dalam poin-poin
+priority: 5
+enabled: true
+---
+
+## Rules
+- Maksimal 150 kata per respons.
+- Gunakan bullet points, bukan prosa panjang.
+- Skip preamble dan sign-off.
+```
+
+### Self-Improving Skills
+
+Ketika `SELF_IMPROVING=true`, engine secara otomatis mengekstrak skill baru dari setiap percakapan yang selesai, mengevaluasi kualitasnya, dan mendaftarkan skill yang lolos threshold ke registry.
+
+```env
+SELF_IMPROVING=false
+SELF_IMPROVING_EVAL_THRESHOLD=10     # jumlah turn sebelum evaluasi dijalankan
+SELF_IMPROVING_MODEL=                # opsional: provider/model untuk evaluasi
+```
+
+Skill auto-generated disimpan di `SKILLS_DIR/auto-generated/`. Monitor dengan `/self-improve status`.
+
+---
+
+## Workspace
+
+Local-first agent home. Setiap instance menyimpan state, memory, report, dan artifact di sini.
+
+### Struktur Direktori
+
+```
+workspace/
+├── IDENTITY.md      # identitas dan persona agent
+├── SOUL.md          # nilai dan prinsip agent
+├── AGENTS.md        # definisi multi-agent
+├── USER.md          # preferensi dan info user
+├── TOOLS.md         # panduan penggunaan tool
+├── MEMORY.md        # long-term memory yang dikurasi
+├── WORKFLOW.md      # instruksi workflow otomatis
+├── HEARTBEAT.md     # recurring checklist
+├── state/           # session state
+├── memory/          # daily memory logs (YYYY-MM-DD.md)
+├── reports/         # output workflow dan laporan
+├── artifacts/       # file hasil kerja agent
+├── backup/          # backup otomatis
+└── trash/           # file yang dihapus (recoverable)
+```
+
+### Workspace Memory
+
+Agent otomatis menulis ke `MEMORY.md` ketika mendeteksi informasi penting (preferensi user, keputusan project, event signifikan). Daily log tersimpan di `memory/YYYY-MM-DD.md`.
+
+```env
+WORKSPACE_MEMORY_ENABLED=true
+WORKSPACE_DAILY_MEMORY_ENABLED=true
+WORKSPACE_DIR=./workspace
+WORKSPACE_ALLOW_OUTSIDE_PATHS=false   # blokir path traversal
+```
+
+---
+
+## Semantic Memory
+
+Implementasi TF-IDF tanpa vector database eksternal. Setiap exchange diindeks berdasarkan keyword dan timestamp, diambil kembali menggunakan cosine-like similarity saat context baru masuk.
+
+- Storage: local JSON (`APP_DATA_DIR/semantic-memory.json`)
+- Retrieval: keyword overlap + recency weighting
+- Kompresi otomatis saat context window mendekati batas
+
+```env
+SEMANTIC_MEMORY=true
+PROMPT_OPTIMIZER_ENABLED=true
+PROMPT_OPTIMIZER_MODE=balanced    # off | fast | balanced | strict
+```
+
+---
+
+## Prompt Optimizer
+
+Sebelum setiap turn, optimizer menganalisis input dan mengompres context untuk efisiensi token.
+
+| Mode | Keterangan |
+|------|-----------|
+| `off` | Disabled |
+| `fast` | Minimal processing, low overhead |
+| `balanced` | Default — intent classification + context compression |
+| `strict` | Full analysis, ambiguity detection, risk flagging |
+
+```env
+PROMPT_OPTIMIZER_MODE=balanced
+PROMPT_OPTIMIZER_MAX_INPUT_CHARS=12000
+PROMPT_OPTIMIZER_MAX_CONTEXT_CHARS=24000
+PROMPT_MAX_ACTIVE_SKILLS=3            # maksimal skill yang diinjeksi per turn
+PROMPT_SKILL_RELEVANCE_ENABLED=true   # injeksi skill berdasarkan relevansi
+```
+
+---
+
+## Scheduler (Cron Jobs)
+
+Buat dan jalankan cronjob dari natural language. Job dieksekusi oleh orchestrator dengan konteks session penuh.
+
+```bash
+/cron create "setiap pagi jam 7 cek berita teknologi dan simpan ke workspace"
+/cron list
+/cron run morning-news
+```
+
+Schedule types yang didukung: `once`, `cron`, `interval`, `daily`, `weekly`, `monthly`.
+
+```env
+SCHEDULER_ENABLED=true
+SCHEDULER_TICK_MS=30000
+SCHEDULER_TIMEZONE=Asia/Jakarta
+SCHEDULER_MISFIRE_POLICY=skip          # skip | run_once | run_all
+SCHEDULER_SESSION_MODE=dedicated       # dedicated | last_active | new_each_run
+SCHEDULER_MAX_CONCURRENT_JOBS=2
+```
+
+Job yang membutuhkan email otomatis generate subject dan HTML content via LLM, lalu kirim melalui Brevo.
+
+---
+
+## Self-Healing
+
+Autonomous bug-fix loop. Ketika diaktifkan dan error terdeteksi:
+
+1. **Bug Analyzer** — analisis error log dan isolasi root cause
+2. **Patch Planner** — rencanakan perubahan file
+3. **Snapshot** — buat snapshot sebelum apply patch
+4. **Patch Applier** — terapkan diff ke source code
+5. **Dependency Resolver** — install missing packages jika dibutuhkan
+6. **Test Runner** — jalankan test commands (build + test)
+7. **QA Agent** — review hasil test
+8. **Rollback** — jika gagal, rollback ke snapshot otomatis
+
+```env
+SELF_HEALING_ENABLED=false
+SELF_HEALING_MAX_LOOPS=3
+SELF_HEALING_AUTO_APPLY=true
+SELF_HEALING_AUTO_ROLLBACK=true
+SELF_HEALING_TEST_COMMANDS=npm run build,npm test
+SELF_HEALING_TIMEOUT_MS=120000
+SELF_HEALING_REDACT_SECRETS=true
+SELF_HEALING_MODEL=                  # opsional: provider/model khusus
+```
+
+Run reports disimpan di `SELF_HEALING_RUNS_DIR=./workspace/self-healing/runs`.
+
+---
+
+## Self-Upgrade
+
+Extends self-healing untuk autonomous feature implementation. Agent membaca request upgrade, menulis kode baru, menjalankan QA, lalu restart otomatis jika lolos.
+
+```env
+SELF_UPGRADE_ENABLED=false
+SELF_UPGRADE_MAX_LOOPS=3
+SELF_UPGRADE_AUTO_APPLY=true
+SELF_UPGRADE_AUTO_ROLLBACK=true
+SELF_UPGRADE_AUTO_RESTART=true          # exit code 42 → Docker restart
+SELF_UPGRADE_AUTO_REGISTER=true
+SELF_UPGRADE_ALLOWED_TARGETS=repo
+```
+
+Setelah upgrade berhasil, proses exit dengan code `42`. Docker Compose dengan `restart: unless-stopped` akan menjalankan ulang container secara otomatis.
+
+### Restart Notifications
+
+```env
+RESTART_NOTIFICATION_ENABLED=true
+RESTART_NOTIFY_TELEGRAM=true
+RESTART_NOTIFY_EMAIL=true
+RESTART_EMAIL_RECIPIENT=you@example.com
+RESTART_NOTIFY_AFTER_START=true     # kirim konfirmasi setelah restart berhasil
+```
+
+---
+
+## OpenCode Agent
+
+Integrasi opsional dengan OpenCode sebagai external coding agent — bukan provider chat biasa.
+
+**Use cases**: self-healing patch generation, self-upgrade, code review, analisis task coding.
 
 ### Setup
 
 ```bash
-# Manual auth
+# Autentikasi manual
 opencode run /connect
 
-# Or bootstrap via .env
+# Atau via .env bootstrap
 OPENCODE_AUTH_BOOTSTRAP=true
-OPENCODE_ZEN_API_KEY=your_key_here
-OPENCODE_AUTH_PROVIDER=opencode   # must be "opencode", not "opencode-zen"
+OPENCODE_ZEN_API_KEY=your_key
+OPENCODE_AUTH_PROVIDER=opencode       # gunakan "opencode", bukan "opencode-zen"
 ```
 
-### Core Config
+### Konfigurasi Utama
 
 ```env
-OPENCODE_AGENT_ENABLED=true
+OPENCODE_AGENT_ENABLED=false
 OPENCODE_AGENT_COMMAND=opencode
 OPENCODE_AGENT_DIRECT_MODE=true
 OPENCODE_AGENT_INJECT_SAFETY_PREAMBLE=false
 OPENCODE_AGENT_ARGS_TEMPLATE=run --dangerously-skip-permissions "{{task}}"
 OPENCODE_AGENT_TIMEOUT_MS=900000
-OPENCODE_AGENT_IDLE_TIMEOUT_MS=0    # disable idle timer in direct mode
+OPENCODE_AGENT_IDLE_TIMEOUT_MS=0       # nonaktifkan idle timer di direct mode
 OPENCODE_AGENT_KILL_GRACE_MS=10000
 OPENCODE_AGENT_KILL_TREE=true
-OPENCODE_AGENT_USE_FOR_SELF_HEALING=true
-OPENCODE_AGENT_USE_FOR_SELF_UPGRADE=true
+OPENCODE_AGENT_USE_FOR_SELF_HEALING=false
+OPENCODE_AGENT_USE_FOR_SELF_UPGRADE=false
 ```
 
-> **Warning:** `--dangerously-skip-permissions` auto-approves all OpenCode permissions. Use only in trusted environments. For safer mode: `OPENCODE_AGENT_ARGS_TEMPLATE=run "{{task}}"`.
+> **Peringatan**: `--dangerously-skip-permissions` auto-approve semua permission OpenCode. Gunakan hanya di environment terisolasi yang terpercaya.
 
 ### Model Config (`opencode.jsonc`)
 
@@ -157,258 +559,248 @@ OPENCODE_AGENT_USE_FOR_SELF_UPGRADE=true
 }
 ```
 
-> Use prefix `opencode/`, **not** `opencode-zen/`. Common error: `Model not found: opencode-zen/...`.
-
-### Working Directory
-
-`OPENCODE_AGENT_CWD` is optional. When empty, smooth auto-detects the project root by scanning upward for `package.json`, `tsconfig.json`, `src/`, `dist/`, `workspace/`, or `skills/`. In Docker (`WORKDIR /app`) this typically resolves to `/app`.
-
-Manual override: `OPENCODE_AGENT_CWD=/app`
-
-Windows: if `opencode --version` works but smooth logs `spawn opencode ENOENT`, set:
-```env
-OPENCODE_AGENT_COMMAND=opencode.cmd
-```
-
-### Auto Install
-
-Preferred: `npm install -g opencode-ai`
-
-Or let smooth install it:
-```env
-OPENCODE_AUTO_INSTALL=true
-OPENCODE_INSTALL_STRATEGY=npm-global
-OPENCODE_INSTALL_REQUIRE_APPROVAL=true
-```
-
-In Docker, install in the Dockerfile instead (runtime auto-install does not persist across rebuilds):
-```dockerfile
-RUN npm install -g opencode-ai
-```
+> Gunakan prefix `opencode/`, bukan `opencode-zen/`.
 
 ### Diagnostics
 
 ```bash
 /opencode doctor
 /opencode doctor --smoke
-opencode run "hello"   # smoke test
-```
-
-Checklist:
-- `Args preview` should include `run` and `--dangerously-skip-permissions`
-- `Args template` must **not** contain `--prompt` (use positional args)
-- `Auth provider` should be `opencode`
-
----
-
-## Skills
-
-Skills are Markdown files in `skills/`. They are parsed at startup and injected into every system prompt.
-
-### Frontmatter Schema
-
-```yaml
----
-name: Code Reviewer        # required
-description: Reviews code  # required
-version: 1.0.0
-tags: [coding, review]
-priority: 10               # higher = injected first (default: 0)
-enabled: true
----
-
-Markdown body injected verbatim into the system prompt.
-```
-
-### Example
-
-```markdown
----
-name: Concise Responder
-description: Always responds concisely and in bullet points
-priority: 5
-enabled: true
----
-
-## Rules
-- Keep every response under 150 words.
-- Prefer bullet points over prose.
-- Skip preambles and sign-offs.
+opencode run "hello"    # smoke test
 ```
 
 ---
 
-## Project Structure
+## MCP (Model Context Protocol)
 
+Integrasi external tools via MCP server. Konfigurasi disimpan di `MCP_CONFIG_PATH=./data/mcp.json`.
+
+### Preset Server
+
+```bash
+/mcp add tavily       # web search via Tavily
+/mcp add firecrawl    # web scraping via Firecrawl
+/mcp add brevo        # email via Brevo
+/mcp add e2b          # sandboxed code execution
+/mcp add console      # console automation
 ```
-native-openclaw/
-├── src/
-│   ├── index.ts               # Bootstrap entry point
-│   ├── cli/
-│   │   ├── index.ts           # Interactive REPL loop
-│   │   └── commands.ts        # Slash-command handlers
-│   ├── agents/
-│   │   ├── orchestrator.ts    # Turn loop: input -> provider -> persist
-│   │   ├── prompt-builder.ts  # System prompt + skill injection
-│   │   └── message-assembler.ts  # Sliding-window context prep
-│   ├── providers/
-│   │   ├── base.ts            # Shared fetch + OpenAI-compat logic
-│   │   ├── groq.ts
-│   │   ├── mistral.ts
-│   │   ├── openrouter.ts
-│   │   └── ollama.ts
-│   ├── skills/
-│   │   ├── parser.ts          # YAML frontmatter parser (zero deps)
-│   │   ├── loader.ts          # Scan /skills dir
-│   │   └── registry.ts        # In-memory registry + activation
-│   ├── storage/
-│   │   ├── json-store.ts      # Atomic JSON collection + KV store
-│   │   └── session-manager.ts # Session CRUD
-│   ├── config/
-│   │   ├── env.ts             # dotenv loader + typed accessors
-│   │   └── validator.ts       # Zod config schema
-│   ├── types/
-│   │   ├── global.ts          # JsonValue, Result<T,E>
-│   │   ├── message.ts         # Message schema (Zod)
-│   │   └── provider.ts        # IProvider interface
-│   └── utils/
-│       ├── logger.ts          # Namespaced structured logger
-│       └── helpers.ts         # ID gen, safe JSON read/write
-├── skills/                    # Drop .md skill files here
-├── data/                      # Auto-created: sessions, settings
-├── Dockerfile
-├── docker-compose.yml
-├── package.sh                 # Build + zip packaging script
-└── .env.example
+
+### Custom Server
+
+```bash
+/mcp add my-server '{"command":"node","args":["/path/to/server.js"]}'
 ```
+
+Launcher yang diizinkan: `npx`, `uvx`, `node`, `python`, `python3`, `deno`.
+
+```env
+MCP_ENABLED=true
+MCP_CONFIG_PATH=./data/mcp.json
+```
+
+---
+
+## HTTP API
+
+REST endpoint untuk integrasi eksternal.
+
+**Endpoint**: `POST /native-openclaw/v1/chat`  
+**Port**: `18789` (default)
+
+```env
+API_ENABLED=false
+API_HOST=127.0.0.1
+API_PORT=18789
+API_AUTH_TOKEN=your_secret_token
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX=10                    # requests per menit per IP
+```
+
+**Request**:
+
+```bash
+curl -X POST "http://127.0.0.1:18789/native-openclaw/v1/chat" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your_secret_token" \
+  -d '{"message": "halo", "preferredProvider": "groq", "preferredModel": "llama-3.3-70b-versatile"}'
+```
+
+**Response**:
+
+```json
+{
+  "model": "llama-3.3-70b-versatile",
+  "provider": "groq",
+  "result": "Halo! Ada yang bisa saya bantu?",
+  "token": null,
+  "responseTime": "842 ms",
+  "tools": [],
+  "flow": [],
+  "sessionId": "sess_abc123",
+  "error_detail": [],
+  "fallbackUsed": false
+}
+```
+
+Field `preferredProvider` dan `preferredModel` opsional — tanpa keduanya, router memilih provider terbaik secara otomatis.
+
+---
+
+## Web UI (smooth)
+
+Optional lightweight chat UI berbasis vanilla HTML/CSS/JS. Menggunakan pipeline yang sama dengan CLI dan HTTP API (orchestrator, tools, memory, scheduler semuanya aktif).
+
+```env
+WEB_UI_ENABLED=false
+WEB_UI_HOST=0.0.0.0
+WEB_UI_PORT=18790
+WEB_UI_USERNAME=admin
+WEB_UI_PASSWORD=change-me
+WEB_UI_SESSION_SECRET=change-this-secret
+```
+
+Jalankan `npm start`, buka `http://localhost:18790`.
+
+### Puter Provider Mode (Web UI)
+
+Gunakan Puter.ai sebagai provider khusus untuk request dari Web UI, sementara semua orchestration tetap di backend.
+
+```env
+WEB_UI_PUTER_ENABLED=false
+WEB_UI_PUTER_PROVIDER_ID=puter
+WEB_UI_PUTER_DEFAULT_MODEL=gpt-5-nano
+
+PUTER_ENABLED=false
+PUTER_API_KEY=
+PUTER_DEFAULT_MODEL=gpt-5.5
+PUTER_DISABLE_TEMPERATURE=true    # beberapa model Puter menolak custom temperature
+```
+
+- Jika Puter gagal, ProviderRouter fallback ke provider backend normal.
+- CLI dan Telegram tidak terpengaruh kecuali secara eksplisit meneruskan `preferredProvider=puter`.
+
+---
+
+## Telegram Integration
+
+Full bot integration dengan polling, queue, dan acknowledgment.
+
+```env
+TELEGRAM_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_IDS=123456789,987654321   # whitelist chat ID
+TELEGRAM_ALLOW_ALL=false
+
+TELEGRAM_ACK_ENABLED=true
+TELEGRAM_ACK_MESSAGE=Sedang diproses...
+TELEGRAM_PROCESS_TIMEOUT_MS=90000
+TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true           # suppress polling conflict log
+```
+
+Pastikan hanya satu instance yang berjalan dengan bot token yang sama — polling conflict terjadi jika ada dua consumer sekaligus.
 
 ---
 
 ## Docker
 
-Docker Compose is the recommended deployment mode — it keeps `data`, `skills`, and `workspace` persistent on the host.
+Dockerfile menggunakan 2-stage build (builder → runtime). Runtime berjalan sebagai non-root user `openclaw`.
 
-### Deployment Steps
+### Docker Compose — Deployment
 
-**1. Prepare persistent folders**
+**1. Buat folder persistent**
 
 ```bash
 sudo mkdir -p data skills workspace
 sudo chmod -R 775 data skills workspace
 ```
 
-| Host path | Container path | Purpose |
-|-----------|----------------|---------|
-| `./data` | `/data` | Sessions, settings, MCP config |
-| `./skills` | `/skills` | Markdown skills |
-| `./workspace` | `/workspace` | Memory, workflow, artifacts |
+| Host | Container | Isi |
+|------|-----------|-----|
+| `./data` | `/data` | Sessions, settings, MCP config, JSON storage |
+| `./skills` | `/skills` | Markdown skill files |
+| `./workspace` | `/workspace` | Memory, reports, artifacts, workflow state |
 
-**2. Configure `.env`**
+**2. Konfigurasi `.env`**
 
 ```bash
 cp .env.example .env && nano .env
 ```
 
-Minimum production values:
+Minimum untuk production:
 
 ```env
 APP_ENV=production
 NODE_ENV=production
-LOG_LEVEL=info
-
 APP_DATA_DIR=/data
 SKILLS_DIR=/skills
 WORKSPACE_DIR=/workspace
-WORKFLOW_FILE=/workspace/WORKFLOW.md
-TOOLS_DIR=/app/tools
 MCP_CONFIG_PATH=/data/mcp.json
 STORAGE_BACKEND=file
 
 API_ENABLED=true
 API_HOST=0.0.0.0
 API_PORT=18789
-API_AUTH_TOKEN=change_this_token
+API_AUTH_TOKEN=ganti_token_ini
 
-WEB_UI_ENABLED=false
-WEB_UI_PORT=18790
-WEB_UI_USERNAME=admin
-WEB_UI_PASSWORD=change-me
-WEB_UI_SESSION_SECRET=change-this-secret
-
-# Proxy — leave empty if not required
+# Proxy — kosongkan jika tidak dibutuhkan
 HTTP_PROXY=
 HTTPS_PROXY=
 NO_PROXY=localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal
 
-# Provider keys — fill only what you use
+# Provider keys — isi yang digunakan saja
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
-MISTRAL_API_KEY=
-GEMINI_API_KEY=
 ZAI_API_KEY=
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4
-ZAI_MODEL=glm-4.5
-
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-
-# Optional integrations
-TAVILY_API_KEY=
-TELEGRAM_ENABLED=false
-TELEGRAM_BOT_TOKEN=
-BREVO_API_KEY=
 ```
 
-> Never commit `.env`: `echo ".env" >> .gitignore`
+> Jangan commit `.env`: `echo ".env" >> .gitignore`
 
 **3. Fix bind-mount permissions**
 
 ```bash
 docker compose run --rm --entrypoint id openclaw
-# example output: uid=100(openclaw) gid=101(openclaw)
+# contoh output: uid=100(openclaw) gid=101(openclaw)
 sudo chown -R 100:101 data skills workspace
 ```
 
-On SELinux servers, add `:Z` to volume mounts in `docker-compose.yml`.
+Ganti `100:101` dengan UID/GID aktual dari output perintah di atas.
 
-**4. Build and start**
+Untuk SELinux server, tambahkan `:Z` pada volume mount di `docker-compose.yml`.
+
+**4. Build dan start**
 
 ```bash
 docker compose build --no-cache
 docker compose up -d
-docker compose ps         # check status
+docker compose ps
 docker compose logs -f openclaw
 ```
 
-**5. Access the CLI**
+**5. Akses CLI**
 
 ```bash
 docker attach native-openclaw
-# Detach without stopping: Ctrl+P, then Ctrl+Q
-# Do NOT use Ctrl+C — it stops the Node process
+# Detach tanpa stop: Ctrl+P, lalu Ctrl+Q
+# JANGAN Ctrl+C — akan menghentikan Node process
 ```
 
-**6. Test the HTTP API**
+**6. Install OpenCode di Docker (opsional)**
+
+Preferred approach: install di Dockerfile sebelum build.
+
+```dockerfile
+ARG INSTALL_OPENCODE=false
+RUN if [ "$INSTALL_OPENCODE" = "true" ]; then npm install -g opencode-ai; fi
+```
+
+Atau gunakan build arg:
 
 ```bash
-curl -X POST "http://127.0.0.1:18789/native-openclaw/v1/chat" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your_token" \
-  -d '{"message":"halo"}'
+INSTALL_OPENCODE=true docker compose build --no-cache
 ```
 
-Expected response:
-
-```json
-{
-  "model": "glm-4.5",
-  "provider": "zai",
-  "result": "...",
-  "sessionId": "...",
-  "responseTime": "1234 ms"
-}
-```
-
-### Docker Compose Example
+### Docker Compose Referensi
 
 ```yaml
 version: "3.9"
@@ -423,9 +815,11 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
+        INSTALL_OPENCODE: ${INSTALL_OPENCODE:-false}
 
     image: native-openclaw:latest
     container_name: native-openclaw
+
     stdin_open: true
     tty: true
 
@@ -437,14 +831,19 @@ services:
       APP_DATA_DIR: /data
       SKILLS_DIR: /skills
       WORKSPACE_DIR: /workspace
+      WORKFLOW_FILE: /workspace/WORKFLOW.md
+      TOOLS_DIR: /app/tools
+      MCP_CONFIG_PATH: /data/mcp.json
+      STORAGE_BACKEND: file
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-18789}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
 
     volumes:
-      - ./data:/data:Z
-      - ./skills:/skills:Z
-      - ./workspace:/workspace:Z
+      - ./data:/data
+      - ./skills:/skills
+      - ./workspace:/workspace
+      - ./data/opencode:/home/openclaw/.local/share/opencode
 
     ports:
       - "${API_PORT:-18789}:18789"
@@ -456,122 +855,103 @@ services:
     restart: unless-stopped
 ```
 
-### Common Docker Operations
+### Docker Compose Operations
 
 ```bash
-docker compose up -d                    # Start
-docker compose down                     # Stop
-docker compose restart openclaw         # Restart service
-docker compose build --no-cache && docker compose up -d  # Rebuild
-docker compose logs -f openclaw         # Logs
-docker compose exec openclaw sh         # Shell access
-docker attach native-openclaw           # Attach to CLI
-```
-
-### Self-Upgrade Auto Restart
-
-When `SELF_UPGRADE_AUTO_RESTART=true`, a successful self-upgrade exits with code `42` after writing a run report. Docker Compose `restart: unless-stopped` handles the restart automatically.
-
-Disable:
-```env
-SELF_UPGRADE_AUTO_RESTART=false
-AUTONOMOUS_RESTART_MODE=disabled
-```
-
-To receive notifications before restart (useful when running with `npm start` without a supervisor):
-
-```env
-RESTART_NOTIFICATION_ENABLED=true
-RESTART_NOTIFY_TELEGRAM=true
-RESTART_NOTIFY_EMAIL=true
-RESTART_EMAIL_RECIPIENT=you@example.com
+docker compose up -d                              # Start
+docker compose down                               # Stop
+docker compose restart openclaw                   # Restart service
+docker compose build --no-cache && docker compose up -d   # Rebuild
+docker compose logs -f openclaw                   # Logs
+docker compose exec openclaw sh                   # Shell
+docker attach native-openclaw                     # Attach ke CLI
 ```
 
 ---
 
 ## Scripts
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Run with ts-node (no build) |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm start` | Run compiled output |
-| `npm run type-check` | Type-check without emitting |
-| `npm run lint` | Run ESLint |
+| Command | Keterangan |
+|---------|-----------|
+| `npm run dev` | Run dengan ts-node (tanpa build) |
+| `npm run build` | Compile TypeScript ke `dist/` |
+| `npm start` | Jalankan compiled output |
+| `npm run start:watch:win` | Watch mode (Windows PowerShell) |
+| `npm run start:watch:unix` | Watch mode (Unix/bash) |
+| `npm run type-check` | Type-check tanpa emit |
+| `npm run lint` | Jalankan ESLint |
 | `npm run lint:fix` | Auto-fix lint issues |
-| `npm run clean` | Remove `dist/` |
-| `bash package.sh` | Build + zip for distribution |
+| `npm run clean` | Hapus `dist/` |
+| `npm test` | Jalankan full test suite |
+| `npm run test:workspace` | Test workspace saja |
+| `npm run test:scheduler` | Test scheduler saja |
+| `npm run package` | Build + zip untuk distribusi |
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env`.
+Salin `.env.example` ke `.env`. Referensi lengkap:
 
-### App
+### App & Storage
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_ENV` | `development` | `development`, `production`, or `test` |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
-| `APP_DATA_DIR` | `.data` | Storage directory for sessions |
-| `STORAGE_BACKEND` | `file` | `file` or `memory` |
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `APP_ENV` | `development` | `development`, `production`, `test` |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `APP_DATA_DIR` | `.data` | Direktori storage (sessions, semantic memory) |
+| `STORAGE_BACKEND` | `file` | `file` atau `memory` |
+| `WORKSPACE_DIR` | `./workspace` | Root direktori workspace |
+| `WORKSPACE_ALLOW_OUTSIDE_PATHS` | `false` | Izinkan path di luar workspace |
 
 ### Agent
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENT_MAX_TURNS` | `20` | Max conversation turns per session |
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `AGENT_MAX_TURNS` | `20` | Maks turns per session |
 | `AGENT_TEMPERATURE` | `0.7` | Default temperature (0–2) |
 | `AGENT_MAX_TOKENS` | `4096` | Default max output tokens |
 | `AGENT_SYSTEM_PROMPT` | `You are a helpful AI assistant.` | Base system prompt |
+| `REASONING_ENABLED` | `true` | Aktifkan reasoning-first step |
+| `SEMANTIC_MEMORY` | `true` | Aktifkan semantic context compression |
+| `REACT_ENABLED` | `true` | Aktifkan ReAct loop |
+| `REACT_MAX_STEPS` | `4` | Maks steps per turn di ReAct |
 
 ### Skills
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SKILLS_DIR` | `<cwd>/skills` | Path to skills directory |
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `SKILLS_DIR` | `./skills` | Direktori file skill |
+| `SELF_IMPROVING` | `false` | Aktifkan auto skill extraction |
+| `SELF_IMPROVING_EVAL_THRESHOLD` | `10` | Turns sebelum evaluasi |
 
----
+### Router
 
-## Storage
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `ROUTER_ENABLED` | `true` | Multi-provider router |
+| `AUTO_FALLBACK` | `true` | Auto-switch saat provider gagal |
+| `AUTO_SWITCH` | `true` | Proactive provider switching |
 
-Sessions persist as plain JSON in `APP_DATA_DIR` (default: `.data/`).
+### Scheduler
 
-```
-.data/
-└── sessions.json   # All session records (history, provider/model, active skills)
-```
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `SCHEDULER_ENABLED` | `true` | Aktifkan scheduler |
+| `SCHEDULER_TIMEZONE` | `Asia/Jakarta` | Timezone default cronjob |
+| `SCHEDULER_TICK_MS` | `30000` | Interval check scheduler |
+| `SCHEDULER_MAX_CONCURRENT_JOBS` | `2` | Maks job paralel |
 
-- `/session list` — browse sessions
-- `/session <id>` — resume by partial ID
-- `/session new` — start fresh
+### Self-Healing & Self-Upgrade
 
----
-
-## Architecture
-
-```
-User input
-    │
-    ▼
- CLI REPL  ──/command──▶  Command handlers
-    │
-    │ message
-    ▼
- Orchestrator
-    ├── PromptBuilder    ← base prompt + active skill blocks
-    └── MessageAssembler ← sliding window, strip system messages
-    │
-    ▼
- IProvider.chat()        ← groq / mistral / openrouter / ollama / ...
-    │
-    ▼
- SessionManager.appendMessage()  ← JSON file on disk
-    │
-    ▼
- Print reply to terminal
-```
+| Variable | Default | Keterangan |
+|----------|---------|-----------|
+| `SELF_HEALING_ENABLED` | `false` | Aktifkan self-healing |
+| `SELF_HEALING_MAX_LOOPS` | `3` | Maks loop per healing run |
+| `SELF_HEALING_AUTO_ROLLBACK` | `true` | Rollback otomatis jika gagal |
+| `SELF_UPGRADE_ENABLED` | `false` | Aktifkan self-upgrade |
+| `SELF_UPGRADE_AUTO_RESTART` | `true` | Exit code 42 setelah upgrade |
+| `AUTONOMOUS_CODING_TEMPERATURE` | `0.1` | Temperature untuk coding agent |
 
 ---
 
@@ -579,138 +959,206 @@ User input
 
 ### OpenCode: `Model not found: opencode-zen/...`
 
-Use the `opencode/` prefix, not `opencode-zen/`:
+Gunakan prefix `opencode/`, bukan `opencode-zen/`:
 
 ```jsonc
 "model": "opencode/deepseek-v4-flash-free"
 ```
 
-### OpenCode: `Unexpected server error` or auth error
+### OpenCode: `Unexpected server error` atau auth error
 
 ```bash
 opencode run /connect
 ```
 
-Or set in `.env`:
+Atau via `.env`:
+
 ```env
 OPENCODE_AUTH_BOOTSTRAP=true
-OPENCODE_ZEN_API_KEY=your_key_here
+OPENCODE_ZEN_API_KEY=your_key
 OPENCODE_AUTH_PROVIDER=opencode
 ```
 
-### OpenCode hangs
+### OpenCode: `spawn opencode ENOENT` di Windows
 
-Enable timeouts:
+```env
+OPENCODE_AGENT_COMMAND=opencode.cmd
+```
+
+### OpenCode: Proses hang tidak berhenti
+
 ```env
 OPENCODE_AGENT_TIMEOUT_MS=900000
 OPENCODE_AGENT_KILL_GRACE_MS=10000
 OPENCODE_AGENT_KILL_TREE=true
 ```
 
-Windows — check and kill hanging process:
+Windows — cek dan kill proses:
+
 ```powershell
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "opencode" }
 taskkill /PID <PID> /T /F
 ```
 
-### Windows: `spawn opencode ENOENT`
-
-```env
-OPENCODE_AGENT_COMMAND=opencode.cmd
-```
-
 ### Docker: `EACCES: permission denied, mkdir '/workspace/state'`
+
+Container tidak bisa menulis ke bind-mounted folder.
 
 ```bash
 docker compose down
 sudo mkdir -p data skills workspace
 sudo chmod -R 775 data skills workspace
-docker compose run --rm --entrypoint id openclaw
-sudo chown -R 100:101 data skills workspace   # replace with actual UID:GID
+docker compose run --rm --entrypoint id openclaw     # ambil UID/GID
+sudo chown -R 100:101 data skills workspace          # ganti 100:101 dengan UID:GID aktual
 docker compose up -d
 ```
 
-On SELinux: use `:Z` or `:z` on volume definitions.
+Untuk SELinux: tambahkan `:Z` pada setiap volume di `docker-compose.yml`.
 
-### Docker: `.env not found` warning
+### Docker: Warning `.env not found at /app/.env`
 
-Safe to ignore when using `env_file` in Compose — variables are injected into `process.env`, the file is not copied to `/app/.env`. To suppress the warning, mount it explicitly:
+Aman diabaikan jika menggunakan `env_file` di Compose — variabel sudah diinjeksi ke `process.env`. Untuk menghilangkan warning, mount eksplisit:
 
 ```yaml
 volumes:
-  - ./.env:/app/.env:ro,Z
+  - ./.env:/app/.env:ro
 ```
 
-Verify variables are loaded:
+Verifikasi variabel ter-load:
+
 ```bash
-docker compose exec openclaw env | grep -E "API|GROQ|WORKSPACE"
+docker compose exec openclaw env | grep -E "API|GROQ|ZAI"
 ```
 
 ### Docker: `curl: (56) Recv failure: Connection reset by peer`
 
-Common causes: container still restarting, API not listening on `0.0.0.0`, runtime crash.
+Penyebab umum: container masih restart, API tidak listen di `0.0.0.0`, atau crash di handler.
 
-Check:
 ```bash
 docker compose ps
 docker compose logs --tail=100 openclaw
 docker compose exec openclaw env | grep -E "API_ENABLED|API_HOST|API_PORT"
 ```
 
-Ensure `.env`:
+Pastikan `.env` memiliki:
+
 ```env
 API_ENABLED=true
 API_HOST=0.0.0.0
 API_PORT=18789
 ```
 
-### Docker: Provider returns `fetch failed`
+### Docker: Provider `fetch failed`
 
-Usually a proxy or network issue, not the API key.
+Biasanya masalah proxy atau network, bukan API key.
 
 ```bash
-# Test proxy from host
-curl -x "http://IP:port" -I https://api.z.ai/api/paas/v4/models
+# Test proxy dari host
+curl -x "http://IP:port" -I https://api.groq.com/v1
 
-# Check proxy inside container
+# Cek proxy di dalam container
 docker compose exec openclaw env | grep -Ei "HTTP_PROXY|HTTPS_PROXY|NO_PROXY"
-
-# Retry chat directly
-curl -X POST "http://127.0.0.1:18789/native-openclaw/v1/chat" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer xxx" \
-  -d '{"message":"halo"}'
 ```
 
-A `401` from the proxy means the path works — check the API key. Startup logs should show `Global HTTP proxy enabled`.
+Startup log harus menampilkan `Global HTTP proxy enabled` jika proxy terkonfigurasi.
 
-### Docker: API returns `401 Unauthorized`
+### Docker: API `401 Unauthorized`
 
-Ensure `API_AUTH_TOKEN` in `.env` matches the `Authorization: Bearer` header in your request.
+Pastikan `API_AUTH_TOKEN` di `.env` sama persis dengan header `Authorization: Bearer` di request.
 
-### Docker: Cannot access host folders (e.g. Downloads)
+### Docker: Cannot access host folder (misalnya Downloads)
 
-The container only sees mounted paths. Add a bind mount:
+Container hanya melihat path yang di-mount. Tambahkan bind mount di `docker-compose.yml`:
 
 ```yaml
 volumes:
-  - /home/user/Downloads:/host/Downloads:ro,Z
+  - /home/user/Downloads:/host/Downloads:ro
 ```
 
-Then ask the agent to use `/host/Downloads`.
+Lalu minta agent mengakses `/host/Downloads`.
 
-### Self-upgrade restart: container stays stopped after exit
+### Telegram: Polling conflict
 
-If started with `npm start` (no supervisor), restart manually:
+Hanya satu instance yang boleh berjalan dengan bot token yang sama. Pastikan tidak ada container atau proses lain yang menggunakan token yang sama. Jika pernah menggunakan webhook, hapus terlebih dahulu via Telegram Bot API.
+
+### Self-upgrade: Container berhenti dan tidak restart
+
+Gunakan `restart: unless-stopped` di Docker Compose. Jika menggunakan `npm start` tanpa supervisor:
 
 ```bash
 npm start
-# or
+# atau
 docker compose up -d
 pm2 restart smooth
 ```
 
-Use `restart: unless-stopped` in Docker Compose for automatic recovery.
+Aktifkan notifikasi agar tahu kapan restart terjadi:
+
+```env
+RESTART_NOTIFICATION_ENABLED=true
+RESTART_NOTIFY_TELEGRAM=true
+```
+
+---
+
+## Project Structure
+
+```
+native-openclaw/
+├── src/
+│   ├── index.ts                    # Bootstrap v8 — entry point
+│   ├── agents/
+│   │   ├── orchestrator.ts         # Reasoning-first turn loop
+│   │   ├── reasoning-engine.ts     # Internal tool decision layer
+│   │   ├── react-loop.ts           # ReAct (Reason→Action→Observe→Answer)
+│   │   ├── tool-loop.ts            # LLM + tool call execution
+│   │   ├── prompt-builder.ts       # System prompt assembly
+│   │   └── message-assembler.ts    # Sliding-window context prep
+│   ├── providers/                  # groq, mistral, openrouter, ollama,
+│   │   └── ...                     # zai, sambanova, puter, gemini, dll
+│   ├── router/
+│   │   ├── provider-router.ts      # Central router
+│   │   ├── provider-health.ts      # Health tracking per provider
+│   │   ├── routing-strategy.ts     # Task-aware scoring
+│   │   └── fallback-manager.ts     # Auto-fallback logic
+│   ├── memory/
+│   │   ├── semantic-memory.ts      # TF-IDF local semantic store
+│   │   └── context-compressor.ts   # Context window management
+│   ├── skills/
+│   │   ├── registry.ts             # Skill activation & injection
+│   │   ├── self-improving-engine.ts # Auto skill extraction loop
+│   │   └── skill-evaluator.ts      # Quality evaluation
+│   ├── self-healing/
+│   │   ├── self-healing-engine.ts  # Autonomous bug-fix orchestrator
+│   │   ├── self-upgrade-engine.ts  # Autonomous feature implementor
+│   │   ├── bug-analyzer-agent.ts   # Root cause analysis
+│   │   ├── patch-planner.ts        # Diff planning
+│   │   ├── patch-applier.ts        # File modification
+│   │   ├── qa-agent.ts             # Post-patch quality check
+│   │   └── snapshot-manager.ts     # Rollback checkpoint
+│   ├── prompt-optimizer/           # Context compression & intent classification
+│   ├── scheduler/                  # Cronjob engine, store, types
+│   ├── tools/
+│   │   ├── tool-registry.ts        # Plugin-based tool registry
+│   │   ├── plugins/                # Built-in tool plugins
+│   │   └── opencode-agent.ts       # External coding agent wrapper
+│   ├── mcp/                        # Model Context Protocol integration
+│   ├── api/                        # HTTP REST API server
+│   ├── web-ui/                     # smooth — Web chat UI
+│   ├── integrations/               # Telegram bot integration
+│   ├── workflows/                  # WORKFLOW.md runner
+│   ├── workspace/                  # Local-first agent workspace
+│   ├── storage/                    # Session, settings, memory managers
+│   ├── network/                    # Proxy & DNS configuration
+│   └── config/                     # Env loader & Zod validator
+├── skills/                         # Drop .md skill files here
+├── workspace/                      # Agent workspace (auto-created)
+├── data/                           # Storage: sessions, semantic memory
+├── tools/                          # Installed external tools
+├── Dockerfile                      # 2-stage build (builder → runtime)
+├── docker-compose.yml
+└── .env.example
+```
 
 ---
 
