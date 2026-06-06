@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   openclaw:
     build:
@@ -13,7 +11,12 @@ services:
         http_proxy: ${HTTP_PROXY:-}
         https_proxy: ${HTTPS_PROXY:-}
         no_proxy: ${NO_PROXY:-}
-        INSTALL_OPENCODE: ${INSTALL_OPENCODE:-false}
+
+        SELF_HEALING_RUNTIME: ${SELF_HEALING_RUNTIME:-true}
+
+        OPENCODE_AUTO_INSTALL: ${OPENCODE_AUTO_INSTALL:-true}
+        OPENCODE_DEFAULT_MODEL: ${OPENCODE_DEFAULT_MODEL:-opencode/deepseek-v4-flash-free}
+        OPENCODE_DEFAULT_SMALL_MODEL: ${OPENCODE_DEFAULT_SMALL_MODEL:-opencode/mimo-v2.5-free}
 
     image: native-openclaw:latest
     container_name: native-openclaw
@@ -59,17 +62,62 @@ services:
       WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:-change-me}
       WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:-change-this-secret}
 
-      OPENCODE_AUTH_BOOTSTRAP: ${OPENCODE_AUTH_BOOTSTRAP:-false}
+      SELF_HEALING_RUNTIME: ${SELF_HEALING_RUNTIME:-true}
+
+      OPENCODE_AGENT_ENABLED: ${OPENCODE_AGENT_ENABLED:-true}
+      OPENCODE_AGENT_COMMAND: ${OPENCODE_AGENT_COMMAND:-opencode}
+      OPENCODE_AGENT_DIRECT_MODE: ${OPENCODE_AGENT_DIRECT_MODE:-true}
+      OPENCODE_AGENT_INJECT_SAFETY_PREAMBLE: ${OPENCODE_AGENT_INJECT_SAFETY_PREAMBLE:-false}
+      OPENCODE_AGENT_CWD: ${OPENCODE_AGENT_CWD:-/app}
+      OPENCODE_AGENT_TIMEOUT_MS: ${OPENCODE_AGENT_TIMEOUT_MS:-900000}
+      OPENCODE_AGENT_IDLE_TIMEOUT_MS: ${OPENCODE_AGENT_IDLE_TIMEOUT_MS:-0}
+      OPENCODE_AGENT_KILL_GRACE_MS: ${OPENCODE_AGENT_KILL_GRACE_MS:-10000}
+      OPENCODE_AGENT_KILL_TREE: ${OPENCODE_AGENT_KILL_TREE:-true}
+      OPENCODE_AGENT_MAX_OUTPUT_CHARS: ${OPENCODE_AGENT_MAX_OUTPUT_CHARS:-30000}
+      OPENCODE_AGENT_REQUIRE_CONFIRMATION: ${OPENCODE_AGENT_REQUIRE_CONFIRMATION:-false}
+      OPENCODE_AGENT_USE_FOR_SELF_HEALING: ${OPENCODE_AGENT_USE_FOR_SELF_HEALING:-true}
+      OPENCODE_AGENT_USE_FOR_SELF_UPGRADE: ${OPENCODE_AGENT_USE_FOR_SELF_UPGRADE:-true}
+      OPENCODE_AGENT_ARGS_TEMPLATE: ${OPENCODE_AGENT_ARGS_TEMPLATE:-run --pure --dangerously-skip-permissions "{{task}}"}
+
+      OPENCODE_AUTH_BOOTSTRAP: ${OPENCODE_AUTH_BOOTSTRAP:-true}
       OPENCODE_AUTH_PROVIDER: ${OPENCODE_AUTH_PROVIDER:-opencode}
       OPENCODE_AUTH_FILE: ${OPENCODE_AUTH_FILE:-}
-      OPENCODE_AUTH_OVERWRITE: ${OPENCODE_AUTH_OVERWRITE:-false}
+      OPENCODE_AUTH_OVERWRITE: ${OPENCODE_AUTH_OVERWRITE:-true}
       OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
+      OPENCODE_DOCTOR_SMOKE_TEST: ${OPENCODE_DOCTOR_SMOKE_TEST:-false}
+
+      OPENCODE_AUTO_INSTALL: ${OPENCODE_AUTO_INSTALL:-true}
+      OPENCODE_INSTALL_STRATEGY: ${OPENCODE_INSTALL_STRATEGY:-npm-global}
+      OPENCODE_INSTALL_COMMAND: ${OPENCODE_INSTALL_COMMAND:-}
+      OPENCODE_INSTALL_TIMEOUT_MS: ${OPENCODE_INSTALL_TIMEOUT_MS:-300000}
+      OPENCODE_INSTALL_REQUIRE_APPROVAL: ${OPENCODE_INSTALL_REQUIRE_APPROVAL:-false}
+      OPENCODE_INSTALL_RETRY_AFTER_INSTALL: ${OPENCODE_INSTALL_RETRY_AFTER_INSTALL:-false}
+      OPENCODE_INSTALL_LOG_OUTPUT: ${OPENCODE_INSTALL_LOG_OUTPUT:-true}
+      OPENCODE_INSTALL_USE_SUDO: ${OPENCODE_INSTALL_USE_SUDO:-false}
 
     volumes:
+      # Persistent app data
       - ./data:/data
       - ./skills:/skills
       - ./workspace:/workspace
+
+      # Persistent OpenCode data/log/db/auth.
+      # Make sure host folder owner is uid 100 gid 101.
       - ./data/opencode:/home/openclaw/.local/share/opencode
+
+      # Source bind mounts for self-healing/self-upgrade.
+      # These make code changes inside the container persist back to the host repo.
+      - ./src:/app/src
+      - ./test:/app/test
+      - ./tools:/app/tools
+      - ./scripts:/app/scripts
+      - ./docs:/app/docs
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./Dockerfile:/app/Dockerfile
+      - ./docker-compose.yml:/app/docker-compose.yml
+      - ./README.md:/app/README.md
 
     ports:
       - "${API_PORT:-18789}:18789"
