@@ -56,6 +56,10 @@ RUN if [ "$SELF_HEALING_RUNTIME" != "true" ]; then \
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
+# su-exec is used by entrypoint.sh to fix bind-mount ownership as root,
+# then drop privileges to the non-root openclaw user.
+RUN apk add --no-cache su-exec
+
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
@@ -175,12 +179,10 @@ ENV NODE_ENV=production \
 COPY --chown=root:root entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-USER openclaw
-
+# Keep runtime entrypoint as root so it can repair bind-mount ownership,
+# then entrypoint.sh drops to the non-root openclaw user with su-exec.
 ENTRYPOINT ["/entrypoint.sh"]
 
 VOLUME ["/data", "/skills", "/workspace"]
 
 EXPOSE 18789 18790
-
-ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]

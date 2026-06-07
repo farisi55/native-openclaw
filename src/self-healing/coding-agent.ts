@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'fs/promises';
+import { readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import type { IProvider } from '../types/provider';
 import { createMessage, extractText } from '../types/message';
@@ -198,6 +198,30 @@ function changedFilesBetween(
     .sort();
 }
 
+function isDependencyManifest(filePath: string): boolean {
+  return filePath === 'package.json' || filePath === 'package-lock.json';
+}
+
+function shouldAllowDependencyChanges(previousQa?: QAReport): boolean {
+  return Boolean(previousQa?.nextAction === 'install_dependency' && previousQa.missingPackages.length > 0);
+}
+
+async function restoreFilesFromState(
+  rootDir: string,
+  files: string[],
+  beforeState: Map<string, RepoFileState>
+): Promise<void> {
+  for (const file of files) {
+    const absolute = resolve(rootDir, file);
+    const before = beforeState.get(file);
+    if (!before || before.content === null) {
+      await unlink(absolute).catch(() => undefined);
+      continue;
+    }
+    await writeFile(absolute, before.content, 'utf-8');
+  }
+}
+
 export class CodingAgent {
   constructor(
     private readonly provider?: IProvider,
@@ -325,6 +349,7 @@ export class CodingAgent {
     userInput: string;
     analysis: BugAnalysis | UpgradeAnalysis;
     patchPlan: PatchPlan;
+    previousQa?: QAReport;
     patchApplier: PatchApplier;
     runId?: string;
     loop?: number;
@@ -361,7 +386,7 @@ export class CodingAgent {
     try {
       const openCodeDirectMode = isOpenCodeDirectModeEnabled();
       const task = openCodeDirectMode
-        ? input.userInput
+        ? this.buildDirectOpenCodeTask(input, prompt)
         : [
             `Apply a repository patch for this Native OpenClaw ${input.mode} task.`,
             'You may edit files directly in the repository working directory.',
@@ -375,8 +400,21 @@ export class CodingAgent {
         ...(!openCodeDirectMode ? { context: redactSecrets(prompt, this.redact) } : {}),
       });
 
-      const afterState = await collectRepoState(input.patchApplier.root);
-      const directlyChanged = changedFilesBetween(beforeState, afterState);
+      let afterState = await collectRepoState(input.patchApplier.root);
+      let directlyChanged = changedFilesBetween(beforeState, afterState);
+
+      const unauthorizedDependencyChanges = shouldAllowDependencyChanges(input.previousQa)
+        ? []
+        : directlyChanged.filter(isDependencyManifest);
+      if (unauthorizedDependencyChanges.length > 0) {
+        await restoreFilesFromState(input.patchApplier.root, unauthorizedDependencyChanges, beforeState);
+        logger.warn('opencode-agent changed dependency manifests without dependency QA reason; restored manifests before QA', {
+          ...meta,
+          restoredFiles: unauthorizedDependencyChanges,
+        });
+        afterState = await collectRepoState(input.patchApplier.root);
+        directlyChanged = changedFilesBetween(beforeState, afterState);
+      }
 
       if (directlyChanged.length > 0) {
         for (const file of directlyChanged) {
@@ -483,6 +521,40 @@ export class CodingAgent {
       });
       return [];
     }
+  }
+
+  private buildDirectOpenCodeTask(input: {
+    mode: CodingMode;
+    userInput: string;
+    analysis: BugAnalysis | UpgradeAnalysis;
+    patchPlan: PatchPlan;
+    previousQa?: QAReport;
+    errorLog?: string;
+  }, fullPatchPrompt: string): string {
+    const allowDependencyChanges = Boolean(
+      input.previousQa?.nextAction === 'install_dependency' && input.previousQa.missingPackages.length > 0
+    );
+
+    return [
+      `Apply a focused repository patch for Native OpenClaw ${input.mode}.`,
+      'You are running inside the repository working directory. Edit files directly.',
+      'Do not only explain the fix. Make the smallest source change required.',
+      'Do not edit .env, .env.*, private keys, secrets.*, node_modules, dist, or .git.',
+      allowDependencyChanges
+        ? `Dependency changes are allowed only for these missing packages: ${input.previousQa?.missingPackages.join(', ')}`
+        : 'Do not edit package.json or package-lock.json and do not install dependencies.',
+      'Prefer the files listed in Patch plan. Avoid unrelated refactors.',
+      'After editing, do not run long-running services. Build/test will be executed by Native OpenClaw QA.',
+      '',
+      `Original request: ${input.userInput}`,
+      `Analysis: ${JSON.stringify(input.analysis)}`,
+      `Patch plan: ${JSON.stringify(input.patchPlan)}`,
+      input.previousQa ? `Previous QA failure: ${JSON.stringify(input.previousQa)}` : '',
+      input.errorLog ? `Error log: ${input.errorLog}` : '',
+      '',
+      'Detailed patch context:',
+      redactSecrets(fullPatchPrompt, this.redact),
+    ].filter(Boolean).join('\n');
   }
 
   private async fileContext(plan: PatchPlan, patchApplier: PatchApplier): Promise<string> {
