@@ -766,6 +766,24 @@ sudo chown -R 100:101 data skills workspace
 
 Ganti `100:101` dengan UID/GID aktual dari output perintah di atas.
 
+**Jika `SELF_HEALING_ENABLED=true` atau `SELF_UPGRADE_ENABLED=true`**, self-healing engine perlu menulis patch langsung ke source code (`/app/src`, `/app/test`, dll) yang di-bind-mount dari host. Direktori-direktori ini juga harus dimiliki oleh user `openclaw`:
+
+```bash
+sudo chown -R 100:101 src/ test/ tools/ scripts/ docs/ \
+  package.json package-lock.json tsconfig.json Dockerfile docker-compose.yml README.md
+sudo chmod -R 775 src/ test/ tools/ scripts/ docs/
+```
+
+Agar host user tetap bisa mengedit file-file tersebut tanpa `sudo`, tambahkan host user ke group `openclaw` (GID 101):
+
+```bash
+sudo groupadd -g 101 openclaw 2>/dev/null || true
+sudo usermod -aG openclaw $(whoami)
+newgrp openclaw   # aktifkan tanpa logout
+```
+
+> **Catatan**: Setelah `git pull` atau operasi yang me-reset ownership (misalnya `npm install` sebagai root), jalankan ulang `chown` di atas.
+
 Untuk SELinux server, tambahkan `:Z` pada volume mount di `docker-compose.yml`.
 
 **4. Build dan start**
@@ -1014,6 +1032,69 @@ docker compose up -d
 ```
 
 Untuk SELinux: tambahkan `:Z` pada setiap volume di `docker-compose.yml`.
+
+### Docker: Self-Healing `EACCES: permission denied, copyfile ... -> /app/src/...`
+
+Error ini berbeda dari EACCES pada `/workspace`. Self-healing engine mencoba menulis patch hasil analisis ke `/app/src/` (atau `/app/test/`, `/app/tools/`, dst), namun direktori-direktori tersebut di-bind-mount dari host dengan kepemilikan host user — bukan user `openclaw` di container.
+
+**Gejala di log:**
+```
+Error: EACCES: permission denied, copyfile
+  'workspace/self-healing/runs/heal-xxx/snapshot/files/src/...'
+  -> '/app/src/...'
+```
+
+**Penyebab:** Bind mount `./src:/app/src` di `docker-compose.yml` mewarisi ownership host (UID host, biasanya 1000). Container berjalan sebagai `openclaw` (UID ~100) yang tidak punya write access ke file-file tersebut.
+
+**Fix:**
+
+```bash
+docker compose down
+
+# 1. Ambil UID/GID openclaw dari image
+docker compose run --rm --entrypoint id openclaw
+# contoh: uid=100(openclaw) gid=101(openclaw)
+
+# 2. Chown semua source bind-mount directories di host
+sudo chown -R 100:101 src/ test/ tools/ scripts/ docs/ \
+  package.json package-lock.json tsconfig.json Dockerfile docker-compose.yml README.md
+sudo chmod -R 775 src/ test/ tools/ scripts/ docs/
+
+# 3. Agar host user tetap bisa edit tanpa sudo
+sudo groupadd -g 101 openclaw 2>/dev/null || true
+sudo usermod -aG openclaw $(whoami)
+newgrp openclaw
+
+docker compose up -d
+```
+
+**Fix permanen via entrypoint** (tidak perlu chown ulang setelah git pull):
+
+Buat file `entrypoint.sh` di root project:
+
+```bash
+#!/bin/sh
+# Fix ownership bind-mounted source dirs agar self-healing bisa write patch
+chown -R openclaw:openclaw /app/src /app/test /app/tools /app/scripts /app/docs 2>/dev/null || true
+exec su-exec openclaw node --enable-source-maps dist/index.js
+```
+
+Lalu modifikasi `Dockerfile` di runtime stage, tepat sebelum `USER openclaw`:
+
+```dockerfile
+COPY --chown=root:root entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+# USER openclaw   ← baris ini tetap ada di bawahnya
+
+ENTRYPOINT ["/entrypoint.sh"]
+# (hapus baris: ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"])
+```
+
+Rebuild container:
+
+```bash
+docker compose build --no-cache && docker compose up -d
+```
 
 ### Docker: Warning `.env not found at /app/.env`
 

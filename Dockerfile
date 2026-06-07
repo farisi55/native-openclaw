@@ -172,7 +172,12 @@ ENV NODE_ENV=production \
     MCP_CONFIG_PATH=/data/mcp.json \
     STORAGE_BACKEND=file
 
+COPY --chown=root:root entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER openclaw
+
+ENTRYPOINT ["/entrypoint.sh"]
 
 VOLUME ["/data", "/skills", "/workspace"]
 
