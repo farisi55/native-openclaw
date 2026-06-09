@@ -10,6 +10,8 @@ export type OptimizedIntent =
   | 'workspace'
   | 'api'
   | 'mcp'
+  | 'mcp-config-update'
+  | 'mcp-config-read'
   | 'unknown';
 
 export interface PromptReviewResult {

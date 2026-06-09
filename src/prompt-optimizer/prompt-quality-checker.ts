@@ -29,6 +29,14 @@ export class PromptQualityChecker {
       warnings.push('self-healing-routing-repaired');
     }
 
+    if (
+      (compiled.intent === 'mcp-config-update' || compiled.intent === 'mcp-config-read') &&
+      compiled.routingHint !== 'self-configuration'
+    ) {
+      compiled = { ...compiled, routingHint: 'self-configuration' };
+      warnings.push('self-configuration-routing-repaired');
+    }
+
     if (compiled.intent === 'email' && !/brevo-email/i.test(optimizedInput)) {
       optimizedInput += '\n\nEmail delivery rule: call brevo-email and verify ok=true before claiming sent.';
       warnings.push('email-brevo-rule-added');

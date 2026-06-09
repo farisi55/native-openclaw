@@ -22,6 +22,7 @@ import { createApiRuntimeState, startApiServerIfEnabled } from './api';
 import { startTelegramIntegrationIfEnabled, type TelegramIntegration } from './integrations';
 import { configureDnsDefaults, setupGlobalProxy } from './network';
 import { McpManager } from './mcp';
+import { createMcpAgentConfigureTool, McpAgentService } from './mcp-agent';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 import { jobRequiresEmail } from './scheduler/scheduler-engine';
 import { startWebUiServerIfEnabled, type StartedWebUiServer } from './web-ui';
@@ -306,6 +307,19 @@ async function bootstrap(): Promise<void> {
   const toolRegistry = new ToolRegistry(process.cwd());
   await toolRegistry.loadTools();
 
+  const mcpAgent = new McpAgentService({
+    enabled: getEnvBool('MCP_AGENT_ENABLED', true),
+    allowConfigWrite: getEnvBool('MCP_AGENT_ALLOW_CONFIG_WRITE', true),
+    projectRoot: process.cwd(),
+    configPath: getOptionalEnv('MCP_AGENT_CONFIG_PATH', './mcp_agent.config.yaml') ?? './mcp_agent.config.yaml',
+  });
+  if (mcpAgent.enabled) {
+    toolRegistry.registerRuntimeTool(createMcpAgentConfigureTool(mcpAgent));
+    logger.info('MCP Agent self-configuration ready', {
+      configPath: mcpAgent.configService.defaultConfigPath,
+    });
+  }
+
   let mcpManager: McpManager | undefined;
   if (config.mcp.enabled) {
     mcpManager = new McpManager({
@@ -378,6 +392,7 @@ async function bootstrap(): Promise<void> {
       selfImproving: SELF_IMPROVING,
       selfImprovingEvalThreshold: SELF_IMPROVING_EVAL_THRESHOLD,
       ...(mcpManager ? { mcpManager } : {}),
+      ...(mcpAgent.enabled ? { mcpAgent } : {}),
       scheduler,
       selfHealing: selfHealingContext,
     }

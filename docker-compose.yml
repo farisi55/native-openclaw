@@ -38,6 +38,9 @@ services:
       WORKFLOW_FILE: /workspace/WORKFLOW.md
       TOOLS_DIR: /app/tools
       MCP_CONFIG_PATH: /data/mcp.json
+      MCP_AGENT_ENABLED: ${MCP_AGENT_ENABLED:-true}
+      MCP_AGENT_CONFIG_PATH: ${MCP_AGENT_CONFIG_PATH:-/app/mcp_agent.config.yaml}
+      MCP_AGENT_ALLOW_CONFIG_WRITE: ${MCP_AGENT_ALLOW_CONFIG_WRITE:-true}
       STORAGE_BACKEND: file
 
       NODE_OPTIONS: "--enable-source-maps"

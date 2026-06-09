@@ -18,6 +18,11 @@ import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager } from '../storage/session-manager';
 import type { McpManager } from '../mcp';
 import { validateMcpConfigFile } from '../mcp';
+import {
+  isMcpConfigurationIntent,
+  type McpAgentActionResult,
+  type McpAgentService,
+} from '../mcp-agent';
 import { loadSkillFromFile } from '../skills/loader';
 import { WorkspaceManager } from '../workspace';
 import { handleSchedulerText, type SchedulerActionContext } from '../scheduler';
@@ -66,6 +71,8 @@ export interface ActionContext {
   activeSessionId: string | null;
   /** Optional MCP manager for MCP install/add natural-language actions. */
   mcpManager?: McpManager;
+  /** Deterministic MCP YAML self-configuration service. */
+  mcpAgent?: McpAgentService;
   /** Optional scheduler action context for natural-language cronjob management. */
   scheduler?: SchedulerActionContext;
   /** Optional self-improvement action context for management commands. */
@@ -82,7 +89,7 @@ export interface ActionResult {
   /** Text response to display to the user (when handled = true). */
   response?: string;
   /** Type of handled action, used by non-blocking learning hooks. */
-  actionType?: 'scheduler_create' | 'scheduler_manage' | 'self_improve' | 'self_healing' | 'self_upgrade' | 'command' | 'capability' | 'other';
+  actionType?: 'scheduler_create' | 'scheduler_manage' | 'self_improve' | 'self_healing' | 'self_upgrade' | 'self_configuration' | 'command' | 'capability' | 'other';
 }
 
 // ─── Pattern matchers ─────────────────────────────────────────────────────────
@@ -185,6 +192,25 @@ function formatOpenCodeDoctorResult(result: OpenCodeDoctorResult): string {
   }
 
   return lines.join('\n');
+}
+
+function formatMcpAgentResult(result: McpAgentActionResult): string {
+  const heading = result.action === 'listed'
+    ? 'Konfigurasi MCP berhasil dibaca.'
+    : result.action === 'removed'
+    ? `Server MCP \`${result.serverName ?? ''}\` berhasil dihapus.`
+    : result.action === 'unchanged'
+    ? result.message
+    : `Server MCP \`${result.serverName ?? ''}\` berhasil ${result.action === 'created' ? 'ditambahkan' : 'diperbarui'}.`;
+  return [
+    heading,
+    '',
+    `File: \`${result.configPath}\``,
+    '',
+    '```yaml',
+    result.yamlPreview.trimEnd(),
+    '```',
+  ].join('\n');
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -436,6 +462,41 @@ export async function handleAction(
   if (opencodeDoctorMatch) {
     const result = await runOpenCodeDoctor({ smokeTest: Boolean(opencodeDoctorMatch[1]) });
     return { handled: true, response: formatOpenCodeDoctorResult(result), actionType: 'command' };
+  }
+
+  const isCompiledMcpConfiguration =
+    compiledPrompt?.intent === 'mcp-config-update' ||
+    compiledPrompt?.intent === 'mcp-config-read' ||
+    compiledPrompt?.routingHint === 'self-configuration';
+  if (isCompiledMcpConfiguration || isMcpConfigurationIntent(originalInput)) {
+    if (!ctx.mcpAgent?.enabled) {
+      return {
+        handled: true,
+        response: 'MCP Agent self-configuration is disabled. Set MCP_AGENT_ENABLED=true.',
+        actionType: 'self_configuration',
+      };
+    }
+    try {
+      const result = await ctx.mcpAgent.handleInstruction(originalInput);
+      return {
+        handled: true,
+        response: formatMcpAgentResult(result),
+        actionType: 'self_configuration',
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('MCP self-configuration failed', { error: message });
+      return {
+        handled: true,
+        response: [
+          'Gagal memperbarui konfigurasi MCP.',
+          `Reason: ${message}`,
+          '',
+          'No file changes were saved.',
+        ].join('\n'),
+        actionType: 'self_configuration',
+      };
+    }
   }
 
   const infoCapabilityQuestion =

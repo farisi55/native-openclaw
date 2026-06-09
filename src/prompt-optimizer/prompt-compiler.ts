@@ -24,6 +24,9 @@ function routingHint(intent: PromptReviewResult['intent']): string | undefined {
       return 'workspace';
     case 'mcp':
       return 'mcp';
+    case 'mcp-config-update':
+    case 'mcp-config-read':
+      return 'self-configuration';
     case 'api':
       return 'api';
     case 'tool':
@@ -43,6 +46,9 @@ function outputRequirement(intent: PromptReviewResult['intent']): string {
       return 'Execute required email tools first, then return Brevo verification result.';
     case 'scheduler':
       return 'Return scheduler action result and preserve timing details.';
+    case 'mcp-config-update':
+    case 'mcp-config-read':
+      return 'Return the MCP self-configuration result and validated YAML preview.';
     default:
       return 'Answer concisely and include only relevant details.';
   }
@@ -118,6 +124,8 @@ export class PromptCompiler {
         ? '- schedule timing and email requirement must remain intact.'
         : review.intent === 'self-upgrade'
         ? '- SelfUpgradeEngine must own the change; no direct system-execute routing.'
+        : review.intent === 'mcp-config-update' || review.intent === 'mcp-config-read'
+        ? '- MCP Agent self-configuration must handle this request; self-healing and self-upgrade must not run.'
         : '- response directly satisfies the user request.',
     ].join('\n');
 

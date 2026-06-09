@@ -3,6 +3,7 @@ import { isSimpleChatIntent } from '../agents/simple-chat-intent';
 import { looksLikeSchedulerRequest } from '../scheduler/scheduler-intent';
 import { buildSelfUpgradeInstruction, isInformationalCapabilityQuestion, isSelfUpgradeIntent } from '../self-healing';
 import { redactSecrets } from '../self-healing';
+import { classifyMcpConfigurationIntent } from '../mcp-agent';
 import type { OptimizedIntent, PromptReviewResult } from './prompt-optimizer-types';
 
 const EMAIL_SEND_RE =
@@ -86,6 +87,30 @@ export class PromptReviewEngine {
         ],
         excludedTools: ['system-execute', 'SelfUpgradeEngine', 'SelfHealingEngine'],
         requiredActions: ['answer as normal short chat'],
+      };
+    }
+
+    const mcpConfigurationIntent = classifyMcpConfigurationIntent(trimmed);
+    if (mcpConfigurationIntent) {
+      const isRead = mcpConfigurationIntent === 'mcp-config-read';
+      return {
+        ...baseResult(input, mcpConfigurationIntent),
+        routingHint: 'self-configuration',
+        taskGoal: isRead
+          ? 'Read and report the self-configured MCP servers from mcp_agent.config.yaml.'
+          : 'Safely update mcp_agent.config.yaml through the MCP Agent self-configuration service.',
+        constraints: [
+          'Use the deterministic MCP Agent configuration service.',
+          'Do not route this request to SelfHealingEngine or SelfUpgradeEngine.',
+          'Do not use system-execute to edit the YAML file.',
+          'Preserve existing MCP server entries.',
+        ],
+        requiredTools: isRead ? [] : ['mcp-agent.configure-server'],
+        excludedTools: ['SelfHealingEngine', 'SelfUpgradeEngine', 'system-execute'],
+        requiredActions: [
+          isRead ? 'read and validate MCP YAML' : 'parse, update, write, and validate MCP YAML',
+          'return a clear configuration report',
+        ],
       };
     }
 

@@ -598,6 +598,47 @@ MCP_ENABLED=true
 MCP_CONFIG_PATH=./data/mcp.json
 ```
 
+### MCP Agent Self-Configuration
+
+`mcp-agent` mengelola file YAML `mcp_agent.config.yaml` secara deterministik. Permintaan ini masuk jalur
+`self-configuration`, bukan self-healing atau self-upgrade. Agent membaca YAML yang ada, mempertahankan
+server lama, menambah atau memperbarui server, menulis secara atomik, lalu memvalidasi hasilnya.
+
+```env
+MCP_AGENT_ENABLED=true
+MCP_AGENT_CONFIG_PATH=./mcp_agent.config.yaml
+MCP_AGENT_ALLOW_CONFIG_WRITE=true
+```
+
+Contoh chat:
+
+```text
+Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml.
+Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".
+```
+
+Contoh hasil konfigurasi:
+
+```yaml
+mcpServers:
+  filesystem:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+  canva:
+    url: "https://canva.com"
+  google-sheets:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-google-sheets"]
+```
+
+Path kustom harus tetap berada di dalam project root, berekstensi `.yaml`/`.yml`, dan tidak boleh menunjuk
+ke `.env`, secret, key, `.git`, `node_modules`, atau `dist`. Command hanya disimpan sebagai konfigurasi;
+MCP Agent tidak mengeksekusi command saat mengubah YAML.
+
+Di Docker, gunakan `MCP_AGENT_CONFIG_PATH=/app/mcp_agent.config.yaml`. Image menjalankan aplikasi sebagai
+user non-root `openclaw`, dan `/app` dimiliki user tersebut sehingga file dapat ditulis tanpa akses root.
+Untuk persistensi lintas pembuatan ulang container, bind-mount file itu dari host.
+
 ---
 
 ## HTTP API

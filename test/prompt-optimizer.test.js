@@ -133,6 +133,30 @@ test('direct email request requires web-fetch then brevo-email verification', as
   });
 });
 
+test('MCP config update routes to self-configuration and excludes self-healing', async () => {
+  await withOptimizer(async (optimizer) => {
+    const input = 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml milikmu sekarang. Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".';
+    const result = await optimizer.optimize({ userInput: input });
+
+    assert.equal(result.compiled.intent, 'mcp-config-update');
+    assert.equal(result.compiled.routingHint, 'self-configuration');
+    assert.ok(result.compiled.requiredTools.includes('mcp-agent.configure-server'));
+    assert.ok(result.compiled.excludedTools.includes('SelfHealingEngine'));
+    assert.ok(result.compiled.excludedTools.includes('SelfUpgradeEngine'));
+  });
+});
+
+test('MCP config list routes to self-configuration read intent', async () => {
+  await withOptimizer(async (optimizer) => {
+    const result = await optimizer.optimize({
+      userInput: 'list MCP server yang tersedia di mcp_agent.config.yaml',
+    });
+
+    assert.equal(result.compiled.intent, 'mcp-config-read');
+    assert.equal(result.compiled.routingHint, 'self-configuration');
+  });
+});
+
 test('simple chat stays compact and does not route to tools or autonomous engines', async () => {
   await withOptimizer(async (optimizer) => {
     const input = 'hello kamu siapa';

@@ -1,0 +1,4 @@
+mcpServers:
+  google-sheets:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-google-sheets"]

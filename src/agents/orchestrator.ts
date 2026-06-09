@@ -24,6 +24,7 @@ import type { MemoryManager } from '../storage/memory-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
 import type { ProviderRouter } from '../router/provider-router';
 import type { McpManager } from '../mcp';
+import type { McpAgentService } from '../mcp-agent';
 import { ToolLoop, type ToolLoopToolResult } from './tool-loop';
 import { ReasoningEngine } from './reasoning-engine';
 import { CapabilityInstaller } from './capability-installer';
@@ -342,6 +343,11 @@ export interface OrchestratorOptions {
   mcpManager?: McpManager;
 
   /**
+   * Optional deterministic MCP YAML self-configuration service.
+   */
+  mcpAgent?: McpAgentService;
+
+  /**
    * Optional scheduler action context for cronjob management actions.
    */
   scheduler?: SchedulerActionContext;
@@ -400,6 +406,7 @@ export class Orchestrator {
   private readonly toolRegistry: ToolRegistry;
   private readonly router: ProviderRouter;
   private readonly mcpManager: McpManager | undefined;
+  private readonly mcpAgent: McpAgentService | undefined;
   private readonly scheduler: SchedulerActionContext | undefined;
   private readonly selfHealing: SelfHealingActionContext | undefined;
   private readonly reasoning: ReasoningEngine;
@@ -410,7 +417,7 @@ export class Orchestrator {
   private readonly skillsDir: string;
   private selfImprovingActionContext: SelfImprovingActionContext;
   readonly workspace: WorkspaceManager; // PERF [E1]
-  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'scheduler' | 'selfHealing'>>;
+  private readonly opts: Required<Omit<OrchestratorOptions, 'mcpManager' | 'mcpAgent' | 'scheduler' | 'selfHealing'>>;
 
   private _activeSessionId: string | null = null;
   private _workspaceReady = false;
@@ -432,6 +439,7 @@ export class Orchestrator {
     this.router = router;
     this.contextCompressor = contextCompressor;
     this.mcpManager = opts.mcpManager;
+    this.mcpAgent = opts.mcpAgent;
     this.scheduler = opts.scheduler;
     this.selfHealing = opts.selfHealing;
     this.workspace = workspace;
@@ -650,6 +658,7 @@ export class Orchestrator {
       skillsDir: this.skillsDir,
       activeSessionId: this._activeSessionId,
       ...(this.mcpManager ? { mcpManager: this.mcpManager } : {}),
+      ...(this.mcpAgent ? { mcpAgent: this.mcpAgent } : {}),
       ...(this.scheduler ? { scheduler: this.scheduler } : {}),
       selfImproving: this.selfImprovingActionContext,
       ...(this.selfHealing ? { selfHealing: this.selfHealing } : {}),

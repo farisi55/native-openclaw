@@ -174,6 +174,9 @@ ENV NODE_ENV=production \
     WORKFLOW_FILE=/workspace/WORKFLOW.md \
     TOOLS_DIR=/app/tools \
     MCP_CONFIG_PATH=/data/mcp.json \
+    MCP_AGENT_ENABLED=true \
+    MCP_AGENT_CONFIG_PATH=/app/mcp_agent.config.yaml \
+    MCP_AGENT_ALLOW_CONFIG_WRITE=true \
     STORAGE_BACKEND=file
 
 COPY --chown=root:root entrypoint.sh /entrypoint.sh
