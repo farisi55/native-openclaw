@@ -5,6 +5,7 @@
 
 import { loadConfig } from './config';
 import { getEnvBool, getEnvInt, getOptionalEnv, SELF_IMPROVING, SELF_IMPROVING_EVAL_THRESHOLD } from './config/env';
+import { resolve } from 'path';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
 import { SkillRegistry } from './skills';
@@ -307,11 +308,23 @@ async function bootstrap(): Promise<void> {
   const toolRegistry = new ToolRegistry(process.cwd());
   await toolRegistry.loadTools();
 
+  const configuredMcpAgentPath = getOptionalEnv('MCP_AGENT_CONFIG_PATH')?.trim();
+  const sharedMcpConfigPath = configuredMcpAgentPath || config.mcp.configPath;
+  if (
+    configuredMcpAgentPath &&
+    resolve(process.cwd(), configuredMcpAgentPath) !== resolve(process.cwd(), config.mcp.configPath)
+  ) {
+    logger.warn('MCP config paths differ; using MCP_AGENT_CONFIG_PATH for all MCP operations', {
+      configuredRuntimePath: config.mcp.configPath,
+      sharedConfigPath: configuredMcpAgentPath,
+    });
+  }
+
   const mcpAgent = new McpAgentService({
     enabled: getEnvBool('MCP_AGENT_ENABLED', true),
     allowConfigWrite: getEnvBool('MCP_AGENT_ALLOW_CONFIG_WRITE', true),
     projectRoot: process.cwd(),
-    configPath: getOptionalEnv('MCP_AGENT_CONFIG_PATH', './mcp_agent.config.yaml') ?? './mcp_agent.config.yaml',
+    configPath: sharedMcpConfigPath,
   });
   if (mcpAgent.enabled) {
     toolRegistry.registerRuntimeTool(createMcpAgentConfigureTool(mcpAgent));
@@ -323,7 +336,7 @@ async function bootstrap(): Promise<void> {
   let mcpManager: McpManager | undefined;
   if (config.mcp.enabled) {
     mcpManager = new McpManager({
-      configPath: config.mcp.configPath,
+      configPath: sharedMcpConfigPath,
       toolRegistry,
     });
     await mcpManager.init();

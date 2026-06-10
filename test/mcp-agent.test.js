@@ -7,6 +7,7 @@ const {
   McpAgentService,
   parseMcpConfigurationInstruction,
 } = require('../dist/mcp-agent');
+const { McpManager } = require('../dist/mcp');
 const { handleAction } = require('../dist/agents/action-handler');
 
 async function withService(fn) {
@@ -68,6 +69,26 @@ test('creates missing YAML and adds google-sheets command server', async () => {
     assert.match(yaml, /google-sheets:/);
     assert.match(yaml, /command: "npx"/);
     assert.match(yaml, /@modelcontextprotocol\/server-google-sheets/);
+  });
+});
+
+test('runtime manager sees self-configured servers without restart', async () => {
+  await withService(async ({ service, configPath }) => {
+    const manager = new McpManager({ configPath });
+    await manager.init();
+    assert.deepEqual(await manager.listServers(), []);
+
+    await service.configureServer({
+      serverName: 'google-sheets',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
+    });
+
+    const servers = await manager.listServers();
+    assert.equal(servers.length, 1);
+    assert.equal(servers[0].name, 'google-sheets');
+    assert.equal(servers[0].command, 'npx');
+    assert.deepEqual(servers[0].args, ['-y', '@modelcontextprotocol/server-google-sheets']);
   });
 });
 

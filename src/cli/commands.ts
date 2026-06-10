@@ -1078,8 +1078,12 @@ export async function cmdMcp(ctx: CLIContext, args: string[]): Promise<void> {
       }
       for (const server of servers) {
         const status = server.status === 'running' ? c('green', '● running') : c('dim', '○ stopped');
+        if (server.transport === 'url') {
+          process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.url ?? ''} ${c('dim', '(url)')}\n`);
+          continue;
+        }
         const argsText = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
-        process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.command}${argsText}\n`);
+        process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.command ?? ''}${argsText}\n`);
       }
       process.stdout.write('\n');
       return;

@@ -20,8 +20,10 @@ export interface McpManagerOptions {
 
 export interface McpServerInfo {
   name: string;
-  command: string;
+  command?: string;
+  url?: string;
   args: string[];
+  transport: 'stdio' | 'url';
   status: 'running' | 'stopped';
 }
 
@@ -31,10 +33,9 @@ export class McpManager {
   private config: McpConfigFile = { mcpServers: {} };
   private readonly clients = new Map<string, McpClient>();
   private readonly cachedTools = new Map<string, McpTool[]>();
-  private initialized = false;
 
   constructor(options: McpManagerOptions = {}) {
-    this.configPath = options.configPath ?? './data/mcp.json';
+    this.configPath = options.configPath ?? './mcp_agent.config.yaml';
     this.toolRegistry = options.toolRegistry;
   }
 
@@ -48,7 +49,6 @@ export class McpManager {
 
   async loadConfig(): Promise<McpConfigFile> {
     this.config = await loadMcpConfig(this.configPath);
-    this.initialized = true;
     return this.config;
   }
 
@@ -57,17 +57,18 @@ export class McpManager {
   }
 
   async listServers(): Promise<McpServerInfo[]> {
-    await this.ensureInitialized();
+    await this.loadConfig();
     return Object.entries(this.config.mcpServers).map(([name, config]) => ({
       name,
-      command: config.command,
-      args: config.args ?? [],
+      ...('url' in config ? { url: config.url } : { command: config.command }),
+      args: 'args' in config ? (config.args ?? []) : [],
+      transport: 'url' in config ? 'url' : 'stdio',
       status: this.clients.get(name)?.isRunning ? 'running' : 'stopped',
     }));
   }
 
   async addServer(name: string, config: McpServerConfig): Promise<void> {
-    await this.ensureInitialized();
+    await this.loadConfig();
     this.config.mcpServers[name] = validateMcpServerConfig(config);
     await this.saveConfig();
   }
@@ -77,7 +78,7 @@ export class McpManager {
   }
 
   async removeServer(name: string): Promise<boolean> {
-    await this.ensureInitialized();
+    await this.loadConfig();
     if (!this.config.mcpServers[name]) return false;
     await this.stopServer(name);
     delete this.config.mcpServers[name];
@@ -86,9 +87,12 @@ export class McpManager {
   }
 
   async startServer(name: string): Promise<McpTool[]> {
-    await this.ensureInitialized();
+    await this.loadConfig();
     const config = this.config.mcpServers[name];
     if (!config) throw new Error(`MCP server "${name}" is not configured.`);
+    if ('url' in config) {
+      throw new Error(`MCP server "${name}" uses URL transport, which is listed but cannot be started by the stdio MCP client yet.`);
+    }
 
     let client = this.clients.get(name);
     if (!client || !client.isRunning) {
@@ -121,7 +125,7 @@ export class McpManager {
   }
 
   async startAllConfigured(): Promise<Array<{ name: string; ok: boolean; error?: string }>> {
-    await this.ensureInitialized();
+    await this.loadConfig();
     const results: Array<{ name: string; ok: boolean; error?: string }> = [];
     for (const name of Object.keys(this.config.mcpServers)) {
       try {
@@ -178,9 +182,5 @@ export class McpManager {
 
   private unregisterToolsForServer(serverName: string): void {
     this.toolRegistry?.unregisterByPrefix(`mcp:${serverName}:`);
-  }
-
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) await this.loadConfig();
   }
 }

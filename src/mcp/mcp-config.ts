@@ -1,11 +1,26 @@
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { dirname, extname, resolve } from 'path';
+import { parseDocument } from 'yaml';
 
-export interface McpServerConfig {
+export interface McpCommandServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: never;
+}
+
+export interface McpUrlServerConfig {
+  url: string;
+  command?: never;
+  args?: never;
+  env?: never;
+}
+
+export type McpServerConfig = McpCommandServerConfig | McpUrlServerConfig;
+
+function isMcpUrlServerConfig(config: McpServerConfig): config is McpUrlServerConfig {
+  return typeof config.url === 'string';
 }
 
 export interface McpConfigFile {
@@ -81,10 +96,27 @@ export function validateMcpServerConfig(value: unknown): McpServerConfig {
   }
 
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate['command'] !== 'string' || candidate['command'].trim() === '') {
-    throw new Error('MCP server config requires a non-empty command.');
+  const command = typeof candidate['command'] === 'string' ? candidate['command'].trim() : '';
+  const url = typeof candidate['url'] === 'string' ? candidate['url'].trim() : '';
+
+  if ((command && url) || (!command && !url)) {
+    throw new Error('MCP server config requires either a non-empty command or a non-empty url.');
   }
-  assertMcpCommandAllowed(candidate['command']);
+
+  if (url) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error('MCP server url is invalid.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('MCP server url must use http or https.');
+    }
+    return { url };
+  }
+
+  assertMcpCommandAllowed(command);
 
   if (candidate['args'] !== undefined) {
     if (!Array.isArray(candidate['args']) || !candidate['args'].every((arg) => typeof arg === 'string')) {
@@ -104,7 +136,7 @@ export function validateMcpServerConfig(value: unknown): McpServerConfig {
   }
 
   const config: McpServerConfig = {
-    command: candidate['command'].trim(),
+    command,
   };
 
   if (candidate['args'] !== undefined) config.args = candidate['args'] as string[];
@@ -130,7 +162,45 @@ export function validateMcpConfigFile(value: unknown): McpConfigFile {
   return { mcpServers };
 }
 
-export async function loadMcpConfig(configPath = './data/mcp.json'): Promise<McpConfigFile> {
+function parseMcpConfig(raw: string, configPath: string): unknown {
+  if (!raw.trim()) return DEFAULT_MCP_CONFIG;
+  if (/\.ya?ml$/i.test(extname(configPath))) {
+    const document = parseDocument(raw, { uniqueKeys: true });
+    if (document.errors.length > 0) {
+      throw new Error(`Invalid MCP YAML: ${document.errors[0]?.message ?? 'parse failed'}`);
+    }
+    return document.toJS({ maxAliasCount: 0 });
+  }
+  return JSON.parse(raw);
+}
+
+function stringifyMcpConfig(config: McpConfigFile, configPath: string): string {
+  const validated = validateMcpConfigFile(config);
+  if (!/\.ya?ml$/i.test(extname(configPath))) {
+    return JSON.stringify(validated, null, 2);
+  }
+  const lines = ['mcpServers:'];
+  const entries = Object.entries(validated.mcpServers);
+  if (entries.length === 0) return 'mcpServers: {}\n';
+  for (const [name, server] of entries) {
+    lines.push(`  ${name}:`);
+    if ('url' in server) {
+      lines.push(`    url: ${JSON.stringify(server.url)}`);
+      continue;
+    }
+    lines.push(`    command: ${JSON.stringify(server.command)}`);
+    if (server.args) lines.push(`    args: [${server.args.map((arg) => JSON.stringify(arg)).join(', ')}]`);
+    if (server.env) {
+      lines.push('    env:');
+      for (const [key, value] of Object.entries(server.env)) {
+        lines.push(`      ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export async function loadMcpConfig(configPath = './mcp_agent.config.yaml'): Promise<McpConfigFile> {
   const absolutePath = resolveMcpConfigPath(configPath);
 
   if (!existsSync(absolutePath)) {
@@ -140,7 +210,7 @@ export async function loadMcpConfig(configPath = './data/mcp.json'): Promise<Mcp
   }
 
   const raw = await readFile(absolutePath, 'utf-8');
-  const parsed = raw.trim() ? JSON.parse(raw) : DEFAULT_MCP_CONFIG;
+  const parsed = parseMcpConfig(raw, absolutePath);
   return validateMcpConfigFile(parsed);
 }
 
@@ -150,7 +220,7 @@ export async function saveMcpConfig(
 ): Promise<void> {
   const absolutePath = resolveMcpConfigPath(configPath);
   await mkdir(dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, JSON.stringify(validateMcpConfigFile(config), null, 2), 'utf-8');
+  await writeFile(absolutePath, stringifyMcpConfig(config, absolutePath), 'utf-8');
 }
 
 export function parseMcpServerInput(name: string, rawJson?: string): McpServerConfig {
@@ -161,7 +231,12 @@ export function parseMcpServerInput(name: string, rawJson?: string): McpServerCo
     if (!preset) {
       throw new Error(`No MCP preset found for "${name}". Provide a JSON server config.`);
     }
-    const config: McpServerConfig = { command: preset.command };
+
+    if (isMcpUrlServerConfig(preset)) {
+      return { url: preset.url };
+    }
+
+    const config: McpCommandServerConfig = { command: preset.command };
     if (preset.args) config.args = [...preset.args];
     if (preset.env) config.env = { ...preset.env };
     return config;

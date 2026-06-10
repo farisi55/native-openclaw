@@ -171,7 +171,7 @@ function buildRawConfig(): unknown {
     },
     mcp: {
       enabled: parseBoolEnv('MCP_ENABLED', true),
-      configPath: getOptionalEnv('MCP_CONFIG_PATH', './data/mcp.json') ?? './data/mcp.json',
+      configPath: getOptionalEnv('MCP_CONFIG_PATH', './mcp_agent.config.yaml') ?? './mcp_agent.config.yaml',
     },
   };
 }

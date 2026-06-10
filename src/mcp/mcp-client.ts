@@ -35,14 +35,14 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export class McpClient {
   private readonly name: string;
-  private readonly config: McpServerConfig;
+  private readonly config: Extract<McpServerConfig, { command: string }>; 
   private process: ChildProcessWithoutNullStreams | null = null;
   private buffer = Buffer.alloc(0);
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private stderrTail = '';
 
-  constructor(name: string, config: McpServerConfig) {
+  constructor(name: string, config: Extract<McpServerConfig, { command: string }>) {
     this.name = name;
     this.config = config;
   }
