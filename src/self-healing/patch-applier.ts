@@ -63,6 +63,10 @@ export class PatchApplier {
     return this.snapshot.getChangedFiles();
   }
 
+  async rollbackFiles(filePaths: string[]): Promise<void> {
+    await this.snapshot.rollbackFiles(filePaths);
+  }
+
   get root(): string {
     return this.rootDir;
   }

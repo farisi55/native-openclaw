@@ -512,6 +512,41 @@ RESTART_NOTIFY_AFTER_START=true     # kirim konfirmasi setelah restart berhasil
 
 ---
 
+## Agent Gateway
+
+Agent Gateway adalah lapisan delegasi ringan untuk capability khusus. Native OpenClaw tetap menjadi
+orchestrator utama; connector hanya dijalankan on-demand dan tidak hidup sebagai daemon.
+
+```text
+Native OpenClaw
+-> capability router
+-> OpenCode connector
+-> Internal CodingAgent fallback
+-> QA dan rollback oleh self-healing/self-upgrade
+```
+
+Capability yang aktif pada fase ini:
+
+- `coding.patch`: OpenCode lebih dahulu, lalu Internal CodingAgent jika OpenCode disabled, gagal,
+  timeout, atau tidak menghasilkan perubahan.
+- `mcp.config`, `mcp.server.list`, `mcp.server.start`, `mcp.server.stop`: Internal MCP Agent.
+
+```env
+AGENT_GATEWAY_ENABLED=true
+AGENT_GATEWAY_MAX_DELEGATION_DEPTH=1
+AGENT_GATEWAY_DEFAULT_TIMEOUT_MS=900000
+AGENT_OPENCODE_ENABLED=true
+AGENT_INTERNAL_CODING_ENABLED=true
+AGENT_INTERNAL_CODING_MAX_PROMPT_CHARS=24000
+AGENT_MCP_ENABLED=true
+```
+
+Environment OpenCode lama tetap berlaku. `OPENCODE_AGENT_ENABLED` dan flag
+`OPENCODE_AGENT_USE_FOR_SELF_HEALING`/`OPENCODE_AGENT_USE_FOR_SELF_UPGRADE` tetap menentukan apakah
+connector OpenCode dapat dipilih.
+
+---
+
 ## OpenCode Agent
 
 Integrasi opsional dengan OpenCode sebagai external coding agent — bukan provider chat biasa.
@@ -573,7 +608,8 @@ opencode run "hello"    # smoke test
 
 ## MCP (Model Context Protocol)
 
-Integrasi external tools via MCP server. Konfigurasi disimpan di `MCP_CONFIG_PATH=./data/mcp.json`.
+Integrasi external tools via MCP server. Runtime `/mcp` dan MCP Agent memakai sumber konfigurasi yang
+sama: `mcp_agent.config.yaml`.
 
 ### Preset Server
 
@@ -595,7 +631,8 @@ Launcher yang diizinkan: `npx`, `uvx`, `node`, `python`, `python3`, `deno`.
 
 ```env
 MCP_ENABLED=true
-MCP_CONFIG_PATH=./data/mcp.json
+MCP_CONFIG_PATH=./mcp_agent.config.yaml
+MCP_AUTO_START=false
 ```
 
 ### MCP Agent Self-Configuration
@@ -609,6 +646,10 @@ MCP_AGENT_ENABLED=true
 MCP_AGENT_CONFIG_PATH=./mcp_agent.config.yaml
 MCP_AGENT_ALLOW_CONFIG_WRITE=true
 ```
+
+MCP server tidak dijalankan otomatis secara default. Gunakan `/mcp start <name>` atau set
+`MCP_AUTO_START=true`. Jika `mcp_agent.config.yaml` belum ada tetapi `data/mcp.json` ditemukan,
+Native OpenClaw memigrasikan konfigurasi legacy itu ke YAML saat startup.
 
 Contoh chat:
 
@@ -775,7 +816,8 @@ NODE_ENV=production
 APP_DATA_DIR=/data
 SKILLS_DIR=/skills
 WORKSPACE_DIR=/workspace
-MCP_CONFIG_PATH=/data/mcp.json
+MCP_CONFIG_PATH=/app/mcp_agent.config.yaml
+MCP_AGENT_CONFIG_PATH=/app/mcp_agent.config.yaml
 STORAGE_BACKEND=file
 
 API_ENABLED=true
@@ -892,7 +934,8 @@ services:
       WORKSPACE_DIR: /workspace
       WORKFLOW_FILE: /workspace/WORKFLOW.md
       TOOLS_DIR: /app/tools
-      MCP_CONFIG_PATH: /data/mcp.json
+      MCP_CONFIG_PATH: /app/mcp_agent.config.yaml
+      MCP_AGENT_CONFIG_PATH: /app/mcp_agent.config.yaml
       STORAGE_BACKEND: file
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-18789}

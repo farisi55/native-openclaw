@@ -1,9 +1,10 @@
 import { readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import type { IProvider } from '../types/provider';
+import { GatewayCodingAgent } from '../agent-gateway';
 import { createLogger } from '../utils/logger';
 import { BugAnalyzerAgent } from './bug-analyzer-agent';
-import { CodingAgent, type OpenCodeFallbackState } from './coding-agent';
+import type { CodingPatchAgent, OpenCodeFallbackState } from './coding-agent';
 import { DependencyResolver } from './dependency-resolver';
 import { DiffGenerator } from './diff-generator';
 import { HealingStore } from './healing-store';
@@ -22,7 +23,7 @@ const logger = createLogger('self-upgrade');
 export interface SelfUpgradeEngineDeps {
   provider?: IProvider;
   analyzer?: BugAnalyzerAgent;
-  codingAgent?: CodingAgent;
+  codingAgent?: CodingPatchAgent;
   qaAgent?: QAAgent;
   patchPlanner?: PatchPlanner;
   testRunner?: TestRunner;
@@ -38,7 +39,7 @@ function runId(): string {
 
 export class SelfUpgradeEngine {
   private readonly analyzer: BugAnalyzerAgent;
-  private readonly codingAgent: CodingAgent;
+  private readonly codingAgent: CodingPatchAgent;
   private readonly qaAgent: QAAgent;
   private readonly patchPlanner: PatchPlanner;
   private readonly reportWriter: ReportWriter;
@@ -53,7 +54,12 @@ export class SelfUpgradeEngine {
     deps: SelfUpgradeEngineDeps = {}
   ) {
     this.analyzer = deps.analyzer ?? new BugAnalyzerAgent(deps.provider, 'default', config.temperature);
-    this.codingAgent = deps.codingAgent ?? new CodingAgent(deps.provider, 'default', config.temperature, config.redactSecrets);
+    this.codingAgent = deps.codingAgent ?? new GatewayCodingAgent({
+      ...(deps.provider ? { provider: deps.provider } : {}),
+      model: 'default',
+      temperature: config.temperature,
+      redact: config.redactSecrets,
+    });
     this.qaAgent = deps.qaAgent ?? new QAAgent();
     this.patchPlanner = deps.patchPlanner ?? new PatchPlanner();
     this.reportWriter = deps.reportWriter ?? new ReportWriter(config.runsDir, config.redactSecrets);
@@ -141,17 +147,31 @@ export class SelfUpgradeEngine {
         const commands = await testRunner.runAll(this.config.testCommands);
         let qaReport = this.qaAgent.analyze(commands);
         const commandsRun = [...commands];
+        let dependencyInstalled = false;
 
         if (!qaReport.passed && qaReport.nextAction === 'install_dependency' && this.config.autoInstall) {
           await snapshot.snapshotFile('package.json').catch(() => undefined);
           await snapshot.snapshotFile('package-lock.json').catch(() => undefined);
           commandsRun.push(...await dependencyResolver.install(qaReport.missingPackages));
+          dependencyInstalled = true;
           const rerun = await testRunner.runAll(this.config.testCommands);
           commandsRun.push(...rerun);
           qaReport = this.qaAgent.analyze(rerun);
           loop.status = 'dependency_installed';
         } else {
           loop.status = changedFiles.length > 0 ? 'patched' : 'failed';
+        }
+        if (qaReport.passed && this.config.autoApply && changedFiles.length === 0 && !dependencyInstalled) {
+          qaReport = {
+            passed: false,
+            summary: 'No connector produced detectable file changes.',
+            missingPackages: [],
+            errors: ['NO_DETECTABLE_CHANGES'],
+            nextAction: 'retry_fix',
+            rawLogExcerpt: 'Build/tests passed, but no patch was produced for the requested upgrade.',
+          };
+          loop.status = 'failed';
+          loop.error = qaReport.summary;
         }
 
         loop.analysis = analysis;
@@ -286,6 +306,12 @@ export class SelfUpgradeEngine {
     if (state.lastError) run.opencodeError = state.lastError;
     if (state.lastErrorType) run.opencodeErrorType = state.lastErrorType;
     if (state.lastSuggestion) run.opencodeSuggestion = state.lastSuggestion;
+    if (state.gatewayAgentId) run.agentUsed = state.gatewayAgentId;
+    if (state.gatewayFallbackPath) run.agentFallbackPath = [...state.gatewayFallbackPath];
+    if (state.providerId) run.providerUsed = state.providerId;
+    if (state.providerModel) run.providerModel = state.providerModel;
+    if (state.providerFallbackUsed !== undefined) run.providerFallbackUsed = state.providerFallbackUsed;
+    if (state.gatewayWarnings) run.agentWarnings = [...state.gatewayWarnings];
   }
 
   private withOpenCodeSummary(run: HealingRun, summary: string): string {

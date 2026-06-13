@@ -240,6 +240,8 @@ test('missing Telegram chat id and email recipient are skipped without crash', a
   process.env.TELEGRAM_BOT_TOKEN = 'test-token';
   process.env.RESTART_TELEGRAM_USE_DEFAULT_CHAT = 'false';
   process.env.RESTART_EMAIL_USE_BREVO_DEFAULTS = 'false';
+  delete process.env.RESTART_TELEGRAM_CHAT_ID;
+  delete process.env.RESTART_EMAIL_RECIPIENT;
 
   const result = await sendRestartNotifications(baseInput());
   assert.equal(result.ok, true);

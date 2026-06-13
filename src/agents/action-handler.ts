@@ -45,6 +45,11 @@ import {
 import { join } from 'path';
 import { createLogger } from '../utils/logger';
 import type { CompiledPrompt } from '../prompt-optimizer';
+import {
+  capabilityForIntent,
+  createAgentTaskId,
+  type AgentGatewayExecutor,
+} from '../agent-gateway';
 
 const logger = createLogger('agent:action-handler');
 
@@ -73,6 +78,8 @@ export interface ActionContext {
   mcpManager?: McpManager;
   /** Deterministic MCP YAML self-configuration service. */
   mcpAgent?: McpAgentService;
+  /** Lightweight connector gateway for coding and MCP delegation. */
+  agentGateway?: AgentGatewayExecutor;
   /** Optional scheduler action context for natural-language cronjob management. */
   scheduler?: SchedulerActionContext;
   /** Optional self-improvement action context for management commands. */
@@ -468,6 +475,23 @@ export async function handleAction(
     compiledPrompt?.intent === 'mcp-config-update' ||
     compiledPrompt?.intent === 'mcp-config-read' ||
     compiledPrompt?.routingHint === 'self-configuration';
+  const mcpCapability = capabilityForIntent(compiledPrompt?.intent ?? '', originalInput);
+  if (mcpCapability?.startsWith('mcp.') && ctx.agentGateway) {
+    const result = await ctx.agentGateway.execute({
+      id: createAgentTaskId('mcp'),
+      intent: compiledPrompt?.intent ?? 'mcp',
+      capability: mcpCapability,
+      userInput: originalInput,
+      cwd: process.cwd(),
+    });
+    return {
+      handled: true,
+      response: result.ok
+        ? result.output ?? result.summary
+        : `MCP Agent failed: ${result.error?.message ?? result.summary}`,
+      actionType: 'self_configuration',
+    };
+  }
   if (isCompiledMcpConfiguration || isMcpConfigurationIntent(originalInput)) {
     if (!ctx.mcpAgent?.enabled) {
       return {

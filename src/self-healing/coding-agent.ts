@@ -18,7 +18,8 @@ import {
   runOpenCodeAgent,
 } from '../tools/opencode-agent';
 
-type CodingMode = 'self-healing' | 'self-upgrade';
+export type CodingMode = 'self-healing' | 'self-upgrade';
+export type CodingExecutionMode = 'auto' | 'opencode-only' | 'internal-only';
 
 interface RepoFileState {
   size: number;
@@ -36,6 +37,50 @@ export interface OpenCodeFallbackState {
   lastErrorType?: string;
   lastOutput?: string;
   lastSuggestion?: string;
+  gatewayAgentId?: string;
+  gatewayFallbackPath?: string[];
+  providerId?: string;
+  providerModel?: string;
+  providerFallbackUsed?: boolean;
+  gatewayWarnings?: string[];
+}
+
+export interface CodingExecutionState {
+  providerId?: string;
+  model?: string;
+  providerFallbackUsed?: boolean;
+}
+
+export interface ApplyBugFixInput {
+  userInput: string;
+  analysis: BugAnalysis;
+  patchPlan: PatchPlan;
+  previousQa?: QAReport;
+  errorLog?: string;
+  patchApplier: PatchApplier;
+  runId?: string;
+  loop?: number;
+  openCodeState?: OpenCodeFallbackState;
+  executionState?: CodingExecutionState;
+  executionMode?: CodingExecutionMode;
+}
+
+export interface ApplyUpgradeInput {
+  userInput: string;
+  analysis: UpgradeAnalysis;
+  patchPlan: PatchPlan;
+  previousQa?: QAReport;
+  patchApplier: PatchApplier;
+  runId?: string;
+  loop?: number;
+  openCodeState?: OpenCodeFallbackState;
+  executionState?: CodingExecutionState;
+  executionMode?: CodingExecutionMode;
+}
+
+export interface CodingPatchAgent {
+  applyBugFix(input: ApplyBugFixInput): Promise<string[]>;
+  applyUpgrade(input: ApplyUpgradeInput): Promise<string[]>;
 }
 
 const selfHealingLogger = createLogger('self-healing');
@@ -111,7 +156,7 @@ function envBool(key: string, fallback: boolean): boolean {
   return ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
-function shouldUseOpenCode(mode: CodingMode): boolean {
+export function isOpenCodeEnabledForMode(mode: CodingMode): boolean {
   if (!envBool('OPENCODE_AGENT_ENABLED', false)) return false;
   if (mode === 'self-healing') return envBool('OPENCODE_AGENT_USE_FOR_SELF_HEALING', false);
   return envBool('OPENCODE_AGENT_USE_FOR_SELF_UPGRADE', false);
@@ -222,7 +267,7 @@ async function restoreFilesFromState(
   }
 }
 
-export class CodingAgent {
+export class CodingAgent implements CodingPatchAgent {
   constructor(
     private readonly provider?: IProvider,
     private readonly model = 'default',
@@ -230,17 +275,7 @@ export class CodingAgent {
     private readonly redact = true
   ) {}
 
-  async applyBugFix(input: {
-    userInput: string;
-    analysis: BugAnalysis;
-    patchPlan: PatchPlan;
-    previousQa?: QAReport;
-    errorLog?: string;
-    patchApplier: PatchApplier;
-    runId?: string;
-    loop?: number;
-    openCodeState?: OpenCodeFallbackState;
-  }): Promise<string[]> {
+  async applyBugFix(input: ApplyBugFixInput): Promise<string[]> {
     return this.apply({
       mode: 'self-healing',
       userInput: input.userInput,
@@ -252,19 +287,12 @@ export class CodingAgent {
       ...(input.runId ? { runId: input.runId } : {}),
       ...(input.loop ? { loop: input.loop } : {}),
       ...(input.openCodeState ? { openCodeState: input.openCodeState } : {}),
+      ...(input.executionState ? { executionState: input.executionState } : {}),
+      ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     });
   }
 
-  async applyUpgrade(input: {
-    userInput: string;
-    analysis: UpgradeAnalysis;
-    patchPlan: PatchPlan;
-    previousQa?: QAReport;
-    patchApplier: PatchApplier;
-    runId?: string;
-    loop?: number;
-    openCodeState?: OpenCodeFallbackState;
-  }): Promise<string[]> {
+  async applyUpgrade(input: ApplyUpgradeInput): Promise<string[]> {
     return this.apply({
       mode: 'self-upgrade',
       userInput: input.userInput,
@@ -275,6 +303,8 @@ export class CodingAgent {
       ...(input.runId ? { runId: input.runId } : {}),
       ...(input.loop ? { loop: input.loop } : {}),
       ...(input.openCodeState ? { openCodeState: input.openCodeState } : {}),
+      ...(input.executionState ? { executionState: input.executionState } : {}),
+      ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     });
   }
 
@@ -289,14 +319,20 @@ export class CodingAgent {
     runId?: string;
     loop?: number;
     openCodeState?: OpenCodeFallbackState;
+    executionState?: CodingExecutionState;
+    executionMode?: CodingExecutionMode;
   }): Promise<string[]> {
     const context = await this.fileContext(input.patchPlan, input.patchApplier);
     let prompt = this.buildPatchPrompt(input, context);
-    const openCodeChangedFiles = await this.tryOpenCodePatch(input, prompt);
-    if (openCodeChangedFiles.length > 0) return openCodeChangedFiles;
+    const executionMode = input.executionMode ?? 'auto';
+    if (executionMode !== 'internal-only') {
+      const openCodeChangedFiles = await this.tryOpenCodePatch(input, prompt);
+      if (openCodeChangedFiles.length > 0) return openCodeChangedFiles;
+      if (executionMode === 'opencode-only') return [];
+    }
 
     if (!this.provider) return [];
-    prompt = this.buildPatchPrompt(input, context);
+    prompt = this.limitInternalPrompt(this.buildPatchPrompt(input, context));
 
     const response = await this.provider.chat({
       model: this.model,
@@ -304,6 +340,23 @@ export class CodingAgent {
       temperature: this.temperature,
       maxTokens: 6000,
     });
+    if (input.executionState) {
+      input.executionState.providerId = this.provider.id;
+      input.executionState.model = response.model;
+      const routing = response.raw?.['nativeOpenClawRouting'];
+      if (routing && typeof routing === 'object' && !Array.isArray(routing)) {
+        const record = routing as Record<string, unknown>;
+        if (typeof record['providerId'] === 'string') {
+          input.executionState.providerId = record['providerId'];
+        }
+        if (typeof record['model'] === 'string') {
+          input.executionState.model = record['model'];
+        }
+        if (typeof record['usedFallback'] === 'boolean') {
+          input.executionState.providerFallbackUsed = record['usedFallback'];
+        }
+      }
+    }
 
     const patches = parsePatches(extractText(response.message.content));
     if (patches.length === 0) return [];
@@ -355,7 +408,7 @@ export class CodingAgent {
     loop?: number;
     openCodeState?: OpenCodeFallbackState;
   }, prompt: string): Promise<string[]> {
-    if (!shouldUseOpenCode(input.mode)) return [];
+    if (!isOpenCodeEnabledForMode(input.mode)) return [];
 
     const logger = loggerFor(input.mode);
     const meta = {
@@ -568,5 +621,20 @@ export class CodingAgent {
       ].join('\n'));
     }
     return chunks.join('\n\n---\n\n');
+  }
+
+  private limitInternalPrompt(prompt: string): string {
+    const configured = Number.parseInt(process.env['AGENT_INTERNAL_CODING_MAX_PROMPT_CHARS'] ?? '24000', 10);
+    const maxChars = Number.isFinite(configured) && configured >= 4000 ? configured : 24000;
+    if (prompt.length <= maxChars) return prompt;
+
+    const marker = '\n\nCurrent files:\n';
+    const markerIndex = prompt.indexOf(marker);
+    if (markerIndex < 0) {
+      return `${prompt.slice(0, maxChars)}\n...[context truncated by Agent Gateway]`;
+    }
+    const prefix = prompt.slice(0, markerIndex + marker.length);
+    const remaining = Math.max(0, maxChars - prefix.length - 48);
+    return `${prefix}${prompt.slice(markerIndex + marker.length, markerIndex + marker.length + remaining)}\n...[file context truncated by Agent Gateway]`;
   }
 }

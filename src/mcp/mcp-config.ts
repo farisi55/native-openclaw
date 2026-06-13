@@ -86,7 +86,7 @@ export function assertMcpCommandAllowed(command: string): void {
   }
 }
 
-export function resolveMcpConfigPath(configPath = './data/mcp.json'): string {
+export function resolveMcpConfigPath(configPath = './mcp_agent.config.yaml'): string {
   return resolve(process.cwd(), configPath);
 }
 

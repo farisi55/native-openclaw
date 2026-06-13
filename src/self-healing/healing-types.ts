@@ -41,6 +41,12 @@ export interface HealingRun {
   opencodeError?: string;
   opencodeErrorType?: string;
   opencodeSuggestion?: string;
+  agentUsed?: string;
+  agentFallbackPath?: string[];
+  providerUsed?: string;
+  providerModel?: string;
+  providerFallbackUsed?: boolean;
+  agentWarnings?: string[];
 }
 
 export interface HealingLoopResult {

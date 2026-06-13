@@ -62,12 +62,16 @@ export class SnapshotManager {
 
   async rollback(): Promise<void> {
     for (const entry of [...this.entries.values()].reverse()) {
-      if (entry.existed) {
-        await mkdir(dirname(entry.path), { recursive: true });
-        await copyFile(entry.snapshotPath, entry.path);
-      } else {
-        await unlink(entry.path).catch(() => undefined);
-      }
+      await this.restoreEntry(entry);
+    }
+  }
+
+  async rollbackFiles(filePaths: string[]): Promise<void> {
+    for (const filePath of [...new Set(filePaths)].reverse()) {
+      const absolute = this.policy.assertSafeFilePath(filePath);
+      const rel = this.policy.relativePath(absolute);
+      const entry = this.entries.get(rel);
+      if (entry) await this.restoreEntry(entry);
     }
   }
 
@@ -110,5 +114,14 @@ export class SnapshotManager {
       });
     }
     return records;
+  }
+
+  private async restoreEntry(entry: SnapshotEntry): Promise<void> {
+    if (entry.existed) {
+      await mkdir(dirname(entry.path), { recursive: true });
+      await copyFile(entry.snapshotPath, entry.path);
+    } else {
+      await unlink(entry.path).catch(() => undefined);
+    }
   }
 }

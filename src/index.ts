@@ -5,6 +5,7 @@
 
 import { loadConfig } from './config';
 import { getEnvBool, getEnvInt, getOptionalEnv, SELF_IMPROVING, SELF_IMPROVING_EVAL_THRESHOLD } from './config/env';
+import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
@@ -22,8 +23,13 @@ import { WorkspaceManager } from './workspace';
 import { createApiRuntimeState, startApiServerIfEnabled } from './api';
 import { startTelegramIntegrationIfEnabled, type TelegramIntegration } from './integrations';
 import { configureDnsDefaults, setupGlobalProxy } from './network';
-import { McpManager } from './mcp';
+import { loadMcpConfig, McpManager, saveMcpConfig } from './mcp';
 import { createMcpAgentConfigureTool, McpAgentService } from './mcp-agent';
+import {
+  AgentGatewayExecutor,
+  AgentGatewayRegistry,
+  McpAgentConnector,
+} from './agent-gateway';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 import { jobRequiresEmail } from './scheduler/scheduler-engine';
 import { startWebUiServerIfEnabled, type StartedWebUiServer } from './web-ui';
@@ -156,7 +162,18 @@ function createAutonomousProvider(
         { ...options, model: selection.model },
         displayName
       );
-      return routed.response;
+      return {
+        ...routed.response,
+        raw: {
+          ...(routed.response.raw ?? {}),
+          nativeOpenClawRouting: {
+            providerId: routed.providerId,
+            model: routed.model,
+            usedFallback: routed.usedFallback,
+            attemptCount: routed.attemptCount,
+          },
+        },
+      };
     },
   };
 }
@@ -319,6 +336,21 @@ async function bootstrap(): Promise<void> {
       sharedConfigPath: configuredMcpAgentPath,
     });
   }
+  const sharedMcpAbsolutePath = resolve(process.cwd(), sharedMcpConfigPath);
+  const legacyMcpConfigPath = resolve(process.cwd(), './data/mcp.json');
+  if (
+    !existsSync(sharedMcpAbsolutePath) &&
+    sharedMcpAbsolutePath !== legacyMcpConfigPath &&
+    existsSync(legacyMcpConfigPath)
+  ) {
+    const legacyConfig = await loadMcpConfig(legacyMcpConfigPath);
+    await saveMcpConfig(sharedMcpAbsolutePath, legacyConfig);
+    logger.warn('Migrated legacy MCP config to the shared YAML source of truth', {
+      legacyConfigPath: legacyMcpConfigPath,
+      sharedConfigPath: sharedMcpAbsolutePath,
+      servers: Object.keys(legacyConfig.mcpServers),
+    });
+  }
 
   const mcpAgent = new McpAgentService({
     enabled: getEnvBool('MCP_AGENT_ENABLED', true),
@@ -340,16 +372,31 @@ async function bootstrap(): Promise<void> {
       toolRegistry,
     });
     await mcpManager.init();
-    const mcpResults = await mcpManager.startAllConfigured();
+    const mcpResults = getEnvBool('MCP_AUTO_START', false)
+      ? await mcpManager.startAllConfigured()
+      : [];
     const failed = mcpResults.filter((result) => !result.ok);
     if (failed.length > 0) {
       logger.warn('Some MCP servers failed to start', { failed });
     }
+    const configuredServers = await mcpManager.listServers();
     logger.info('MCP ready', {
-      servers: mcpResults.length,
+      servers: configuredServers.length,
+      autoStart: getEnvBool('MCP_AUTO_START', false),
       tools: mcpManager.listTools().map((tool) => tool.runtimeName),
     });
   }
+
+  const agentGatewayRegistry = new AgentGatewayRegistry();
+  agentGatewayRegistry.register(new McpAgentConnector(mcpAgent, mcpManager));
+  const agentGateway = new AgentGatewayExecutor({
+    registry: agentGatewayRegistry,
+    config: {
+      enabled: getEnvBool('AGENT_GATEWAY_ENABLED', true),
+      maxDelegationDepth: getEnvInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
+      defaultTimeoutMs: getEnvInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
+    },
+  });
 
   logger.info(`Tools ready (${toolRegistry.size})`, {
     tools: toolRegistry.listTools().map((tool) => tool.manifest.name),
@@ -406,6 +453,7 @@ async function bootstrap(): Promise<void> {
       selfImprovingEvalThreshold: SELF_IMPROVING_EVAL_THRESHOLD,
       ...(mcpManager ? { mcpManager } : {}),
       ...(mcpAgent.enabled ? { mcpAgent } : {}),
+      agentGateway,
       scheduler,
       selfHealing: selfHealingContext,
     }

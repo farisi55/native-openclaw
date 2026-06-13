@@ -18,6 +18,15 @@ export type {
 
 export { BugAnalyzerAgent } from './bug-analyzer-agent';
 export { CodingAgent } from './coding-agent';
+export type {
+  ApplyBugFixInput,
+  ApplyUpgradeInput,
+  CodingExecutionMode,
+  CodingExecutionState,
+  CodingMode,
+  CodingPatchAgent,
+  OpenCodeFallbackState,
+} from './coding-agent';
 export { DependencyResolver } from './dependency-resolver';
 export { DiffGenerator } from './diff-generator';
 export type { DiffGeneratorOptions } from './diff-generator';
