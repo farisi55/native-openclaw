@@ -36,8 +36,25 @@ export function capabilityForIntent(intent: string, input = ''): AgentCapability
   if (/\bmcp\b/.test(normalizedInput) && /\b(?:add|tambahkan|tambah|update|ubah|remove|hapus|delete|config|konfigurasi)\b/.test(normalizedInput)) {
     return 'mcp.config';
   }
-  if (/\b(?:review|tinjau|audit)\b[\s\S]*\bcode|kode\b/.test(normalizedInput)) {
+  if (
+    /\b(?:fix|repair|perbaiki|benahi)\b[\s\S]*\b(?:bug|error|failure|gagal|kode|code|module|modul)\b/.test(normalizedInput)
+  ) {
+    return 'coding.patch';
+  }
+  if (
+    /\b(?:review|tinjau|audit)\b[\s\S]*\b(?:code|kode|module|modul|file)\b/.test(normalizedInput)
+  ) {
     return 'coding.review';
+  }
+  if (
+    /\b(?:refactor|rapikan|restrukturisasi)\b[\s\S]*\b(?:code|kode|module|modul|file)\b/.test(normalizedInput)
+  ) {
+    return 'coding.refactor';
+  }
+  if (
+    /\b(?:test|uji)\b[\s\S]*\b(?:code|kode|module|modul|build|suite)\b/.test(normalizedInput)
+  ) {
+    return 'coding.test';
   }
   return null;
 }
@@ -49,8 +66,10 @@ export class AgentGatewayRouter {
     const ranked = [...available].sort((left, right) => {
       const leftIndex = priority.indexOf(left.id);
       const rightIndex = priority.indexOf(right.id);
-      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) -
+      const mappedOrder =
+        (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) -
         (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
+      return mappedOrder || left.priority - right.priority || left.id.localeCompare(right.id);
     });
     logger.debug('capability routed', {
       taskId: task.id,

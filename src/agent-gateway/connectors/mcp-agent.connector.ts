@@ -58,6 +58,7 @@ export class McpAgentConnector implements AgentConnector {
     'mcp.server.stop',
   ] as const;
   readonly riskLevel = 'safe' as const;
+  readonly priority = 10;
 
   constructor(
     private readonly service?: McpAgentService,
@@ -72,7 +73,8 @@ export class McpAgentConnector implements AgentConnector {
     return this.capabilities.includes(task.capability as typeof this.capabilities[number]);
   }
 
-  async execute(task: AgentTask): Promise<AgentExecutionResult> {
+  async execute(task: AgentTask, signal?: AbortSignal): Promise<AgentExecutionResult> {
+    if (signal?.aborted) return this.failure(task, 'AGENT_ABORTED', 'MCP Agent execution was aborted.');
     if (task.capability === 'mcp.config' || task.capability === 'mcp.server.list') {
       if (!this.service?.enabled) {
         return this.failure(task, 'MCP_AGENT_DISABLED', 'MCP Agent self-configuration is disabled.');
@@ -80,6 +82,7 @@ export class McpAgentConnector implements AgentConnector {
       const result = task.capability === 'mcp.server.list'
         ? await this.service.listServers()
         : await this.service.handleInstruction(task.userInput);
+      if (signal?.aborted) return this.failure(task, 'AGENT_ABORTED', 'MCP Agent execution was aborted.');
       if (this.manager) await this.manager.loadConfig();
       const changed = result.action === 'created' || result.action === 'updated' || result.action === 'removed';
       const relPath = relative(resolve(task.cwd ?? process.cwd()), result.configPath).split(sep).join('/');
@@ -97,8 +100,18 @@ export class McpAgentConnector implements AgentConnector {
         ...(changed ? { changedFiles: [relPath] } : {}),
         metadata: {
           action: result.action,
+          operation: result.action === 'listed'
+            ? 'list'
+            : result.action === 'removed' || (
+                result.action === 'unchanged' &&
+                result.serverName &&
+                !result.after
+              )
+            ? 'remove'
+            : 'configure',
           configPath: result.configPath,
           serverName: result.serverName,
+          serverNames: Object.keys(result.servers ?? {}),
         },
       };
     }
@@ -111,14 +124,38 @@ export class McpAgentConnector implements AgentConnector {
       return this.failure(task, 'MCP_SERVER_NAME_REQUIRED', 'MCP server name could not be determined.');
     }
     if (task.capability === 'mcp.server.start') {
-      const tools = await this.manager.startServer(serverName);
-      return {
-        ok: true,
-        agentId: this.id,
-        capability: task.capability,
-        summary: `MCP server "${serverName}" started with ${tools.length} tool(s).`,
-        output: `MCP server \`${serverName}\` started with ${tools.length} tool(s).`,
-      };
+      const configured = (await this.manager.listServers()).find((server) => server.name === serverName);
+      if (!configured) {
+        return this.failure(task, 'MCP_SERVER_NOT_CONFIGURED', `MCP server "${serverName}" is not configured.`);
+      }
+      if (configured.transport === 'url') {
+        return this.failure(
+          task,
+          'MCP_URL_TRANSPORT_UNSUPPORTED',
+          `MCP server "${serverName}" uses URL transport and cannot be started by the stdio client.`
+        );
+      }
+      try {
+        const tools = await this.manager.startServer(serverName);
+        return {
+          ok: true,
+          agentId: this.id,
+          capability: task.capability,
+          summary: `MCP server "${serverName}" started with ${tools.length} tool(s).`,
+          output: `MCP server \`${serverName}\` started with ${tools.length} tool(s).`,
+          metadata: {
+            serverName,
+            transport: configured.transport,
+            command: configured.command,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = /\b(?:auth|credential|token|api\s*key|unauthorized|forbidden)\b/i.test(message)
+          ? 'MCP_AUTH_REQUIRED'
+          : 'MCP_SERVER_START_FAILED';
+        return this.failure(task, code, message);
+      }
     }
     const stopped = await this.manager.stopServer(serverName);
     return {
@@ -131,6 +168,7 @@ export class McpAgentConnector implements AgentConnector {
       output: stopped
         ? `MCP server \`${serverName}\` stopped.`
         : `MCP server \`${serverName}\` was not running.`,
+      metadata: { serverName, stopped },
     };
   }
 

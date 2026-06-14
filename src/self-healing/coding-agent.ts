@@ -63,6 +63,8 @@ export interface ApplyBugFixInput {
   openCodeState?: OpenCodeFallbackState;
   executionState?: CodingExecutionState;
   executionMode?: CodingExecutionMode;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface ApplyUpgradeInput {
@@ -76,6 +78,8 @@ export interface ApplyUpgradeInput {
   openCodeState?: OpenCodeFallbackState;
   executionState?: CodingExecutionState;
   executionMode?: CodingExecutionMode;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface CodingPatchAgent {
@@ -289,6 +293,8 @@ export class CodingAgent implements CodingPatchAgent {
       ...(input.openCodeState ? { openCodeState: input.openCodeState } : {}),
       ...(input.executionState ? { executionState: input.executionState } : {}),
       ...(input.executionMode ? { executionMode: input.executionMode } : {}),
+      ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
     });
   }
 
@@ -305,6 +311,8 @@ export class CodingAgent implements CodingPatchAgent {
       ...(input.openCodeState ? { openCodeState: input.openCodeState } : {}),
       ...(input.executionState ? { executionState: input.executionState } : {}),
       ...(input.executionMode ? { executionMode: input.executionMode } : {}),
+      ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
     });
   }
 
@@ -321,7 +329,10 @@ export class CodingAgent implements CodingPatchAgent {
     openCodeState?: OpenCodeFallbackState;
     executionState?: CodingExecutionState;
     executionMode?: CodingExecutionMode;
+    timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<string[]> {
+    if (input.signal?.aborted) return [];
     const context = await this.fileContext(input.patchPlan, input.patchApplier);
     let prompt = this.buildPatchPrompt(input, context);
     const executionMode = input.executionMode ?? 'auto';
@@ -331,7 +342,7 @@ export class CodingAgent implements CodingPatchAgent {
       if (executionMode === 'opencode-only') return [];
     }
 
-    if (!this.provider) return [];
+    if (!this.provider || input.signal?.aborted) return [];
     prompt = this.limitInternalPrompt(this.buildPatchPrompt(input, context));
 
     const response = await this.provider.chat({
@@ -339,7 +350,9 @@ export class CodingAgent implements CodingPatchAgent {
       messages: [createMessage({ role: 'user', content: redactSecrets(prompt, this.redact) })],
       temperature: this.temperature,
       maxTokens: 6000,
+      ...(input.signal ? { signal: input.signal } : {}),
     });
+    if (input.signal?.aborted) return [];
     if (input.executionState) {
       input.executionState.providerId = this.provider.id;
       input.executionState.model = response.model;
@@ -407,7 +420,10 @@ export class CodingAgent implements CodingPatchAgent {
     runId?: string;
     loop?: number;
     openCodeState?: OpenCodeFallbackState;
+    timeoutMs?: number;
+    signal?: AbortSignal;
   }, prompt: string): Promise<string[]> {
+    if (input.signal?.aborted) return [];
     if (!isOpenCodeEnabledForMode(input.mode)) return [];
 
     const logger = loggerFor(input.mode);
@@ -450,6 +466,8 @@ export class CodingAgent implements CodingPatchAgent {
         mode: 'patch',
         cwd: input.patchApplier.root,
         task,
+        ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
         ...(!openCodeDirectMode ? { context: redactSecrets(prompt, this.redact) } : {}),
       });
 

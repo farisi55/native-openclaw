@@ -39,6 +39,7 @@ export interface OpenCodeAgentInput {
   timeoutMs?: number;
   mode?: OpenCodeAgentMode;
   context?: string;
+  signal?: AbortSignal;
   deps?: OpenCodeAgentDeps;
 }
 
@@ -734,6 +735,15 @@ export async function runOpenCodeAgent(input: OpenCodeAgentInput | string): Prom
   const mode = normalizeMode(normalizedInput.mode);
   const task = String(normalizedInput.task ?? '').trim();
 
+  if (normalizedInput.signal?.aborted) {
+    return errorResult({
+      mode,
+      task,
+      summary: 'OpenCode agent execution was aborted.',
+      error: 'OpenCode agent execution was aborted.',
+    });
+  }
+
   if (!envBool('OPENCODE_AGENT_ENABLED', false)) {
     return errorResult({
       mode,
@@ -947,6 +957,7 @@ export async function runOpenCodeAgent(input: OpenCodeAgentInput | string): Prom
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
 
     let child: ReturnType<typeof spawn>;
     try {
@@ -987,6 +998,7 @@ export async function runOpenCodeAgent(input: OpenCodeAgentInput | string): Prom
       if (hardTimer) clearTimeout(hardTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (graceTimer) clearTimeout(graceTimer);
+      if (abortListener) normalizedInput.signal?.removeEventListener('abort', abortListener);
     };
 
     const finish = (exitCode: number | null, error?: Error): void => {
@@ -1141,6 +1153,11 @@ export async function runOpenCodeAgent(input: OpenCodeAgentInput | string): Prom
 
     hardTimer = setTimeout(() => terminate('timeout'), timeoutMs);
     resetIdleTimer();
+    if (normalizedInput.signal) {
+      abortListener = () => terminate('timeout');
+      normalizedInput.signal.addEventListener('abort', abortListener, { once: true });
+      if (normalizedInput.signal.aborted) abortListener();
+    }
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
       stdout += chunk.toString();

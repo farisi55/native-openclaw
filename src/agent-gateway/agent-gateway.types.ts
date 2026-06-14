@@ -10,12 +10,21 @@ export type AgentCapability =
 
 export type AgentRiskLevel = 'safe' | 'warning' | 'dangerous';
 
+export type AgentTaskSource =
+  | 'cli'
+  | 'web'
+  | 'scheduler'
+  | 'self-healing'
+  | 'self-upgrade'
+  | 'system';
+
 export interface AgentTaskConstraints {
   allowedPaths?: string[];
   forbiddenPaths?: string[];
   maxRuntimeMs?: number;
   requireApproval?: boolean;
   allowPackageJsonChanges?: boolean;
+  dryRun?: boolean;
 }
 
 export interface AgentTask {
@@ -24,6 +33,7 @@ export interface AgentTask {
   capability: AgentCapability;
   userInput: string;
   cwd?: string;
+  source?: AgentTaskSource;
   context?: Record<string, unknown>;
   constraints?: AgentTaskConstraints;
 }
@@ -31,14 +41,28 @@ export interface AgentTask {
 export interface AgentQaResult {
   command: string;
   exitCode: number;
+  skipped?: boolean;
+  reason?: string;
   stdoutPreview?: string;
   stderrPreview?: string;
+}
+
+export interface AgentResultValidation {
+  ok: boolean;
+  warnings: string[];
+  errors: string[];
 }
 
 export interface AgentExecutionError {
   code?: string;
   message: string;
   details?: unknown;
+}
+
+export interface AgentFailedAgent {
+  agentId: string;
+  code?: string;
+  message?: string;
 }
 
 export interface AgentExecutionResult {
@@ -49,6 +73,11 @@ export interface AgentExecutionResult {
   output?: string;
   changedFiles?: string[];
   artifacts?: string[];
+  fallbackUsed?: boolean;
+  fallbackChain?: string[];
+  selectedAgent?: string;
+  failedAgents?: AgentFailedAgent[];
+  validation?: AgentResultValidation;
   qa?: AgentQaResult[];
   error?: AgentExecutionError;
   metadata?: Record<string, unknown>;
@@ -59,20 +88,24 @@ export interface AgentConnector {
   displayName: string;
   capabilities: readonly AgentCapability[];
   riskLevel: AgentRiskLevel;
+  priority: number;
   isEnabled(): boolean;
   canHandle(task: AgentTask): boolean;
-  execute(task: AgentTask): Promise<AgentExecutionResult>;
+  execute(task: AgentTask, signal?: AbortSignal): Promise<AgentExecutionResult>;
 }
 
 export interface AgentGatewayConfig {
   enabled: boolean;
   maxDelegationDepth: number;
   defaultTimeoutMs: number;
+  maxFallbacks: number;
+  validateResults: boolean;
 }
 
 export interface AgentAttempt {
   agentId: string;
   ok: boolean;
+  timedOut?: boolean;
   errorCode?: string;
   errorMessage?: string;
 }

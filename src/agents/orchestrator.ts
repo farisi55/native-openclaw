@@ -47,7 +47,7 @@ import { isWorkflowRunRequest, runWorkflowFromWorkspace } from '../workflows';
 import { WorkspaceManager } from '../workspace';
 import type { SchedulerActionContext } from '../scheduler';
 import type { SelfHealingActionContext } from '../self-healing';
-import type { AgentGatewayExecutor } from '../agent-gateway';
+import type { AgentGatewayService } from '../agent-gateway';
 import { createLogger } from '../utils/logger';
 import { getEnvBool, getEnvInt, getOptionalEnv } from '../config/env';
 import { join } from 'path';
@@ -351,7 +351,7 @@ export interface OrchestratorOptions {
   /**
    * Optional lightweight agent connector gateway.
    */
-  agentGateway?: AgentGatewayExecutor;
+  agentGateway?: AgentGatewayService;
 
   /**
    * Optional scheduler action context for cronjob management actions.
@@ -413,7 +413,7 @@ export class Orchestrator {
   private readonly router: ProviderRouter;
   private readonly mcpManager: McpManager | undefined;
   private readonly mcpAgent: McpAgentService | undefined;
-  private readonly agentGateway: AgentGatewayExecutor | undefined;
+  private readonly agentGateway: AgentGatewayService | undefined;
   private readonly scheduler: SchedulerActionContext | undefined;
   private readonly selfHealing: SelfHealingActionContext | undefined;
   private readonly reasoning: ReasoningEngine;

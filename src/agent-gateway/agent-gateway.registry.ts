@@ -6,6 +6,10 @@ const logger = createLogger('agent-gateway:registry');
 export class AgentGatewayRegistry {
   private readonly connectors = new Map<string, AgentConnector>();
 
+  constructor(connectors: AgentConnector[] = []) {
+    for (const connector of connectors) this.register(connector);
+  }
+
   register(connector: AgentConnector): void {
     this.connectors.set(connector.id, connector);
     logger.debug('connector registered', {
@@ -20,14 +24,35 @@ export class AgentGatewayRegistry {
   }
 
   list(): AgentConnector[] {
-    return [...this.connectors.values()];
+    return [...this.connectors.values()].sort((left, right) =>
+      left.priority - right.priority || left.id.localeCompare(right.id)
+    );
   }
 
   enabledFor(capability: AgentCapability, task: AgentTask): AgentConnector[] {
-    return this.list().filter((connector) =>
-      connector.isEnabled() &&
-      connector.capabilities.includes(capability) &&
-      connector.canHandle(task)
-    );
+    const selected: AgentConnector[] = [];
+    for (const connector of this.list()) {
+      if (!connector.capabilities.includes(capability)) continue;
+      if (!connector.isEnabled()) {
+        logger.debug('connector skipped', {
+          taskId: task.id,
+          agentId: connector.id,
+          capability,
+          reason: 'disabled',
+        });
+        continue;
+      }
+      if (!connector.canHandle(task)) {
+        logger.debug('connector skipped', {
+          taskId: task.id,
+          agentId: connector.id,
+          capability,
+          reason: 'cannot-handle',
+        });
+        continue;
+      }
+      selected.push(connector);
+    }
+    return selected;
   }
 }

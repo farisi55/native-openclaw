@@ -49,6 +49,8 @@ export class GatewayCodingAgent implements CodingPatchAgent {
         enabled: envBool('AGENT_GATEWAY_ENABLED', true),
         maxDelegationDepth: envInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
         defaultTimeoutMs: envInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
+        maxFallbacks: envInt('AGENT_GATEWAY_MAX_FALLBACKS', 2),
+        validateResults: envBool('AGENT_GATEWAY_VALIDATE_RESULTS', true),
       },
     });
   }

@@ -28,7 +28,10 @@ import { createMcpAgentConfigureTool, McpAgentService } from './mcp-agent';
 import {
   AgentGatewayExecutor,
   AgentGatewayRegistry,
+  AgentGatewayService,
+  InternalCodingConnector,
   McpAgentConnector,
+  OpenCodeConnector,
 } from './agent-gateway';
 import { SchedulerEngine, SchedulerStore, type SchedulerActionContext } from './scheduler';
 import { jobRequiresEmail } from './scheduler/scheduler-engine';
@@ -387,17 +390,6 @@ async function bootstrap(): Promise<void> {
     });
   }
 
-  const agentGatewayRegistry = new AgentGatewayRegistry();
-  agentGatewayRegistry.register(new McpAgentConnector(mcpAgent, mcpManager));
-  const agentGateway = new AgentGatewayExecutor({
-    registry: agentGatewayRegistry,
-    config: {
-      enabled: getEnvBool('AGENT_GATEWAY_ENABLED', true),
-      maxDelegationDepth: getEnvInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
-      defaultTimeoutMs: getEnvInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
-    },
-  });
-
   logger.info(`Tools ready (${toolRegistry.size})`, {
     tools: toolRegistry.listTools().map((tool) => tool.manifest.name),
     installedDir: toolRegistry.installedToolsDir,
@@ -417,6 +409,25 @@ async function bootstrap(): Promise<void> {
   const upgradeConfig = createUpgradeConfig(healingConfig);
   const healingProvider = createAutonomousProvider(router, 'SELF_HEALING_MODEL', 'Self-Healing Router');
   const upgradeProvider = createAutonomousProvider(router, 'SELF_UPGRADE_MODEL', 'Self-Upgrade Router');
+  const agentGatewayRegistry = new AgentGatewayRegistry();
+  agentGatewayRegistry.register(new OpenCodeConnector());
+  agentGatewayRegistry.register(new InternalCodingConnector(
+    healingProvider ?? upgradeProvider,
+    'default',
+    autonomousTemperature('AUTONOMOUS_CODING_TEMPERATURE'),
+    healingConfig.redactSecrets
+  ));
+  agentGatewayRegistry.register(new McpAgentConnector(mcpAgent, mcpManager));
+  const agentGateway = new AgentGatewayService(new AgentGatewayExecutor({
+    registry: agentGatewayRegistry,
+    config: {
+      enabled: getEnvBool('AGENT_GATEWAY_ENABLED', true),
+      maxDelegationDepth: getEnvInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
+      defaultTimeoutMs: getEnvInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
+      maxFallbacks: getEnvInt('AGENT_GATEWAY_MAX_FALLBACKS', 2),
+      validateResults: getEnvBool('AGENT_GATEWAY_VALIDATE_RESULTS', true),
+    },
+  }));
   const selfHealingEngine = new SelfHealingEngine(healingConfig, {
     ...(healingProvider ? { provider: healingProvider } : {}),
     lifecycleManager,

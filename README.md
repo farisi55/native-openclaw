@@ -520,30 +520,51 @@ orchestrator utama; connector hanya dijalankan on-demand dan tidak hidup sebagai
 ```text
 Native OpenClaw
 -> capability router
--> OpenCode connector
--> Internal CodingAgent fallback
+-> connector registry (priority + enabled flags)
+-> timeout / AbortSignal guard
+-> fallback connector
+-> capability-specific result validation
 -> QA dan rollback oleh self-healing/self-upgrade
 ```
 
-Capability yang aktif pada fase ini:
+Capability yang didukung:
 
 - `coding.patch`: OpenCode lebih dahulu, lalu Internal CodingAgent jika OpenCode disabled, gagal,
   timeout, atau tidak menghasilkan perubahan.
+- `coding.review`, `coding.test`: OpenCode lebih dahulu, lalu provider Internal CodingAgent sebagai
+  fallback. Fallback test internal diberi tanda skipped karena menghasilkan analisis, bukan menjalankan
+  command lokal.
+- `coding.refactor`: memakai urutan OpenCode lalu Internal CodingAgent ketika task membawa konteks
+  patch self-healing/self-upgrade yang aman.
 - `mcp.config`, `mcp.server.list`, `mcp.server.start`, `mcp.server.stop`: Internal MCP Agent.
+
+Connector hanya dijalankan bila task benar-benar didelegasikan; normal chat tidak melewati Agent
+Gateway.
 
 ```env
 AGENT_GATEWAY_ENABLED=true
 AGENT_GATEWAY_MAX_DELEGATION_DEPTH=1
 AGENT_GATEWAY_DEFAULT_TIMEOUT_MS=900000
+AGENT_GATEWAY_MAX_FALLBACKS=2
+AGENT_GATEWAY_VALIDATE_RESULTS=true
 AGENT_OPENCODE_ENABLED=true
 AGENT_INTERNAL_CODING_ENABLED=true
 AGENT_INTERNAL_CODING_MAX_PROMPT_CHARS=24000
 AGENT_MCP_ENABLED=true
 ```
 
+Hasil gateway selalu dinormalisasi dan mencantumkan connector terpilih, fallback chain, connector yang
+gagal, serta status validasi. `coding.patch` tidak boleh sukses tanpa changed files atau patch artifact.
+Perubahan ke path terlarang dan dependency manifest tanpa izin ditolak serta dipulihkan sebelum fallback.
+
 Environment OpenCode lama tetap berlaku. `OPENCODE_AGENT_ENABLED` dan flag
 `OPENCODE_AGENT_USE_FOR_SELF_HEALING`/`OPENCODE_AGENT_USE_FOR_SELF_UPGRADE` tetap menentukan apakah
 connector OpenCode dapat dipilih.
+
+Agent Gateway tidak menjalankan external agent saat startup. OpenCode hanya dipanggil on-demand untuk
+task coding, sedangkan MCP server hanya dijalankan oleh `/mcp start <name>` atau bila
+`MCP_AUTO_START=true`. Nonaktifkan seluruh delegasi dengan `AGENT_GATEWAY_ENABLED=false`, atau hanya
+OpenCode dengan `AGENT_OPENCODE_ENABLED=false`.
 
 ---
 

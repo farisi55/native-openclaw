@@ -1,7 +1,14 @@
 import { isAbsolute, relative, resolve, sep } from 'path';
 import type { AgentExecutionResult, AgentTask } from './agent-gateway.types';
 
-const DEFAULT_ALLOWED_PATHS = ['src/', 'test/', 'tests/', 'docs/', 'README.md'];
+const DEFAULT_ALLOWED_PATHS = [
+  'src/',
+  'test/',
+  'tests/',
+  'docs/',
+  'README.md',
+  'mcp_agent.config.yaml',
+];
 const DEFAULT_FORBIDDEN_PATHS = [
   '.env',
   '.env.',
@@ -11,6 +18,12 @@ const DEFAULT_FORBIDDEN_PATHS = [
   '/etc/',
   '/root/',
 ];
+const PROTECTED_DEPENDENCY_FILES = new Set([
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+]);
 
 function normalizedPath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -48,12 +61,21 @@ export class AgentGatewayPolicy {
 
     for (const rawPath of result.changedFiles) {
       const path = normalizedPath(rawPath);
+      if (
+        path.startsWith('../') ||
+        path === '..' ||
+        isAbsolute(rawPath) ||
+        /^[A-Za-z]:\//.test(path)
+      ) {
+        violations.push(`${path}: path escapes the task root`);
+        continue;
+      }
       if (forbidden.some((rule) => matchesPath(path, rule))) {
         violations.push(`${path}: forbidden path`);
         continue;
       }
       if (
-        (path === 'package.json' || path === 'package-lock.json') &&
+        PROTECTED_DEPENDENCY_FILES.has(path) &&
         !task.constraints?.allowPackageJsonChanges
       ) {
         violations.push(`${path}: dependency manifest changes are not allowed`);
