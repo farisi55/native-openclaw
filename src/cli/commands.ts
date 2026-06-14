@@ -34,6 +34,10 @@ import { handleCronCommand, type SchedulerActionContext } from '../scheduler';
 import { handleSelfImprovingAction, type SelfImprovingActionContext } from '../skills';
 import { handleSelfHealingAction, type SelfHealingActionContext } from '../self-healing';
 import { createPromptOptimizerFromEnv } from '../prompt-optimizer';
+import {
+  formatAgentStatuses,
+  type AgentGatewayService,
+} from '../agent-gateway';
 
 const C = {
   reset:   '\x1b[0m',
@@ -68,6 +72,7 @@ export interface CLIContext {
   scheduler?: SchedulerActionContext;
   selfImproving?: SelfImprovingActionContext;
   selfHealing?: SelfHealingActionContext;
+  agentGateway?: AgentGatewayService;
   activeProvider: IProvider;
   activeModel: string;
   activeSessionId: string | null;
@@ -159,6 +164,20 @@ export function cmdHelp(): void {
     '',
   ];
   process.stdout.write(lines.join('\n') + '\n');
+}
+
+export async function cmdAgents(
+  ctx: CLIContext,
+  args: string[]
+): Promise<void> {
+  if (!ctx.agentGateway) {
+    process.stdout.write(c('red', '\n  Agent Gateway is not initialized.\n\n'));
+    return;
+  }
+  const statuses = args[0]?.toLowerCase() === 'health'
+    ? await ctx.agentGateway.healthAgents()
+    : ctx.agentGateway.listAgents();
+  process.stdout.write(`\n${formatAgentStatuses(statuses)}\n\n`);
 }
 
 // ─── /models ──────────────────────────────────────────────────────────────────

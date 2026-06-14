@@ -45,6 +45,14 @@ export class AgentGatewayValidator {
       return { ok: false, warnings, errors };
     }
 
+    if (
+      task.capability.startsWith('browser.') ||
+      task.capability.startsWith('research.') ||
+      task.capability.startsWith('spreadsheet.')
+    ) {
+      this.validateExternalArtifacts(task, result, errors);
+    }
+
     if (task.capability === 'coding.patch') {
       const changedFiles = result.changedFiles ?? [];
       const artifacts = result.artifacts?.filter((item) => item.trim()) ?? [];
@@ -80,6 +88,12 @@ export class AgentGatewayValidator {
       } else if (!command) {
         errors.push('Started MCP server result is missing its command metadata.');
       }
+    } else if (task.capability.startsWith('browser.')) {
+      this.validateBrowserResult(task, result, warnings, errors);
+    } else if (task.capability.startsWith('research.')) {
+      this.validateResearchResult(task, result, warnings, errors);
+    } else if (task.capability.startsWith('spreadsheet.')) {
+      this.validateSpreadsheetResult(task, result, warnings, errors);
     }
 
     const validation = {
@@ -105,6 +119,82 @@ export class AgentGatewayValidator {
       });
     }
     return validation;
+  }
+
+  private validateExternalArtifacts(
+    task: AgentTask,
+    result: AgentExecutionResult,
+    errors: string[]
+  ): void {
+    const expectedPrefix =
+      `workspace/artifacts/${result.agentId}/${task.id}/`;
+    for (const artifact of result.artifacts ?? []) {
+      const normalized = artifact.replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!normalized.startsWith(expectedPrefix)) {
+        errors.push(
+          `External agent artifact must be under /${expectedPrefix}: ${artifact}`
+        );
+      }
+    }
+  }
+
+  private validateBrowserResult(
+    task: AgentTask,
+    result: AgentExecutionResult,
+    warnings: string[],
+    errors: string[]
+  ): void {
+    if (!result.summary.trim()) errors.push('Browser agent result is missing a summary.');
+    const screenshotRequested = /\b(?:screenshot|ambil\s+gambar|capture)\b/i.test(task.userInput);
+    if (screenshotRequested && (result.artifacts?.length ?? 0) === 0) {
+      errors.push('Browser task requested a screenshot but returned no artifact.');
+    } else if ((result.artifacts?.length ?? 0) === 0) {
+      warnings.push('Browser result did not include an artifact.');
+    }
+  }
+
+  private validateResearchResult(
+    task: AgentTask,
+    result: AgentExecutionResult,
+    warnings: string[],
+    errors: string[]
+  ): void {
+    if (!result.summary.trim()) errors.push('Research result is missing a summary.');
+    const sources = result.metadata?.['sources'];
+    if (!Array.isArray(sources) || sources.length === 0) {
+      warnings.push(
+        task.capability === 'research.market'
+          ? 'Market research result did not include source metadata.'
+          : 'Web research result did not include source metadata.'
+      );
+    }
+  }
+
+  private validateSpreadsheetResult(
+    task: AgentTask,
+    result: AgentExecutionResult,
+    warnings: string[],
+    errors: string[]
+  ): void {
+    if (task.capability === 'spreadsheet.read') {
+      const noData = result.metadata?.['noData'] === true;
+      if (!result.output?.trim() && !noData) {
+        errors.push('Spreadsheet read result must include a data preview or explicit no-data status.');
+      }
+      return;
+    }
+    if (task.capability === 'spreadsheet.write') {
+      const target = result.metadata?.['targetSheet'] ?? result.metadata?.['range'];
+      if (!target && !result.output?.trim()) {
+        errors.push('Spreadsheet write result must identify the target sheet/range or operation summary.');
+      }
+      return;
+    }
+    if (!result.output?.trim() && (result.artifacts?.length ?? 0) === 0) {
+      errors.push('Spreadsheet report result must include output or an artifact.');
+    } else if ((result.artifacts?.length ?? 0) === 0) {
+      warnings.push('Spreadsheet report did not include a generated artifact.');
+    }
   }
 
   private async validateMcpConfigResult(

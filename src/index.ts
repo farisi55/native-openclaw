@@ -29,6 +29,8 @@ import {
   AgentGatewayExecutor,
   AgentGatewayRegistry,
   AgentGatewayService,
+  createExternalAgentConnectorsFromEnv,
+  externalAgentStatusesFromEnv,
   InternalCodingConnector,
   McpAgentConnector,
   OpenCodeConnector,
@@ -418,16 +420,22 @@ async function bootstrap(): Promise<void> {
     healingConfig.redactSecrets
   ));
   agentGatewayRegistry.register(new McpAgentConnector(mcpAgent, mcpManager));
-  const agentGateway = new AgentGatewayService(new AgentGatewayExecutor({
-    registry: agentGatewayRegistry,
-    config: {
-      enabled: getEnvBool('AGENT_GATEWAY_ENABLED', true),
-      maxDelegationDepth: getEnvInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
-      defaultTimeoutMs: getEnvInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
-      maxFallbacks: getEnvInt('AGENT_GATEWAY_MAX_FALLBACKS', 2),
-      validateResults: getEnvBool('AGENT_GATEWAY_VALIDATE_RESULTS', true),
-    },
-  }));
+  for (const connector of createExternalAgentConnectorsFromEnv()) {
+    agentGatewayRegistry.register(connector);
+  }
+  const agentGateway = new AgentGatewayService(
+    new AgentGatewayExecutor({
+      registry: agentGatewayRegistry,
+      config: {
+        enabled: getEnvBool('AGENT_GATEWAY_ENABLED', true),
+        maxDelegationDepth: getEnvInt('AGENT_GATEWAY_MAX_DELEGATION_DEPTH', 1),
+        defaultTimeoutMs: getEnvInt('AGENT_GATEWAY_DEFAULT_TIMEOUT_MS', 900_000),
+        maxFallbacks: getEnvInt('AGENT_GATEWAY_MAX_FALLBACKS', 2),
+        validateResults: getEnvBool('AGENT_GATEWAY_VALIDATE_RESULTS', true),
+      },
+    }),
+    externalAgentStatusesFromEnv()
+  );
   const selfHealingEngine = new SelfHealingEngine(healingConfig, {
     ...(healingProvider ? { provider: healingProvider } : {}),
     lifecycleManager,
@@ -656,6 +664,7 @@ async function bootstrap(): Promise<void> {
     scheduler,
     selfImproving: orchestrator.getSelfImprovingActionContext(),
     selfHealing: selfHealingContext,
+    agentGateway,
   });
 }
 

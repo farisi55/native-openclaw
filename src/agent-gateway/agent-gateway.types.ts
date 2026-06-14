@@ -6,7 +6,14 @@ export type AgentCapability =
   | 'mcp.config'
   | 'mcp.server.list'
   | 'mcp.server.start'
-  | 'mcp.server.stop';
+  | 'mcp.server.stop'
+  | 'browser.automation'
+  | 'browser.ui-test'
+  | 'research.web'
+  | 'research.market'
+  | 'spreadsheet.read'
+  | 'spreadsheet.write'
+  | 'spreadsheet.report';
 
 export type AgentRiskLevel = 'safe' | 'warning' | 'dangerous';
 
@@ -92,6 +99,25 @@ export interface AgentConnector {
   isEnabled(): boolean;
   canHandle(task: AgentTask): boolean;
   execute(task: AgentTask, signal?: AbortSignal): Promise<AgentExecutionResult>;
+  healthCheck?(): Promise<AgentHealthResult>;
+}
+
+export interface AgentHealthResult {
+  ok: boolean;
+  message: string;
+  latencyMs?: number;
+}
+
+export interface AgentStatus {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  registered: boolean;
+  capabilities: readonly AgentCapability[];
+  riskLevel: AgentRiskLevel;
+  priority: number;
+  profile?: string;
+  health?: AgentHealthResult;
 }
 
 export interface AgentGatewayConfig {

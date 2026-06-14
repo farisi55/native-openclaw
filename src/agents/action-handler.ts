@@ -47,6 +47,7 @@ import { createLogger } from '../utils/logger';
 import type { CompiledPrompt } from '../prompt-optimizer';
 import {
   capabilityForIntent,
+  formatAgentStatuses,
   type AgentGatewayService,
 } from '../agent-gateway';
 
@@ -470,6 +471,25 @@ export async function handleAction(
     return { handled: true, response: formatOpenCodeDoctorResult(result), actionType: 'command' };
   }
 
+  if (/^\/agents(?:\s+(?:list|health))?\s*$/i.test(trimmed)) {
+    if (!ctx.agentGateway) {
+      return {
+        handled: true,
+        response: 'Agent Gateway is not initialized.',
+        actionType: 'command',
+      };
+    }
+    const includeHealth = /\shealth\s*$/i.test(trimmed);
+    const statuses = includeHealth
+      ? await ctx.agentGateway.healthAgents()
+      : ctx.agentGateway.listAgents();
+    return {
+      handled: true,
+      response: formatAgentStatuses(statuses),
+      actionType: 'command',
+    };
+  }
+
   const isCompiledMcpConfiguration =
     compiledPrompt?.intent === 'mcp-config-update' ||
     compiledPrompt?.intent === 'mcp-config-read' ||
@@ -521,6 +541,36 @@ export async function handleAction(
         actionType: 'self_configuration',
       };
     }
+  }
+
+  const externalCapability = capabilityForIntent(
+    compiledPrompt?.intent ?? '',
+    originalInput
+  );
+  if (
+    externalCapability &&
+    (
+      externalCapability.startsWith('browser.') ||
+      externalCapability.startsWith('research.') ||
+      externalCapability.startsWith('spreadsheet.')
+    ) &&
+    ctx.agentGateway
+  ) {
+    const result = await ctx.agentGateway.tryExecute({
+      intent: compiledPrompt?.intent ?? 'external-agent',
+      capability: externalCapability,
+      userInput: originalInput,
+      cwd: process.cwd(),
+      source: 'system',
+    });
+    if (!result) return { handled: false };
+    return {
+      handled: true,
+      response: result.ok
+        ? result.output ?? result.summary
+        : result.error?.message ?? result.summary,
+      actionType: 'capability',
+    };
   }
 
   const infoCapabilityQuestion =

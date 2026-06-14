@@ -5,6 +5,7 @@ export { AgentGatewayPolicy } from './agent-gateway.policy';
 export { AgentGatewayRegistry } from './agent-gateway.registry';
 export {
   AgentGatewayService,
+  formatAgentStatuses,
   type AgentGatewayRequest,
 } from './agent-gateway.service';
 export {
@@ -16,6 +17,17 @@ export { GatewayCodingAgent } from './coding-gateway';
 export { InternalCodingConnector } from './connectors/internal-coding.connector';
 export { McpAgentConnector } from './connectors/mcp-agent.connector';
 export { OpenCodeConnector } from './connectors/opencode.connector';
+export {
+  ExternalHttpAgentConnector,
+  type ExternalAgentFetch,
+  type ExternalHttpAgentConfig,
+} from './connectors/external-http-agent.connector';
+export {
+  createExternalAgentConnectorsFromEnv,
+  externalAgentConfigsFromEnv,
+  externalAgentEnablementMessage,
+  externalAgentStatusesFromEnv,
+} from './external-agents';
 export type {
   AgentAttempt,
   AgentCapability,
@@ -24,9 +36,11 @@ export type {
   AgentExecutionResult,
   AgentFailedAgent,
   AgentGatewayConfig,
+  AgentHealthResult,
   AgentQaResult,
   AgentResultValidation,
   AgentRiskLevel,
+  AgentStatus,
   AgentTask,
   AgentTaskConstraints,
   AgentTaskSource,

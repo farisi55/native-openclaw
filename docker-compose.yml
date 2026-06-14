@@ -51,20 +51,32 @@ services:
       AGENT_INTERNAL_CODING_ENABLED: ${AGENT_INTERNAL_CODING_ENABLED:-true}
       AGENT_INTERNAL_CODING_MAX_PROMPT_CHARS: ${AGENT_INTERNAL_CODING_MAX_PROMPT_CHARS:-24000}
       AGENT_MCP_ENABLED: ${AGENT_MCP_ENABLED:-true}
+      AGENT_BROWSER_ENABLED: ${AGENT_BROWSER_ENABLED:-false}
+      AGENT_BROWSER_BASE_URL: ${AGENT_BROWSER_BASE_URL:-http://browser-agent:3101}
+      AGENT_BROWSER_TIMEOUT_MS: ${AGENT_BROWSER_TIMEOUT_MS:-300000}
+      AGENT_BROWSER_API_KEY: ${AGENT_BROWSER_API_KEY:-}
+      AGENT_RESEARCH_ENABLED: ${AGENT_RESEARCH_ENABLED:-false}
+      AGENT_RESEARCH_BASE_URL: ${AGENT_RESEARCH_BASE_URL:-http://research-agent:3102}
+      AGENT_RESEARCH_TIMEOUT_MS: ${AGENT_RESEARCH_TIMEOUT_MS:-600000}
+      AGENT_RESEARCH_API_KEY: ${AGENT_RESEARCH_API_KEY:-}
+      AGENT_SPREADSHEET_ENABLED: ${AGENT_SPREADSHEET_ENABLED:-false}
+      AGENT_SPREADSHEET_BASE_URL: ${AGENT_SPREADSHEET_BASE_URL:-http://spreadsheet-agent:3103}
+      AGENT_SPREADSHEET_TIMEOUT_MS: ${AGENT_SPREADSHEET_TIMEOUT_MS:-300000}
+      AGENT_SPREADSHEET_API_KEY: ${AGENT_SPREADSHEET_API_KEY:-}
       STORAGE_BACKEND: file
 
       NODE_OPTIONS: "--enable-source-maps"
 
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
       http_proxy: ${HTTP_PROXY:-}
       https_proxy: ${HTTPS_PROXY:-}
-      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
 
       npm_config_proxy: ${HTTP_PROXY:-}
       npm_config_https_proxy: ${HTTPS_PROXY:-}
-      npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal,.local,.internal}
+      npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
 
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
 
@@ -139,4 +151,56 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+    restart: unless-stopped
+
+  browser-agent:
+    profiles: ["browser", "external-agents"]
+    build:
+      context: ./agents/browser-agent
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      BROWSER_AGENT_PORT: 3101
+      BROWSER_AGENT_WORKSPACE: /workspace
+      BROWSER_AGENT_API_KEY: ${AGENT_BROWSER_API_KEY:-}
+    volumes:
+      - ./workspace:/workspace
+    ports:
+      - "${BROWSER_AGENT_PORT:-3101}:3101"
+    restart: unless-stopped
+
+  research-agent:
+    profiles: ["research", "external-agents"]
+    build:
+      context: ./agents/research-agent
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      RESEARCH_AGENT_PORT: 3102
+      RESEARCH_AGENT_WORKSPACE: /workspace
+      RESEARCH_AGENT_API_KEY: ${AGENT_RESEARCH_API_KEY:-}
+      RESEARCH_AGENT_BACKEND_URL: ${RESEARCH_AGENT_BACKEND_URL:-}
+    volumes:
+      - ./workspace:/workspace
+    ports:
+      - "${RESEARCH_AGENT_PORT:-3102}:3102"
+    restart: unless-stopped
+
+  spreadsheet-agent:
+    profiles: ["spreadsheet", "external-agents"]
+    build:
+      context: ./agents/spreadsheet-agent
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      SPREADSHEET_AGENT_PORT: 3103
+      SPREADSHEET_AGENT_WORKSPACE: /workspace
+      SPREADSHEET_AGENT_API_KEY: ${AGENT_SPREADSHEET_API_KEY:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      SPREADSHEET_GOOGLE_CREDENTIALS_JSON: ${SPREADSHEET_GOOGLE_CREDENTIALS_JSON:-}
+      SPREADSHEET_MCP_URL: ${SPREADSHEET_MCP_URL:-}
+    volumes:
+      - ./workspace:/workspace
+    ports:
+      - "${SPREADSHEET_AGENT_PORT:-3103}:3103"
     restart: unless-stopped

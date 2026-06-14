@@ -14,6 +14,7 @@ import type { McpManager } from '../mcp';
 import type { SchedulerActionContext } from '../scheduler';
 import type { SelfImprovingActionContext } from '../skills';
 import type { SelfHealingActionContext } from '../self-healing';
+import type { AgentGatewayService } from '../agent-gateway';
 import { readLineWithSlashAutocomplete } from './autocomplete';
 import { SLASH_COMMANDS } from './command-registry';
 import {
@@ -21,6 +22,7 @@ import {
   cmdSession, cmdProvider, cmdSettings, cmdTools, cmdWorkspace, cmdMemory, cmdHeartbeat,
   cmdCron, cmdNetwork, cmdMcp, cmdWorkflow, cmdSelfImprove, cmdHeal, cmdUpgrade,
   cmdPromptOptimize, cmdSystemExecute,
+  cmdAgents,
   type CLIContext,
 } from './commands';
 
@@ -183,6 +185,7 @@ async function dispatchCommand(raw: string, ctx: CLIContext): Promise<void> {
     case 'upgrade': case 'self-upgrade': await cmdUpgrade(ctx, args); break;
     case 'prompt-optimize': case 'po': await cmdPromptOptimize(ctx, args); break;
     case 'system-execute': case 'exec': await cmdSystemExecute(ctx, args); break;
+    case 'agents':              await cmdAgents(ctx, args); break;
     case 'network': case 'net': await cmdNetwork(ctx, args); break;
     case 'mcp':                 await cmdMcp(ctx, args); break;
     case 'workflow': case 'wf': await cmdWorkflow(ctx, args); break;
@@ -206,6 +209,7 @@ export interface CLIRunnerOptions {
   scheduler?: SchedulerActionContext;
   selfImproving?: SelfImprovingActionContext;
   selfHealing?: SelfHealingActionContext;
+  agentGateway?: AgentGatewayService;
 }
 
 export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
@@ -276,6 +280,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
     ...(opts.scheduler ? { scheduler: opts.scheduler } : {}),
     ...(opts.selfImproving ? { selfImproving: opts.selfImproving } : {}),
     ...(opts.selfHealing ? { selfHealing: opts.selfHealing } : {}),
+    ...(opts.agentGateway ? { agentGateway: opts.agentGateway } : {}),
     get activeProvider()  { return activeProvider!; },
     get activeModel()     { return activeModel; },
     get activeSessionId() { return activeSessionId; },

@@ -568,6 +568,65 @@ OpenCode dengan `AGENT_OPENCODE_ENABLED=false`.
 
 ---
 
+## Optional External Agents
+
+Phase 3 menyediakan connector HTTP dan Docker profile opsional untuk:
+
+- `browser-agent`: `browser.automation`, `browser.ui-test`
+- `research-agent`: `research.web`, `research.market`
+- `spreadsheet-agent`: `spreadsheet.read`, `spreadsheet.write`, `spreadsheet.report`
+
+Ketiganya disabled secara default. `docker compose up -d` hanya menjalankan core Native OpenClaw;
+service opsional tidak menjadi `depends_on` core dan tidak dimulai otomatis.
+
+Aktifkan worker yang diperlukan:
+
+```bash
+docker compose --profile browser up -d
+docker compose --profile research up -d
+docker compose --profile spreadsheet up -d
+docker compose --profile external-agents up -d
+```
+
+Aktifkan connector core yang sesuai di `.env`:
+
+```env
+AGENT_BROWSER_ENABLED=true
+AGENT_BROWSER_BASE_URL=http://browser-agent:3101
+AGENT_BROWSER_TIMEOUT_MS=300000
+AGENT_BROWSER_API_KEY=
+
+AGENT_RESEARCH_ENABLED=true
+AGENT_RESEARCH_BASE_URL=http://research-agent:3102
+AGENT_RESEARCH_TIMEOUT_MS=600000
+AGENT_RESEARCH_API_KEY=
+
+AGENT_SPREADSHEET_ENABLED=true
+AGENT_SPREADSHEET_BASE_URL=http://spreadsheet-agent:3103
+AGENT_SPREADSHEET_TIMEOUT_MS=300000
+AGENT_SPREADSHEET_API_KEY=
+```
+
+Gunakan `/agents` atau `/agents list` untuk melihat registry. `/agents health` memanggil `GET /health`
+hanya untuk connector enabled; command ini tidak menyalakan worker yang disabled.
+
+Payload eksternal tidak menyertakan `.env`, API key, token, password, cookie, authorization, atau
+credential dari context. API key worker dikirim hanya melalui header Authorization. Artifact harus
+berada di `/workspace/artifacts/<agent-id>/<task-id>/`.
+
+Scaffold Phase 3 sengaja ringan:
+
+- browser-agent belum membawa Playwright/Chromium dan mengembalikan
+  `BROWSER_RUNTIME_NOT_IMPLEMENTED`;
+- research-agent belum membawa crawler dan memerlukan adapter backend terpisah;
+- spreadsheet-agent memerlukan Google credentials atau MCP Google Sheets, lalu adapter backend
+  terpisah.
+
+Runtime tersebut dapat ditambahkan kemudian hanya ke image worker masing-masing, tanpa menambah
+dependency atau ukuran image core Native OpenClaw.
+
+---
+
 ## OpenCode Agent
 
 Integrasi opsional dengan OpenCode sebagai external coding agent — bukan provider chat biasa.

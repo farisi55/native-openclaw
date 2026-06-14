@@ -13,11 +13,20 @@ const CONNECTOR_PRIORITY: Record<AgentCapability, string[]> = {
   'mcp.server.list': ['mcp-agent'],
   'mcp.server.start': ['mcp-agent'],
   'mcp.server.stop': ['mcp-agent'],
+  'browser.automation': ['browser-agent'],
+  'browser.ui-test': ['browser-agent'],
+  'research.web': ['research-agent'],
+  'research.market': ['research-agent'],
+  'spreadsheet.read': ['spreadsheet-agent'],
+  'spreadsheet.write': ['spreadsheet-agent'],
+  'spreadsheet.report': ['spreadsheet-agent'],
 };
 
 export function capabilityForIntent(intent: string, input = ''): AgentCapability | null {
   const normalizedIntent = intent.trim().toLowerCase();
   const normalizedInput = input.trim().toLowerCase();
+  const informational =
+    /\b(?:apa itu|jelaskan|bagaimana cara kerja|what is|explain|how does)\b/.test(normalizedInput);
 
   if (normalizedIntent === 'self-healing' || normalizedIntent === 'self-upgrade') {
     return 'coding.patch';
@@ -35,6 +44,51 @@ export function capabilityForIntent(intent: string, input = ''): AgentCapability
   }
   if (/\bmcp\b/.test(normalizedInput) && /\b(?:add|tambahkan|tambah|update|ubah|remove|hapus|delete|config|konfigurasi)\b/.test(normalizedInput)) {
     return 'mcp.config';
+  }
+  if (!informational) {
+    const browserTarget =
+      /\b(?:browser|website|web\s+admin|dashboard|url|https?:\/\/)\b/.test(normalizedInput);
+    if (
+      browserTarget &&
+      /\b(?:test|uji|cek|inspect|periksa)\b/.test(normalizedInput) &&
+      /\b(?:ui|login|button|tombol|form|console|flow|alur)\b/.test(normalizedInput)
+    ) {
+      return 'browser.ui-test';
+    }
+    if (
+      browserTarget &&
+      /\b(?:buka|open|klik|click|isi|fill|screenshot|ambil\s+gambar|navigate|kunjungi)\b/.test(normalizedInput)
+    ) {
+      return 'browser.automation';
+    }
+
+    const researchAction =
+      /\b(?:riset|research|teliti|bandingkan|competitive\s+comparison|market\s+research|analisa\s+(?:market|pasar))\b/.test(normalizedInput);
+    if (researchAction && /\b(?:market|pasar|kompetitor|competitive|industri)\b/.test(normalizedInput)) {
+      return 'research.market';
+    }
+    if (researchAction) return 'research.web';
+
+    const spreadsheetTarget =
+      /\b(?:spreadsheet|google\s+sheets?|sheet|csv|xlsx)\b/.test(normalizedInput);
+    if (
+      spreadsheetTarget &&
+      /\b(?:buat|generate|hasilkan)\b[\s\S]*\b(?:report|laporan)\b|\b(?:report|laporan)\b[\s\S]*\b(?:spreadsheet|sheet|csv|xlsx)\b/.test(normalizedInput)
+    ) {
+      return 'spreadsheet.report';
+    }
+    if (
+      spreadsheetTarget &&
+      /\b(?:tulis|write|update|ubah|append|masukkan|simpan|kirim)\b/.test(normalizedInput)
+    ) {
+      return 'spreadsheet.write';
+    }
+    if (
+      spreadsheetTarget &&
+      /\b(?:ambil|read|baca|get|lihat|tampilkan|load|impor|import)\b/.test(normalizedInput)
+    ) {
+      return 'spreadsheet.read';
+    }
   }
   if (
     /\b(?:fix|repair|perbaiki|benahi)\b[\s\S]*\b(?:bug|error|failure|gagal|kode|code|module|modul)\b/.test(normalizedInput)
