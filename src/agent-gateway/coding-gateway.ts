@@ -123,6 +123,16 @@ export class GatewayCodingAgent implements CodingPatchAgent {
     if (Array.isArray(warnings) && warnings.every((item) => typeof item === 'string')) {
       state.gatewayWarnings = [...warnings];
     }
+    if (result.failedAgents) {
+      state.gatewayFailedAgents = result.failedAgents.map((failure) => ({ ...failure }));
+    }
+    if (result.validation) {
+      state.gatewayValidation = {
+        ok: result.validation.ok,
+        warnings: [...result.validation.warnings],
+        errors: [...result.validation.errors],
+      };
+    }
     if (result.agentId === 'internal-coding') {
       state.fallbackUsed = Boolean(result.metadata?.['fallbackUsed']);
       if (typeof result.metadata?.['providerId'] === 'string') {
@@ -133,6 +143,36 @@ export class GatewayCodingAgent implements CodingPatchAgent {
       }
       if (typeof result.metadata?.['providerFallbackUsed'] === 'boolean') {
         state.providerFallbackUsed = result.metadata['providerFallbackUsed'];
+      }
+      const providerFallbackPath = result.metadata?.['providerFallbackPath'];
+      if (
+        Array.isArray(providerFallbackPath) &&
+        providerFallbackPath.every((item) => typeof item === 'string')
+      ) {
+        state.providerFallbackPath = [...providerFallbackPath];
+      }
+      const providerFailures = result.metadata?.['providerFailures'];
+      if (Array.isArray(providerFailures)) {
+        state.providerFailures = providerFailures.flatMap((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+          const failure = item as Record<string, unknown>;
+          if (
+            typeof failure['providerId'] !== 'string' ||
+            typeof failure['model'] !== 'string'
+          ) {
+            return [];
+          }
+          return [{
+            providerId: failure['providerId'],
+            model: failure['model'],
+            ...(typeof failure['errorCode'] === 'string'
+              ? { errorCode: failure['errorCode'] }
+              : {}),
+            ...(typeof failure['errorMessage'] === 'string'
+              ? { errorMessage: failure['errorMessage'] }
+              : {}),
+          }];
+        });
       }
     }
   }

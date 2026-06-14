@@ -95,10 +95,21 @@ export class ReportWriter {
       `Loops: ${run.loops.length}/${run.maxLoops}`,
       `Agent used: ${run.agentUsed ?? '-'}`,
       `Agent fallback path: ${run.agentFallbackPath?.join(' -> ') ?? '-'}`,
+      `Agent validation: ${run.agentValidation ? (run.agentValidation.ok ? 'passed' : 'failed') : '-'}`,
       `Provider used: ${run.providerUsed ?? '-'}`,
       `Provider model: ${run.providerModel ?? '-'}`,
       `Provider fallback used: ${run.providerFallbackUsed ?? false}`,
+      `Provider fallback path: ${run.providerFallbackPath?.join(' -> ') ?? '-'}`,
       `Agent warnings: ${run.agentWarnings?.join('; ') ?? '-'}`,
+      `Report path: ${join(this.runDir(run.id), 'final-report.md')}`,
+      '',
+      '## Agent Execution',
+      '',
+      this.agentExecutionSummary(run),
+      '',
+      '## Provider Execution',
+      '',
+      this.providerExecutionSummary(run),
       '',
       '## User Input',
       '',
@@ -113,6 +124,10 @@ export class ReportWriter {
       commands.length > 0
         ? commands.map((cmd) => `- ${cmd.command}: exit=${cmd.exitCode}, timedOut=${cmd.timedOut}`).join('\n')
         : '- none',
+      '',
+      '## QA Result',
+      '',
+      this.qaSummary(run),
       '',
       '## Loop Errors',
       '',
@@ -130,11 +145,109 @@ export class ReportWriter {
       '',
       this.perFileDiff(run.fileDiffs ?? []),
       '',
-      run.status === 'rolled_back'
-        ? 'Rollback status: changes were rolled back after this attempted diff was captured.'
-        : '',
+      '## Rollback',
+      '',
+      this.rollbackSummary(run),
       '',
     ].join('\n');
+  }
+
+  private agentExecutionSummary(run: HealingRun): string {
+    const failed = run.agentFailedAgents ?? [];
+    const validation = run.agentValidation;
+    return [
+      `- Selected agent: ${run.agentUsed ?? '-'}`,
+      `- Fallback chain: ${run.agentFallbackPath?.join(' -> ') ?? '-'}`,
+      `- Failed agents: ${failed.length > 0 ? '' : 'none'}`,
+      ...failed.map((item) => {
+        const detail = [item.code, item.message].filter(Boolean).join(': ');
+        return `  - ${item.agentId}${detail ? `: ${redactSecrets(detail, this.redact)}` : ''}`;
+      }),
+      `- Validation: ${validation ? (validation.ok ? 'passed' : 'failed') : 'not recorded'}`,
+      ...(validation?.warnings ?? []).map((warning) =>
+        `  - warning: ${redactSecrets(warning, this.redact)}`
+      ),
+      ...(validation?.errors ?? []).map((error) =>
+        `  - error: ${redactSecrets(error, this.redact)}`
+      ),
+    ].join('\n');
+  }
+
+  private providerExecutionSummary(run: HealingRun): string {
+    const failures = run.providerFailures ?? [];
+    return [
+      `- Selected provider: ${run.providerUsed ?? '-'}`,
+      `- Selected model: ${run.providerModel ?? '-'}`,
+      `- Fallback used: ${run.providerFallbackUsed ?? false}`,
+      `- Fallback chain: ${run.providerFallbackPath?.join(' -> ') ?? '-'}`,
+      `- Failed providers: ${failures.length > 0 ? '' : 'none'}`,
+      ...failures.map((failure) => {
+        const detail = [failure.errorCode, failure.errorMessage]
+          .filter(Boolean)
+          .join(': ');
+        return `  - ${failure.providerId}/${failure.model}${
+          detail ? `: ${redactSecrets(detail, this.redact)}` : ''
+        }`;
+      }),
+    ].join('\n');
+  }
+
+  private qaSummary(run: HealingRun): string {
+    const lines: string[] = [];
+    for (const loop of run.loops) {
+      if (loop.qaReport) {
+        lines.push(
+          `### Loop ${loop.loop}`,
+          '',
+          `- Status: ${loop.qaReport.passed ? 'passed' : 'failed'}`,
+          `- Summary: ${redactSecrets(loop.qaReport.summary, this.redact)}`,
+          `- Next action: ${loop.qaReport.nextAction}`
+        );
+      }
+      for (const command of loop.commandsRun ?? []) {
+        lines.push(
+          `- Command \`${command.command}\`: ${
+            command.exitCode === 0 && !command.timedOut ? 'passed' : 'failed'
+          } (exit=${command.exitCode}, timedOut=${command.timedOut})`
+        );
+        if (command.exitCode !== 0 || command.timedOut) {
+          const stdout = truncateForReport(
+            redactSecrets(command.stdout, this.redact).trim(),
+            1000
+          );
+          const stderr = truncateForReport(
+            redactSecrets(command.stderr, this.redact).trim(),
+            1000
+          );
+          if (stdout) lines.push('', 'STDOUT preview:', '```text', stdout, '```');
+          if (stderr) lines.push('', 'STDERR preview:', '```text', stderr, '```');
+        }
+      }
+      if (loop.qaReport?.rawLogExcerpt && !loop.qaReport.passed) {
+        lines.push(
+          '',
+          'QA log excerpt:',
+          '```text',
+          truncateForReport(
+            redactSecrets(loop.qaReport.rawLogExcerpt, this.redact),
+            1500
+          ),
+          '```'
+        );
+      }
+      if (loop.qaReport || (loop.commandsRun?.length ?? 0) > 0) lines.push('');
+    }
+    return lines.length > 0 ? lines.join('\n').trim() : 'No QA result was recorded.';
+  }
+
+  private rollbackSummary(run: HealingRun): string {
+    if (run.status === 'rolled_back') {
+      return 'Rollback status: completed. Attempted diffs were captured before files were restored.';
+    }
+    if (run.status === 'passed') {
+      return 'Rollback status: not required.';
+    }
+    return 'Rollback status: not executed.';
   }
 
   private diffMarkdown(diffs: FileDiffSummary[]): string {

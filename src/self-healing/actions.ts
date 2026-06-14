@@ -51,10 +51,21 @@ function formatStatus(status: Record<string, unknown>): string {
 }
 
 function formatRun(run: HealingRun): string {
+  const latestQa = [...run.loops].reverse().find((loop) => loop.qaReport)?.qaReport;
+  const rollback = run.status === 'rolled_back'
+    ? 'completed'
+    : run.status === 'passed'
+    ? 'not required'
+    : 'not executed';
   return [
     `${run.id} ${run.status}`,
     `type: ${run.type}`,
     `loops: ${run.loops.length}/${run.maxLoops}`,
+    `agent used: ${run.agentUsed ?? '-'}`,
+    `fallback chain: ${run.agentFallbackPath?.join(' -> ') ?? '-'}`,
+    `validation: ${run.agentValidation ? (run.agentValidation.ok ? 'passed' : 'failed') : '-'}`,
+    `QA: ${latestQa ? (latestQa.passed ? 'passed' : 'failed') : '-'}`,
+    `rollback: ${rollback}`,
     `summary: ${run.finalSummary ?? run.error ?? '-'}`,
   ].join('\n');
 }

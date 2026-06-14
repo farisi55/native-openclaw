@@ -42,13 +42,37 @@ export interface OpenCodeFallbackState {
   providerId?: string;
   providerModel?: string;
   providerFallbackUsed?: boolean;
+  providerFallbackPath?: string[];
+  providerFailures?: Array<{
+    providerId: string;
+    model: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }>;
   gatewayWarnings?: string[];
+  gatewayFailedAgents?: Array<{
+    agentId: string;
+    code?: string;
+    message?: string;
+  }>;
+  gatewayValidation?: {
+    ok: boolean;
+    warnings: string[];
+    errors: string[];
+  };
 }
 
 export interface CodingExecutionState {
   providerId?: string;
   model?: string;
   providerFallbackUsed?: boolean;
+  providerFallbackPath?: string[];
+  providerFailures?: Array<{
+    providerId: string;
+    model: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }>;
 }
 
 export interface ApplyBugFixInput {
@@ -367,6 +391,34 @@ export class CodingAgent implements CodingPatchAgent {
         }
         if (typeof record['usedFallback'] === 'boolean') {
           input.executionState.providerFallbackUsed = record['usedFallback'];
+        }
+        if (
+          Array.isArray(record['fallbackChain']) &&
+          record['fallbackChain'].every((item) => typeof item === 'string')
+        ) {
+          input.executionState.providerFallbackPath = [...record['fallbackChain']];
+        }
+        if (Array.isArray(record['failedProviders'])) {
+          input.executionState.providerFailures = record['failedProviders'].flatMap((item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+            const failure = item as Record<string, unknown>;
+            if (
+              typeof failure['providerId'] !== 'string' ||
+              typeof failure['model'] !== 'string'
+            ) {
+              return [];
+            }
+            return [{
+              providerId: failure['providerId'],
+              model: failure['model'],
+              ...(typeof failure['errorCode'] === 'string'
+                ? { errorCode: failure['errorCode'] }
+                : {}),
+              ...(typeof failure['errorMessage'] === 'string'
+                ? { errorMessage: failure['errorMessage'] }
+                : {}),
+            }];
+          });
         }
       }
     }

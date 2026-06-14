@@ -311,7 +311,17 @@ export class SelfUpgradeEngine {
     if (state.providerId) run.providerUsed = state.providerId;
     if (state.providerModel) run.providerModel = state.providerModel;
     if (state.providerFallbackUsed !== undefined) run.providerFallbackUsed = state.providerFallbackUsed;
+    if (state.providerFallbackPath) run.providerFallbackPath = [...state.providerFallbackPath];
+    if (state.providerFailures) run.providerFailures = state.providerFailures.map((failure) => ({ ...failure }));
     if (state.gatewayWarnings) run.agentWarnings = [...state.gatewayWarnings];
+    if (state.gatewayFailedAgents) run.agentFailedAgents = state.gatewayFailedAgents.map((failure) => ({ ...failure }));
+    if (state.gatewayValidation) {
+      run.agentValidation = {
+        ok: state.gatewayValidation.ok,
+        warnings: [...state.gatewayValidation.warnings],
+        errors: [...state.gatewayValidation.errors],
+      };
+    }
   }
 
   private withOpenCodeSummary(run: HealingRun, summary: string): string {

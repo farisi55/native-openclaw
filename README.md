@@ -647,6 +647,75 @@ Scaffold Phase 3 sengaja ringan:
 Runtime tersebut dapat ditambahkan kemudian hanya ke image worker masing-masing, tanpa menambah
 dependency atau ukuran image core Native OpenClaw.
 
+### Phase 3.5 Stabilization and QA
+
+Phase 3.5 mengeraskan integrasi yang sudah ada tanpa menambah runtime berat. Jalur utama tetap
+terpisah:
+
+```text
+Normal chat:
+User -> PromptOptimizer -> ProviderRouter -> ToolLoop -> response
+
+Self-healing / self-upgrade:
+User -> IntentRouter -> AgentGateway -> OpenCode
+     -> fallback InternalCoding -> QA -> report / rollback
+
+MCP configuration:
+User -> AgentGateway -> MCP Agent -> mcp_agent.config.yaml -> /mcp list
+
+Optional external capability:
+User -> AgentGateway -> External HTTP connector -> Docker profile worker
+```
+
+Normal chat tidak memanggil AgentGateway, OpenCode, MCP server, atau external worker. ProviderRouter
+menyimpan metadata attempt yang teredaksi: provider terpilih, fallback chain, failed providers, dan
+error code. API key, Bearer token, request body sensitif, serta isi file protected tidak ditulis ke
+laporan.
+
+Self-healing dan self-upgrade menulis laporan konsisten di
+`workspace/self-healing/runs/<runId>/final-report.md` dengan:
+
+- agent terpilih, fallback chain, dan failed agents;
+- hasil validasi AgentGateway;
+- provider/model serta provider fallback;
+- changed files dan per-file diff;
+- command QA, status, serta stdout/stderr preview saat gagal;
+- status rollback dan lokasi report.
+
+Jalankan QA terfokus:
+
+```bash
+npm run qa:agent-gateway
+npm run qa:provider-router
+npm run qa:mcp
+npm run qa:security
+npm run qa:phase3.5
+```
+
+Validasi Docker profile tanpa menyalakan container:
+
+```bash
+npm run qa:docker-profiles
+```
+
+Perintah tersebut menjalankan `docker compose config --services` untuk konfigurasi default serta
+profile `browser`, `research`, `spreadsheet`, dan `external-agents`. Validasi runtime container tetap
+dapat dilakukan manual:
+
+```bash
+docker compose up -d
+docker compose ps
+docker compose down
+
+docker compose --profile browser up -d
+docker compose --profile research up -d
+docker compose --profile spreadsheet up -d
+docker compose --profile external-agents up -d
+```
+
+Jika capability eksternal diminta saat worker disabled, respons hanya memberi instruksi profile dan
+env yang perlu diaktifkan. Sistem tidak mengklaim browser, riset, atau spreadsheet sudah dijalankan.
+
 ---
 
 ## OpenCode Agent
@@ -1089,6 +1158,8 @@ docker attach native-openclaw                     # Attach ke CLI
 | `npm test` | Jalankan full test suite |
 | `npm run test:workspace` | Test workspace saja |
 | `npm run test:scheduler` | Test scheduler saja |
+| `npm run qa:phase3.5` | QA AgentGateway, ProviderRouter, MCP, security, dan report consistency |
+| `npm run qa:docker-profiles` | Validasi service set Docker Compose per profile tanpa start container |
 | `npm run package` | Build + zip untuk distribusi |
 
 ---

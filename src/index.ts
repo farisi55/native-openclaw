@@ -177,6 +177,8 @@ function createAutonomousProvider(
             model: routed.model,
             usedFallback: routed.usedFallback,
             attemptCount: routed.attemptCount,
+            fallbackChain: routed.fallbackChain,
+            failedProviders: routed.failedProviders,
           },
         },
       };

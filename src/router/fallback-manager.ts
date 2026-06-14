@@ -9,8 +9,18 @@ import type { ProviderHealthTracker } from './provider-health';
 import type { RoutingStrategy, RoutingHint } from './routing-strategy';
 import { createLogger } from '../utils/logger';
 import { providerDefaultModelFromEnv } from '../providers/provider-env';
+import { redactSecrets } from '../self-healing/log-redactor';
 
 const logger = createLogger('router:fallback');
+
+export interface ProviderFallbackAttempt {
+  providerId: string;
+  model: string;
+  ok: boolean;
+  retryable?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
 
 export interface FallbackResult {
   response: ChatResponse;
@@ -18,6 +28,9 @@ export interface FallbackResult {
   model: string;
   usedFallback: boolean;
   attemptCount: number;
+  fallbackChain: string[];
+  failedProviders: ProviderFallbackAttempt[];
+  attempts: ProviderFallbackAttempt[];
 }
 
 export class FallbackManager {
@@ -81,6 +94,7 @@ export class FallbackManager {
 
     let lastError: Error | null = null;
     let attemptCount = 0;
+    const attempts: ProviderFallbackAttempt[] = [];
 
     for (const { provider, model } of candidates) {
       attemptCount++;
@@ -108,7 +122,21 @@ export class FallbackManager {
           });
         }
 
-        return { response, providerId: provider.id, model, usedFallback, attemptCount };
+        attempts.push({
+          providerId: provider.id,
+          model,
+          ok: true,
+        });
+        return {
+          response,
+          providerId: provider.id,
+          model,
+          usedFallback,
+          attemptCount,
+          fallbackChain: attempts.map((attempt) => attempt.providerId),
+          failedProviders: attempts.filter((attempt) => !attempt.ok),
+          attempts,
+        };
 
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e));
@@ -116,11 +144,20 @@ export class FallbackManager {
 
         const retryable = e instanceof ProviderError && e.isRetryable();
         const willFallback = attemptCount < candidates.length;
+        const safeErrorMessage = redactSecrets(lastError.message).slice(0, 500);
+        attempts.push({
+          providerId: provider.id,
+          model,
+          ok: false,
+          retryable,
+          errorCode: e instanceof ProviderError ? e.code : 'PROVIDER_ERROR',
+          errorMessage: safeErrorMessage,
+        });
         logger.warn('provider attempt failed', {
           provider: provider.id,
           model,
           attempt: attemptCount,
-          error: lastError.message.slice(0, 100),
+          error: safeErrorMessage.slice(0, 100),
           retryable,
           willFallback,
         });

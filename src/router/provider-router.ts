@@ -62,7 +62,20 @@ export class ProviderRouter {
       const start = Date.now();
       const response = await primaryProvider.chat({ ...options, model: primaryModel });
       this.health.recordSuccess(primaryProvider.id, Date.now() - start, response.usage?.completionTokens ?? 0);
-      return { response, providerId: primaryProvider.id, model: primaryModel, usedFallback: false, attemptCount: 1 };
+      return {
+        response,
+        providerId: primaryProvider.id,
+        model: primaryModel,
+        usedFallback: false,
+        attemptCount: 1,
+        fallbackChain: [primaryProvider.id],
+        failedProviders: [],
+        attempts: [{
+          providerId: primaryProvider.id,
+          model: primaryModel,
+          ok: true,
+        }],
+      };
     }
 
     const hint: RoutingHint = {};

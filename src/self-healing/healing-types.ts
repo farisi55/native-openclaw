@@ -14,6 +14,25 @@ export interface FileDiffSummary {
   truncated: boolean;
 }
 
+export interface HealingAgentFailure {
+  agentId: string;
+  code?: string;
+  message?: string;
+}
+
+export interface HealingValidationResult {
+  ok: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface HealingProviderFailure {
+  providerId: string;
+  model: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 export interface HealingRun {
   id: string;
   type: HealingRunType;
@@ -46,7 +65,11 @@ export interface HealingRun {
   providerUsed?: string;
   providerModel?: string;
   providerFallbackUsed?: boolean;
+  providerFallbackPath?: string[];
+  providerFailures?: HealingProviderFailure[];
   agentWarnings?: string[];
+  agentFailedAgents?: HealingAgentFailure[];
+  agentValidation?: HealingValidationResult;
 }
 
 export interface HealingLoopResult {

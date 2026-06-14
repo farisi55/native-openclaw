@@ -115,6 +115,8 @@ export class InternalCodingConnector implements AgentConnector {
           providerId: context.executionState.providerId ?? this.provider?.id,
           model: context.executionState.model,
           providerFallbackUsed: context.executionState.providerFallbackUsed ?? false,
+          providerFallbackPath: context.executionState.providerFallbackPath ?? [],
+          providerFailures: context.executionState.providerFailures ?? [],
         },
       };
     }
@@ -136,6 +138,8 @@ export class InternalCodingConnector implements AgentConnector {
         providerId: context.executionState.providerId ?? this.provider?.id,
         model: context.executionState.model,
         providerFallbackUsed: context.executionState.providerFallbackUsed ?? false,
+        providerFallbackPath: context.executionState.providerFallbackPath ?? [],
+        providerFailures: context.executionState.providerFailures ?? [],
       },
     };
   }
