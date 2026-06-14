@@ -7,6 +7,7 @@ import { join } from 'path';
 import { KVStore } from './json-store';
 import type { JsonValue, Result } from '../types/global';
 import { createLogger } from '../utils/logger';
+import { providerDefaultModelFromEnv } from '../providers/provider-env';
 
 const logger = createLogger('storage:settings');
 
@@ -29,6 +30,8 @@ const BUILTIN_DEFAULTS: Record<string, string> = {
   gemini:      'gemini-1.5-flash',
   sambanova:   'DeepSeek-V3.1',
   zai:          'glm-4.5',
+  cloudflare:   '@cf/meta/llama-3.1-8b-instruct',
+  'github-models': 'openai/gpt-4.1',
   openai:      'gpt-4o-mini',
   anthropic:   'claude-opus-4-20250514',
 };
@@ -63,6 +66,8 @@ export class SettingsManager {
     const perProviderMap = all.defaultModels as Record<string, string> | undefined;
     if (perProviderMap?.[providerId]) return perProviderMap[providerId]!;
     if (all.defaultModel && all.defaultProvider === providerId) return all.defaultModel;
+    const configuredDefault = providerDefaultModelFromEnv(providerId);
+    if (configuredDefault) return configuredDefault;
     return BUILTIN_DEFAULTS[providerId] ?? null;
   }
 

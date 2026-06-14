@@ -21,16 +21,33 @@ export interface RoutingHint {
 
 // Provider preference tiers per task type
 const TASK_PREFERENCE: Record<TaskType, string[]> = {
-  fast_chat:  ['groq', 'sambanova', 'openrouter', 'mistral', 'ollama'],
-  reasoning:  ['sambanova', 'gemini', 'openrouter', 'groq', 'ollama'],
+  fast_chat:  ['groq', 'sambanova', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'ollama'],
+  reasoning:  ['sambanova', 'gemini', 'github-models', 'cloudflare', 'openrouter', 'groq', 'ollama'],
   local:      ['ollama'],
-  vision:     ['gemini', 'openrouter', 'ollama'],
-  coding:     ['sambanova', 'groq', 'mistral', 'openrouter', 'ollama'],
-  general:    ['groq', 'sambanova', 'mistral', 'openrouter', 'gemini', 'ollama'],
+  vision:     ['gemini', 'github-models', 'openrouter', 'ollama'],
+  coding:     ['sambanova', 'groq', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'ollama'],
+  general:    ['groq', 'sambanova', 'mistral', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'ollama'],
 };
 
 // Default fallback chain
-const DEFAULT_FALLBACK_CHAIN = ['groq', 'sambanova', 'mistral', 'openrouter', 'gemini', 'ollama'];
+const DEFAULT_FALLBACK_CHAIN = [
+  'groq',
+  'sambanova',
+  'mistral',
+  'cloudflare',
+  'github-models',
+  'openrouter',
+  'gemini',
+  'ollama',
+];
+
+export function configuredProviderOrder(): string[] {
+  const configured = (process.env['PROVIDER_ORDER'] ?? '')
+    .split(',')
+    .map((id) => id.trim().toLowerCase())
+    .filter(Boolean);
+  return configured.length > 0 ? [...new Set(configured)] : DEFAULT_FALLBACK_CHAIN;
+}
 
 export class RoutingStrategy {
   private readonly health: ProviderHealthTracker;
@@ -49,7 +66,10 @@ export class RoutingStrategy {
 
     // Task type preference bonus
     const taskType = hint.taskType ?? 'general';
-    const preferred = TASK_PREFERENCE[taskType] ?? DEFAULT_FALLBACK_CHAIN;
+    const configured = process.env['PROVIDER_ORDER']?.trim();
+    const preferred = configured
+      ? configuredProviderOrder()
+      : (TASK_PREFERENCE[taskType] ?? DEFAULT_FALLBACK_CHAIN);
     const preferenceIdx = preferred.indexOf(providerId);
     if (preferenceIdx === -1) score -= 30;
     else score += (preferred.length - preferenceIdx) * 15;

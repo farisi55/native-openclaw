@@ -8,6 +8,7 @@ import { ProviderError } from '../types/provider';
 import type { ProviderHealthTracker } from './provider-health';
 import type { RoutingStrategy, RoutingHint } from './routing-strategy';
 import { createLogger } from '../utils/logger';
+import { providerDefaultModelFromEnv } from '../providers/provider-env';
 
 const logger = createLogger('router:fallback');
 
@@ -113,16 +114,18 @@ export class FallbackManager {
         lastError = e instanceof Error ? e : new Error(String(e));
         this.health.recordFailure(provider.id);
 
-        const shouldRetry = e instanceof ProviderError && e.isRetryable();
+        const retryable = e instanceof ProviderError && e.isRetryable();
+        const willFallback = attemptCount < candidates.length;
         logger.warn('provider attempt failed', {
           provider: provider.id,
           model,
           attempt: attemptCount,
           error: lastError.message.slice(0, 100),
-          willRetry: shouldRetry && attemptCount < candidates.length,
+          retryable,
+          willFallback,
         });
 
-        if (!shouldRetry && e instanceof ProviderError && e.code === 'UNAUTHORIZED') {
+        if (!retryable && e instanceof ProviderError && e.code === 'UNAUTHORIZED') {
           // Auth errors won't fix themselves — skip remaining retries for this provider
           continue;
         }
@@ -149,8 +152,7 @@ export class FallbackManager {
     const cached = this.modelCache.get(provider.id);
     if (cached) return cached;
 
-    const envKey = `${provider.id.toUpperCase()}_DEFAULT_MODEL`;
-    const envModel = process.env[envKey];
+    const envModel = providerDefaultModelFromEnv(provider.id);
     if (envModel) {
       this.modelCache.set(provider.id, envModel);
       return envModel;

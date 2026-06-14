@@ -114,7 +114,9 @@ export class ProviderError extends Error {
   }
 
   isRetryable(): boolean {
-    return this.code === 'RATE_LIMITED' || this.code === 'NETWORK_ERROR';
+    return this.code === 'RATE_LIMITED' ||
+      this.code === 'NETWORK_ERROR' ||
+      this.code === 'TIMEOUT';
   }
 }
 

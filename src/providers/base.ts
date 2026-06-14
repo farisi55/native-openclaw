@@ -120,18 +120,24 @@ export abstract class BaseProvider implements IProvider {
     const code = this.httpStatusToCode(response.status);
     throw new ProviderError(
       this.id, code,
-      `HTTP ${response.status}: ${body.slice(0, 300)}`,
+      this.httpErrorMessage(response.status, body),
       { status: response.status, body }
     );
   }
 
   protected httpStatusToCode(status: number): ProviderErrorCode {
     if (status === 401 || status === 403) return 'UNAUTHORIZED';
+    if (status === 408) return 'TIMEOUT';
+    if (status === 413) return 'CONTEXT_EXCEEDED';
     if (status === 429) return 'RATE_LIMITED';
     if (status === 404) return 'MODEL_NOT_FOUND';
     if (status === 400) return 'CONTEXT_EXCEEDED';
     if (status === 422) return 'CONTENT_FILTERED';
     return status >= 500 ? 'NETWORK_ERROR' : 'UNKNOWN';
+  }
+
+  protected httpErrorMessage(status: number, body: string): string {
+    return `HTTP ${status}: ${body.slice(0, 300)}`;
   }
 
   private wrapFetchError(cause: unknown): ProviderError {
@@ -234,7 +240,8 @@ export abstract class BaseProvider implements IProvider {
     baseUrl: string,
     apiKey: string,
     options: ChatOptions,
-    extraHeaders?: Record<string, string>
+    extraHeaders?: Record<string, string>,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     const startedAt = now();
 
@@ -262,10 +269,14 @@ export abstract class BaseProvider implements IProvider {
       },
       body: JSON.stringify(body),
       ...(options.signal !== undefined && { signal: options.signal }),
+      ...(timeoutMs !== undefined && { timeoutMs }),
     });
 
-    const choice = data.choices[0];
+    const choice = Array.isArray(data.choices) ? data.choices[0] : undefined;
     if (!choice) throw new ProviderError(this.id, 'UNKNOWN', 'API returned no choices.');
+    if (!choice.message || typeof choice.message.content !== 'string' || !choice.message.content.trim()) {
+      throw new ProviderError(this.id, 'UNKNOWN', 'API returned an empty assistant message.');
+    }
 
     const message = this.fromWireMessage(choice.message);
     const latencyMs = now() - startedAt;

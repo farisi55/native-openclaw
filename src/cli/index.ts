@@ -5,6 +5,8 @@
 
 import { stdout as output, exit } from 'process';
 import type { ProviderRegistry, IProvider } from '../types/provider';
+import { configuredProviderOrder } from '../router/routing-strategy';
+import { providerDefaultModelFromEnv } from '../providers/provider-env';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { ToolRegistry } from '../tools/tool-registry';
@@ -224,7 +226,12 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
   const savedProvider  = await settings.getDefaultProvider();
   const savedModel     = await settings.getDefaultModel();
 
-  const priority = ['zai', 'groq', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'ollama'];
+  const priority = [
+    'zai',
+    ...configuredProviderOrder(),
+    'anthropic',
+    'openai',
+  ];
   let activeProvider: IProvider | undefined;
 
   // Try saved default first
@@ -255,8 +262,7 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
       const models = await activeProvider!.listModels();
       if (models[0]) activeModel = models[0].id;
     } catch {
-      const envKey = `${activeProvider!.id.toUpperCase()}_DEFAULT_MODEL`;
-      activeModel = process.env[envKey] ?? 'unknown';
+      activeModel = providerDefaultModelFromEnv(activeProvider!.id) ?? 'unknown';
     }
   }
 

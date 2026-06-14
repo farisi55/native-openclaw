@@ -113,6 +113,68 @@ function parseBoolEnv(key: string, fallback: boolean): boolean {
   return ['true', '1', 'yes'].includes((getOptionalEnv(key, String(fallback)) ?? String(fallback)).toLowerCase());
 }
 
+function validatePositiveTimeout(key: string): void {
+  const raw = getOptionalEnv(key)?.trim();
+  if (!raw) return;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`[config] ${key} must be a positive integer.`);
+  }
+}
+
+function validateProviderEnvironment(): void {
+  validatePositiveTimeout('CLOUDFLARE_TIMEOUT_MS');
+  validatePositiveTimeout('GITHUB_MODELS_TIMEOUT_MS');
+
+  if (parseBoolEnv('CLOUDFLARE_AI_ENABLED', false)) {
+    if (!getOptionalEnv('CLOUDFLARE_API_KEY')?.trim()) {
+      throw new Error(
+        '[config] CLOUDFLARE_API_KEY is required when CLOUDFLARE_AI_ENABLED=true.'
+      );
+    }
+    const accountId = getOptionalEnv('CLOUDFLARE_ACCOUNT_ID')?.trim();
+    if (!accountId) {
+      throw new Error(
+        '[config] CLOUDFLARE_ACCOUNT_ID is required when CLOUDFLARE_AI_ENABLED=true.'
+      );
+    }
+
+    const configuredUrl = getOptionalEnv('CLOUDFLARE_BASE_URL')?.trim();
+    if (configuredUrl) {
+      try {
+        new URL(configuredUrl.replace(/\$\{CLOUDFLARE_ACCOUNT_ID\}/g, accountId));
+      } catch {
+        throw new Error('[config] CLOUDFLARE_BASE_URL must be a valid URL.');
+      }
+    }
+  }
+
+  if (parseBoolEnv('GITHUB_MODELS_ENABLED', false)) {
+    if (!getOptionalEnv('GITHUB_MODELS_API_KEY')?.trim()) {
+      throw new Error(
+        '[config] GITHUB_MODELS_API_KEY is required when GITHUB_MODELS_ENABLED=true.'
+      );
+    }
+    if (
+      parseBoolEnv('GITHUB_MODELS_USE_ORG_ENDPOINT', false) &&
+      !getOptionalEnv('GITHUB_MODELS_ORG')?.trim()
+    ) {
+      throw new Error(
+        '[config] GITHUB_MODELS_ORG is required when GITHUB_MODELS_USE_ORG_ENDPOINT=true.'
+      );
+    }
+
+    const configuredUrl = getOptionalEnv('GITHUB_MODELS_BASE_URL')?.trim();
+    if (configuredUrl) {
+      try {
+        new URL(configuredUrl);
+      } catch {
+        throw new Error('[config] GITHUB_MODELS_BASE_URL must be a valid URL.');
+      }
+    }
+  }
+}
+
 function buildRawConfig(): unknown {
   // FIX: exactOptionalPropertyTypes — use conditional spread instead of || undefined
   const apiAuthToken = getOptionalEnv('API_AUTH_TOKEN');
@@ -179,6 +241,7 @@ function buildRawConfig(): unknown {
 // ─── Validate ─────────────────────────────────────────────────────────────────
 
 export function validateConfig(): Readonly<AppConfig> {
+  validateProviderEnvironment();
   const raw = buildRawConfig();
   const result = AppConfigSchema.safeParse(raw);
 
@@ -198,7 +261,15 @@ export function validateConfig(): Readonly<AppConfig> {
     Boolean(process.env['MISTRAL_API_KEY']) ||
     Boolean(process.env['OPENROUTER_API_KEY']) ||
     Boolean(process.env['ZAI_API_KEY']) ||
-    Boolean(process.env['PUTER_API_KEY']);
+    Boolean(process.env['PUTER_API_KEY']) ||
+    (
+      parseBoolEnv('CLOUDFLARE_AI_ENABLED', false) &&
+      Boolean(process.env['CLOUDFLARE_API_KEY'])
+    ) ||
+    (
+      parseBoolEnv('GITHUB_MODELS_ENABLED', false) &&
+      Boolean(process.env['GITHUB_MODELS_API_KEY'])
+    );
   const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']);
 
   if (!hasLegacyProvider && !hasExternalProvider && !hasOllama) {
@@ -206,6 +277,8 @@ export function validateConfig(): Readonly<AppConfig> {
       '[config] No provider API keys found. Set at least one of:\n' +
         '  OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,\n' +
         '  GROQ_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, ZAI_API_KEY, PUTER_API_KEY,\n' +
+        '  CLOUDFLARE_API_KEY with CLOUDFLARE_AI_ENABLED=true,\n' +
+        '  GITHUB_MODELS_API_KEY with GITHUB_MODELS_ENABLED=true,\n' +
         '  or OLLAMA_BASE_URL'
     );
   }

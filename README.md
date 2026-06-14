@@ -8,7 +8,7 @@ Interactive chat REPL dengan arsitektur reasoning-first yang mendukung 10 provid
 
 ## Features
 
-- **Multi-provider router** — 10 provider aktif bersamaan, auto-fallback, task-aware routing
+- **Multi-provider router** — 12 provider aktif bersamaan, auto-fallback, task-aware routing
 - **Reasoning-first orchestrator** — internal reasoning sebelum setiap tool call
 - **Semantic memory** — TF-IDF local (tanpa vector DB eksternal), persisten antar sesi
 - **ReAct loop** — Reason → Action → Observe → Answer, hingga 4 steps per turn
@@ -66,7 +66,27 @@ Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runti
 | Z.ai | `ZAI_API_KEY` | `glm-4.5` | `ZAI_BASE_URL` required |
 | SambaNova | `SAMBANOVA_API_KEY` | `DeepSeek-V3.1` | Reasoning-optimized |
 | Puter | `PUTER_API_KEY` | `gpt-5.5` | Backend ProviderRouter only |
+| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `@cf/meta/llama-3.1-8b-instruct` | Requires account ID and enable flag |
+| GitHub Models | `GITHUB_MODELS_API_KEY` | `openai/gpt-4.1` | Token needs Models read access |
 | Ollama | *(none)* | — | `OLLAMA_BASE_URL=http://localhost:11434` |
+
+Cloudflare and GitHub Models are normal LLM providers. They run through `ProviderRouter`
+and participate in its fallback path; they are not AgentGateway connectors.
+
+```env
+CLOUDFLARE_AI_ENABLED=true
+CLOUDFLARE_API_KEY=your-cloudflare-token
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+CLOUDFLARE_DEFAULT_MODEL=@cf/meta/llama-3.1-8b-instruct
+
+GITHUB_MODELS_ENABLED=true
+GITHUB_MODELS_API_KEY=your-github-token
+GITHUB_MODELS_DEFAULT_MODEL=openai/gpt-4.1
+```
+
+Switch manually with `/provider cloudflare` or `/provider github-models`. Run a
+minimal live diagnostic with `/provider doctor cloudflare` or
+`/provider doctor github-models`.
 
 ### Smart Router
 
@@ -74,10 +94,10 @@ Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runti
 
 | Task Type | Priority Order |
 |-----------|----------------|
-| `fast_chat` | groq → sambanova → openrouter → mistral → ollama |
-| `reasoning` | sambanova → gemini → openrouter → groq → ollama |
-| `coding` | sambanova → groq → mistral → openrouter → ollama |
-| `vision` | gemini → openrouter → ollama |
+| `fast_chat` | groq → sambanova → cloudflare → github-models → openrouter → mistral → ollama |
+| `reasoning` | sambanova → gemini → github-models → cloudflare → openrouter → groq → ollama |
+| `coding` | sambanova → groq → github-models → mistral → cloudflare → openrouter → ollama |
+| `vision` | gemini → github-models → openrouter → ollama |
 | `local` | ollama |
 
 Router melacak health setiap provider (latency, error rate). Jika provider utama gagal, auto-fallback ke provider berikutnya — transparan tanpa interrupsi.
@@ -86,6 +106,7 @@ Router melacak health setiap provider (latency, error rate). Jika provider utama
 ROUTER_ENABLED=true    # aktifkan multi-provider router
 AUTO_FALLBACK=true     # auto-switch ke provider lain saat gagal
 AUTO_SWITCH=true       # proactive switching berdasarkan task type
+PROVIDER_ORDER=groq,mistral,cloudflare,github-models,gemini,openrouter,ollama
 ```
 
 ---
@@ -143,6 +164,7 @@ Jalankan `/help` di dalam REPL untuk melihat semua command.
 | `/provider` | Tampilkan provider aktif |
 | `/providers` | Tampilkan semua provider |
 | `/provider <id>` | Ganti provider |
+| `/provider doctor <id>` | Smoke test minimal untuk provider |
 | `/model` | Tampilkan model aktif |
 | `/model <model-id>` | Ganti model |
 | `/models` | List semua model dari semua provider |

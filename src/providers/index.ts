@@ -17,6 +17,13 @@ export { GeminiProvider } from './gemini';
 export { SambaNovaProvider } from './sambanova';
 export { ZaiProvider } from './zai';
 export { PuterProvider } from './puter';
+export { CloudflareProvider } from './cloudflare';
+export { GitHubModelsProvider } from './github-models';
+export {
+  parseProviderModels,
+  providerDefaultModelFromEnv,
+  providerEnvPrefix,
+} from './provider-env';
 
 const logger = createLogger('providers');
 
@@ -69,6 +76,20 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
       const { ZaiProvider } = await import('./zai.js');
       return new ZaiProvider();
     }, 'zai');
+  }
+
+  if (isEnabled(process.env['CLOUDFLARE_AI_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { CloudflareProvider } = await import('./cloudflare.js');
+      return new CloudflareProvider();
+    }, 'cloudflare');
+  }
+
+  if (isEnabled(process.env['GITHUB_MODELS_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { GitHubModelsProvider } = await import('./github-models.js');
+      return new GitHubModelsProvider();
+    }, 'github-models');
   }
 
   if (isEnabled(process.env['PUTER_ENABLED'])) {

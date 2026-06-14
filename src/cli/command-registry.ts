@@ -15,6 +15,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { command: '/providers', description: 'Show providers', aliases: ['/p'] },
   { command: '/provider', description: 'Show current provider' },
   { command: '/provider', description: 'Switch active provider', usage: '/provider <id>', requiresArgument: true },
+  { command: '/provider doctor', description: 'Smoke-test a provider', usage: '/provider doctor <id>', requiresArgument: true },
   { command: '/skills', description: 'List registered skills', aliases: ['/sk'] },
   { command: '/skills on', description: 'Activate a skill', usage: '/skills on <id>', requiresArgument: true },
   { command: '/skills off', description: 'Deactivate a skill', usage: '/skills off <id>', requiresArgument: true },

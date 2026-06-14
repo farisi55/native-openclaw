@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
+import { providerDefaultModelFromEnv } from './providers/provider-env';
 import { SkillRegistry } from './skills';
 import { SessionManager, SettingsManager, MemoryManager } from './storage';
 import { ToolRegistry } from './tools/tool-registry';
@@ -81,7 +82,7 @@ function parsePreferredModel(value: string): { providerId?: string; modelId: str
 }
 
 async function defaultModelForProvider(provider: IProvider): Promise<string> {
-  const envModel = process.env[`${provider.id.toUpperCase()}_DEFAULT_MODEL`];
+  const envModel = providerDefaultModelFromEnv(provider.id);
   if (envModel?.trim()) return envModel.trim();
   const models = await provider.listModels();
   return models[0]?.id ?? 'default';

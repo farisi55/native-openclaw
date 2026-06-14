@@ -4,6 +4,8 @@
  */
 
 import type { IProvider, ProviderRegistry } from '../types/provider';
+import { createMessage } from '../types/message';
+import { providerDefaultModelFromEnv } from '../providers/provider-env';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { SettingsManager } from '../storage/settings-manager';
@@ -464,8 +466,66 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
 
 // ─── /provider ────────────────────────────────────────────────────────────────
 
+function providerDoctorConfigurationIssue(providerId: string): string | null {
+  if (providerId === 'cloudflare') {
+    if (process.env['CLOUDFLARE_AI_ENABLED'] !== 'true') return 'Cloudflare disabled.';
+    if (!process.env['CLOUDFLARE_API_KEY']?.trim()) return 'Missing CLOUDFLARE_API_KEY.';
+    if (!process.env['CLOUDFLARE_ACCOUNT_ID']?.trim()) return 'Missing CLOUDFLARE_ACCOUNT_ID.';
+  }
+  if (providerId === 'github-models') {
+    if (process.env['GITHUB_MODELS_ENABLED'] !== 'true') return 'GitHub Models disabled.';
+    if (!process.env['GITHUB_MODELS_API_KEY']?.trim()) return 'Missing GITHUB_MODELS_API_KEY.';
+    if (
+      process.env['GITHUB_MODELS_USE_ORG_ENDPOINT'] === 'true' &&
+      !process.env['GITHUB_MODELS_ORG']?.trim()
+    ) {
+      return 'Missing GITHUB_MODELS_ORG.';
+    }
+  }
+  return null;
+}
+
+async function runProviderDoctor(ctx: CLIContext, providerId: string | undefined): Promise<void> {
+  if (!providerId) {
+    process.stdout.write(c('dim', '\n  Usage: /provider doctor <provider-id>\n\n'));
+    return;
+  }
+
+  const provider = ctx.providers.get(providerId);
+  if (!provider) {
+    const issue = providerDoctorConfigurationIssue(providerId);
+    process.stdout.write(c('red', `\n  ${providerId}: ${issue ?? 'Provider is not registered.'}\n\n`));
+    return;
+  }
+
+  try {
+    const models = await provider.listModels();
+    const model = providerDefaultModelFromEnv(providerId) ?? models[0]?.id;
+    if (!model) throw new Error('No model is configured.');
+
+    const response = await provider.chat({
+      model,
+      messages: [createMessage({ role: 'user', content: 'Reply with exactly: OK' })],
+      temperature: 0,
+      maxTokens: 4,
+    });
+    const content = typeof response.message.content === 'string'
+      ? response.message.content.trim()
+      : '';
+    process.stdout.write(c('green', `\n  ${providerId}: ${content || 'OK'}\n\n`));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(c('red', `\n  ${providerId}: ${message}\n\n`));
+  }
+}
+
 export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void> {
-  const [targetId] = args;
+  const [targetId, doctorProviderId] = args;
+
+  if (targetId === 'doctor') {
+    await runProviderDoctor(ctx, doctorProviderId);
+    return;
+  }
 
   if (!targetId) {
     process.stdout.write('\n');
@@ -480,7 +540,7 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
       const marker = active ? c('green', '▶') : ' ';
       process.stdout.write(`  ${marker} ${c('white', id.padEnd(15))} ${c('dim', p.displayName)}\n`);
     }
-    process.stdout.write(c('dim', '\n  /provider <id>  |  /model <id>\n'));
+    process.stdout.write(c('dim', '\n  /provider <id>  |  /provider doctor <id>  |  /model <id>\n'));
     process.stdout.write('\n');
     return;
   }
@@ -508,10 +568,10 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
     try {
       const models = await provider.listModels();
       const first = models[0];
-      model = first ? first.id : (process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown');
+      model = first ? first.id : (providerDefaultModelFromEnv(targetId) ?? 'unknown');
     } catch {
       // Step 4: env var fallback
-      model = process.env[`${targetId.toUpperCase()}_DEFAULT_MODEL`] ?? 'unknown';
+      model = providerDefaultModelFromEnv(targetId) ?? 'unknown';
     }
   }
 
