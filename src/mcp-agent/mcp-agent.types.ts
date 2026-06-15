@@ -38,6 +38,7 @@ export interface ConfigureMcpServerResult {
   after?: McpAgentServerDefinition;
   yamlPreview: string;
   message: string;
+  warnings?: string[];
 }
 
 export type McpConfigIntentAction = 'configure' | 'remove' | 'list';
@@ -61,6 +62,7 @@ export interface McpAgentActionResult {
   servers?: Record<string, McpAgentServerDefinition>;
   yamlPreview: string;
   message: string;
+  warnings?: string[];
 }
 
 export interface McpAgentConfig {
@@ -68,4 +70,6 @@ export interface McpAgentConfig {
   allowConfigWrite: boolean;
   projectRoot: string;
   configPath: string;
+  validateNpmPackage?: boolean;
+  npmValidateTimeoutMs?: number;
 }

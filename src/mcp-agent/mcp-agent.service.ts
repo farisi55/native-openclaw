@@ -1,6 +1,13 @@
 import { isDeepStrictEqual } from 'util';
 import { createLogger } from '../utils/logger';
 import {
+  assertMcpCommandAllowed,
+  extractNpxPackage,
+  resolveKnownMcpServerAlias,
+  validateNpmPackageExists,
+  type NpmPackageValidator,
+} from '../mcp';
+import {
   McpConfigService,
   normalizeMcpServerName,
   validateMcpAgentServerDefinition,
@@ -15,12 +22,25 @@ import type {
 } from './mcp-agent.types';
 
 const logger = createLogger('mcp-agent');
+const INVALID_MCP_PACKAGES = new Set([
+  '@modelcontextprotocol/server-google-sheets',
+]);
+
+export interface McpAgentServiceDependencies {
+  npmPackageValidator?: NpmPackageValidator;
+}
 
 export class McpAgentService {
   readonly configService: McpConfigService;
+  private readonly npmPackageValidator: NpmPackageValidator;
 
-  constructor(private readonly config: McpAgentConfig) {
+  constructor(
+    private readonly config: McpAgentConfig,
+    dependencies: McpAgentServiceDependencies = {}
+  ) {
     this.configService = new McpConfigService(config.projectRoot, config.configPath);
+    this.npmPackageValidator =
+      dependencies.npmPackageValidator ?? validateNpmPackageExists;
   }
 
   get enabled(): boolean {
@@ -31,7 +51,7 @@ export class McpAgentService {
     this.assertEnabled();
     this.assertWritable();
     const serverName = normalizeMcpServerName(input.serverName);
-    const definition = this.toDefinition(input);
+    const { definition, warnings } = await this.toDefinition(serverName, input);
     const current = await this.configService.read(input.configPath);
     const before = current.config.mcpServers[serverName];
 
@@ -45,6 +65,7 @@ export class McpAgentService {
         after: definition,
         yamlPreview: current.yaml,
         message: `MCP server "${serverName}" already has the requested configuration.`,
+        ...(warnings.length > 0 ? { warnings } : {}),
       };
     }
     if (before && input.overwrite === false) {
@@ -68,7 +89,11 @@ export class McpAgentService {
       ...(before ? { before } : {}),
       after: definition,
       yamlPreview: written.yaml,
-      message: `MCP server "${serverName}" was ${action} in the configuration.`,
+      message: [
+        `MCP server "${serverName}" was ${action} in the configuration.`,
+        ...warnings.map((warning) => `Warning: ${warning}`),
+      ].join(' '),
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -138,12 +163,59 @@ export class McpAgentService {
     return result;
   }
 
-  private toDefinition(input: ConfigureMcpServerInput): McpAgentServerDefinition {
-    return validateMcpAgentServerDefinition({
+  private async toDefinition(
+    serverName: string,
+    input: ConfigureMcpServerInput
+  ): Promise<{ definition: McpAgentServerDefinition; warnings: string[] }> {
+    const alias = !input.command && !input.url
+      ? resolveKnownMcpServerAlias(serverName)
+      : undefined;
+    const definition = validateMcpAgentServerDefinition(alias?.config ?? {
       ...(input.command !== undefined ? { command: input.command } : {}),
       ...(input.args !== undefined ? { args: input.args } : {}),
       ...(input.url !== undefined ? { url: input.url } : {}),
     });
+    const warnings: string[] = [];
+
+    if ('command' in definition) {
+      assertMcpCommandAllowed(definition.command);
+      const packageName = extractNpxPackage(definition.command, definition.args);
+      if (packageName) {
+        if (INVALID_MCP_PACKAGES.has(packageName)) {
+          throw new Error(
+            `Package not found in npm registry: ${packageName}. ` +
+            'For Google Sheets, use the auth-required third-party alias "google-sheets" ' +
+            'or package @node2flow/google-sheets-mcp.'
+          );
+        }
+
+        const validatePackage = this.config.validateNpmPackage ?? true;
+        if (validatePackage) {
+          const validation = await this.npmPackageValidator(
+            packageName,
+            this.config.npmValidateTimeoutMs ?? 15_000
+          );
+          if (!validation.ok) {
+            const detail = validation.error ?? 'npm registry validation failed';
+            if (/\bE404\b|\b404\b|not\s+found|not in this registry/i.test(detail)) {
+              throw new Error(`Package not found in npm registry: ${packageName}`);
+            }
+            throw new Error(`Could not verify npm package ${packageName}: ${detail}`);
+          }
+        } else {
+          warnings.push(
+            `npm package ${packageName} was not verified. /mcp start may fail if it does not exist.`
+          );
+        }
+      }
+    }
+
+    if (alias?.alias.requiresAuth) {
+      warnings.push(
+        `${serverName} uses third-party package ${alias.alias.packageName} and requires authentication.`
+      );
+    }
+    return { definition, warnings };
   }
 
   private assertEnabled(): void {

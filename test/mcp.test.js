@@ -40,7 +40,7 @@ let buffer = Buffer.alloc(0);
 
 function send(id, result) {
   const body = JSON.stringify({ jsonrpc: '2.0', id, result });
-  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
+  process.stdout.write(body + '\\n');
 }
 
 function handle(message) {
@@ -76,21 +76,11 @@ function handle(message) {
 process.stdin.on('data', (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
   while (true) {
-    const headerEnd = buffer.indexOf('\\r\\n\\r\\n');
-    if (headerEnd < 0) return;
-    const header = buffer.subarray(0, headerEnd).toString('utf-8');
-    const match = /Content-Length:\\s*(\\d+)/i.exec(header);
-    if (!match) {
-      buffer = buffer.subarray(headerEnd + 4);
-      continue;
-    }
-    const length = Number(match[1]);
-    const start = headerEnd + 4;
-    const end = start + length;
-    if (buffer.length < end) return;
-    const body = buffer.subarray(start, end).toString('utf-8');
-    buffer = buffer.subarray(end);
-    handle(JSON.parse(body));
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) return;
+    const body = buffer.subarray(0, lineEnd).toString('utf-8').replace(/\\r$/, '');
+    buffer = buffer.subarray(lineEnd + 1);
+    if (body.trim()) handle(JSON.parse(body));
   }
 });
 `, 'utf-8');

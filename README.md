@@ -785,6 +785,8 @@ sama: `mcp_agent.config.yaml`.
 ### Preset Server
 
 ```bash
+/mcp add everything    # recommended MCP client smoke-test server
+/mcp add filesystem    # filesystem server restricted to /workspace
 /mcp add tavily       # web search via Tavily
 /mcp add firecrawl    # web scraping via Firecrawl
 /mcp add brevo        # email via Brevo
@@ -798,12 +800,15 @@ sama: `mcp_agent.config.yaml`.
 /mcp add my-server '{"command":"node","args":["/path/to/server.js"]}'
 ```
 
-Launcher yang diizinkan: `npx`, `uvx`, `node`, `python`, `python3`, `deno`.
+Launcher yang diizinkan: `npx`, `uvx`, `node`, `nodejs`, `python`, `python3`, dan `deno`.
+Absolute binary path juga diizinkan. Bare binary tetap ditolak, kecuali binary MCP smoke yang dikenal
+(`mcp-server-everything` dan `mcp-server-filesystem`) berhasil di-resolve ke absolute path.
 
 ```env
 MCP_ENABLED=true
 MCP_CONFIG_PATH=./mcp_agent.config.yaml
 MCP_AUTO_START=false
+MCP_SMOKE_SERVERS_INSTALL=false
 ```
 
 ### MCP Agent Self-Configuration
@@ -816,6 +821,8 @@ server lama, menambah atau memperbarui server, menulis secara atomik, lalu memva
 MCP_AGENT_ENABLED=true
 MCP_AGENT_CONFIG_PATH=./mcp_agent.config.yaml
 MCP_AGENT_ALLOW_CONFIG_WRITE=true
+MCP_AGENT_VALIDATE_NPM_PACKAGE=true
+MCP_AGENT_NPM_VALIDATE_TIMEOUT_MS=15000
 ```
 
 MCP server tidak dijalankan otomatis secara default. Gunakan `/mcp start <name>` atau set
@@ -826,8 +833,11 @@ Contoh chat:
 
 ```text
 Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml.
-Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".
 ```
+
+Alias `google-sheets` memakai package pihak ketiga `@node2flow/google-sheets-mcp` dan membutuhkan
+autentikasi Google. Package `@modelcontextprotocol/server-google-sheets` tidak digunakan karena tidak
+tersedia di npm registry. Untuk pengujian MCP tanpa kredensial, gunakan alias `everything`.
 
 Contoh hasil konfigurasi:
 
@@ -840,12 +850,63 @@ mcpServers:
     url: "https://canva.com"
   google-sheets:
     command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-google-sheets"]
+    args: ["-y", "@node2flow/google-sheets-mcp"]
 ```
 
 Path kustom harus tetap berada di dalam project root, berekstensi `.yaml`/`.yml`, dan tidak boleh menunjuk
 ke `.env`, secret, key, `.git`, `node_modules`, atau `dist`. Command hanya disimpan sebagai konfigurasi;
 MCP Agent tidak mengeksekusi command saat mengubah YAML.
+
+`/mcp list` selalu menampilkan seluruh server yang dapat dibaca. Launcher invalid ditandai
+`invalid` bersama alasan dan saran, tanpa menjatuhkan daftar server valid. `/mcp start <name>` tetap
+menolak launcher tersebut.
+
+### MCP Smoke Test
+
+Smoke test eksplisit menggunakan server `everything`; MCP server tidak pernah dimulai otomatis oleh
+fitur ini saat startup.
+
+```text
+/mcp smoke
+```
+
+Perintah tersebut memastikan alias `everything` tersedia, menjalankan initialize, mengambil daftar
+tools, lalu menghentikan server. Tanpa package global, alias memakai fallback:
+
+```text
+npx -y @modelcontextprotocol/server-everything
+```
+
+Untuk startup yang lebih stabil di Docker/RHEL, preinstall smoke servers saat build:
+
+```env
+MCP_SMOKE_SERVERS_INSTALL=true
+```
+
+```bash
+docker compose build --no-cache openclaw
+docker compose up -d openclaw
+docker compose exec -u openclaw openclaw sh -lc '
+whoami
+npm config get cache
+ls -ld /home/openclaw/.npm /home/openclaw/.npm/_logs
+'
+```
+
+Expected runtime user adalah `openclaw`, dan npm cache adalah `/home/openclaw/.npm`. Entrypoint
+memperbaiki ownership cache secara defensif sebelum menurunkan privilege dari root ke `openclaw`.
+
+Manual smoke flow:
+
+```text
+/mcp list
+/mcp start everything
+/mcp tools everything
+/mcp stop everything
+```
+
+Jika initialize timeout saat memakai `npx`, rebuild dengan `MCP_SMOKE_SERVERS_INSTALL=true`. Alias
+kemudian memilih direct `node` path global sehingga cold install tidak memakan waktu handshake MCP.
 
 Di Docker, gunakan `MCP_AGENT_CONFIG_PATH=/app/mcp_agent.config.yaml`. Image menjalankan aplikasi sebagai
 user non-root `openclaw`, dan `/app` dimiliki user tersebut sehingga file dapat ditulis tanpa akses root.
@@ -1159,6 +1220,7 @@ docker attach native-openclaw                     # Attach ke CLI
 | `npm run test:workspace` | Test workspace saja |
 | `npm run test:scheduler` | Test scheduler saja |
 | `npm run qa:phase3.5` | QA AgentGateway, ProviderRouter, MCP, security, dan report consistency |
+| `npm run qa:phase3.6` | Build, lint, MCP runtime hardening QA, lalu Phase 3.5 regression QA |
 | `npm run qa:docker-profiles` | Validasi service set Docker Compose per profile tanpa start container |
 | `npm run package` | Build + zip untuk distribusi |
 

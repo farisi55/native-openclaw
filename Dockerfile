@@ -71,6 +71,7 @@ ARG SELF_HEALING_RUNTIME=false
 ARG OPENCODE_AUTO_INSTALL=false
 ARG OPENCODE_DEFAULT_MODEL=opencode/deepseek-v4-flash-free
 ARG OPENCODE_DEFAULT_SMALL_MODEL=opencode/mimo-v2.5-free
+ARG MCP_SMOKE_SERVERS_INSTALL=false
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
@@ -114,6 +115,7 @@ COPY --from=builder --chown=openclaw:openclaw /app/docs ./docs
 RUN mkdir -p /data \
              /skills \
              /workspace \
+             /home/openclaw/.npm/_logs \
              /home/openclaw/.config/opencode \
              /home/openclaw/.local/state \
              /home/openclaw/.local/share/opencode \
@@ -122,6 +124,8 @@ RUN mkdir -p /data \
                                 /skills \
                                 /workspace \
                                 /home/openclaw
+
+ENV NPM_CONFIG_CACHE=/home/openclaw/.npm
 
 # Optional OpenCode CLI install for Docker runtime.
 # Install as root before switching to non-root openclaw user.
@@ -134,6 +138,15 @@ RUN if [ "$OPENCODE_AUTO_INSTALL" = "true" ]; then \
       opencode --version; \
     else \
       echo "Skipping OpenCode install. Set OPENCODE_AUTO_INSTALL=true to include it in the image."; \
+    fi
+
+# Optional MCP smoke servers. Disabled by default to keep the runtime image small.
+RUN if [ "$MCP_SMOKE_SERVERS_INSTALL" = "true" ]; then \
+      npm install -g \
+        @modelcontextprotocol/server-everything \
+        @modelcontextprotocol/server-filesystem; \
+    else \
+      echo "Skipping MCP smoke server install. Set MCP_SMOKE_SERVERS_INSTALL=true to include it."; \
     fi
 
 # Project-level OpenCode config.

@@ -1141,7 +1141,8 @@ export async function cmdMcp(ctx: CLIContext, args: string[]): Promise<void> {
     process.stdout.write(c('dim', '    /mcp start <name>\n'));
     process.stdout.write(c('dim', '    /mcp stop <name>\n'));
     process.stdout.write(c('dim', '    /mcp restart <name>\n'));
-    process.stdout.write(c('dim', '    /mcp tools [name]\n\n'));
+    process.stdout.write(c('dim', '    /mcp tools [name]\n'));
+    process.stdout.write(c('dim', '    /mcp smoke\n\n'));
     return;
   }
 
@@ -1156,13 +1157,26 @@ export async function cmdMcp(ctx: CLIContext, args: string[]): Promise<void> {
         return;
       }
       for (const server of servers) {
-        const status = server.status === 'running' ? c('green', '● running') : c('dim', '○ stopped');
+        const status = server.status === 'running'
+          ? c('green', '● running')
+          : server.status === 'invalid'
+          ? c('yellow', '⚠ invalid')
+          : c('dim', '○ stopped');
         if (server.transport === 'url') {
           process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.url ?? ''} ${c('dim', '(url)')}\n`);
           continue;
         }
         const argsText = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
         process.stdout.write(`  ${status}  ${c('cyan', server.name.padEnd(16))} ${server.command ?? ''}${argsText}\n`);
+        if (server.resolvedCommand) {
+          process.stdout.write(c('dim', `             Resolved: ${server.resolvedCommand}\n`));
+        }
+        if (server.warning) {
+          process.stdout.write(c('yellow', `             Reason: ${server.warning}\n`));
+        }
+        if (server.suggestion) {
+          process.stdout.write(c('dim', `             Suggestion: ${server.suggestion}\n`));
+        }
       }
       process.stdout.write('\n');
       return;
@@ -1221,13 +1235,33 @@ export async function cmdMcp(ctx: CLIContext, args: string[]): Promise<void> {
       process.stdout.write('\n');
       return;
     }
+
+    if (action === 'smoke') {
+      const result = await manager.smokeTest();
+      process.stdout.write('\n');
+      process.stdout.write(
+        result.ok
+          ? c('green', '  MCP smoke test passed.\n')
+          : c('red', '  MCP smoke test failed.\n')
+      );
+      process.stdout.write(`\n  ${c('dim', 'Server')}      ${result.server}\n`);
+      process.stdout.write(`  ${c('dim', 'Command')}     ${result.command}\n`);
+      process.stdout.write(`  ${c('dim', 'Initialize')}  ${result.initialize}\n`);
+      process.stdout.write(`  ${c('dim', 'Tools')}       ${result.toolsDiscovered} discovered\n`);
+      process.stdout.write(`  ${c('dim', 'Stop')}        ${result.stop}\n`);
+      if (result.error) {
+        process.stdout.write(c('red', `\n  ${result.error.replace(/\n/g, '\n  ')}\n`));
+      }
+      process.stdout.write('\n');
+      return;
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stdout.write(c('red', `\n  MCP error: ${msg}\n\n`));
     return;
   }
 
-  process.stdout.write(c('yellow', '\n  Usage: /mcp [list|add|remove|start|stop|restart|tools] ...\n\n'));
+  process.stdout.write(c('yellow', '\n  Usage: /mcp [list|add|remove|start|stop|restart|tools|smoke] ...\n\n'));
 }
 
 // ─── /workflow ──────────────────────────────────────────────────────────────

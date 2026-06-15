@@ -39,6 +39,9 @@ function formatConfigResult(result: McpAgentActionResult): string {
     : `Server MCP \`${result.serverName ?? ''}\` berhasil ${result.action === 'created' ? 'ditambahkan' : 'diperbarui'}.`;
   return [
     heading,
+    ...(result.warnings?.length
+      ? ['', ...result.warnings.map((warning) => `Warning: ${warning}`)]
+      : []),
     '',
     `File: \`${result.configPath}\``,
     '',

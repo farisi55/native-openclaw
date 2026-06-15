@@ -10,7 +10,10 @@ export {
   isMcpConfigurationIntent,
   parseMcpConfigurationInstruction,
 } from './mcp-agent.intent';
-export { McpAgentService } from './mcp-agent.service';
+export {
+  McpAgentService,
+  type McpAgentServiceDependencies,
+} from './mcp-agent.service';
 export { createMcpAgentConfigureTool } from './mcp-agent.tool';
 export type {
   CommandMcpServerDefinition,

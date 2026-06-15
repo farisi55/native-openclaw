@@ -12,7 +12,8 @@ export function createMcpAgentConfigureTool(service: McpAgentService): Registere
       entry: 'internal',
       enabled: true,
       examples: [
-        'Add MCP server google-sheets using npx -y @modelcontextprotocol/server-google-sheets',
+        'Add the built-in MCP smoke server alias everything',
+        'Add MCP server google-sheets using npx -y @node2flow/google-sheets-mcp',
         'Register a URL-based MCP server',
       ],
       inputSchema: {

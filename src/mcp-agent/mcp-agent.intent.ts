@@ -1,4 +1,5 @@
 import type { ParsedMcpConfigIntent } from './mcp-agent.types';
+import { getKnownMcpServerAlias } from '../mcp/mcp-server-aliases';
 
 const MCP_TERM_RE = /\b(?:mcp|model\s+context\s+protocol)\b/i;
 const CONFIG_FILE_RE = /\bmcp_agent\.config\.ya?ml\b/i;
@@ -66,7 +67,10 @@ export function isMcpConfigurationIntent(input: string): boolean {
   const trimmed = input.trim();
   if (!trimmed || !MCP_TERM_RE.test(trimmed)) return false;
   if (CONFIG_FILE_RE.test(trimmed)) return true;
-  return CONFIG_ACTION_RE.test(trimmed) && /\b(?:server|config|konfigurasi)\b/i.test(trimmed);
+  if (!CONFIG_ACTION_RE.test(trimmed)) return false;
+  if (/\b(?:server|config|konfigurasi)\b/i.test(trimmed)) return true;
+  const serverName = extractServerName(trimmed);
+  return Boolean(serverName && getKnownMcpServerAlias(serverName));
 }
 
 export function classifyMcpConfigurationIntent(
@@ -106,7 +110,7 @@ export function parseMcpConfigurationInstruction(input: string): ParsedMcpConfig
 
   const command = extractCommand(input);
   const url = extractUrl(input);
-  if (!command && !url) {
+  if (!command && !url && !getKnownMcpServerAlias(serverName)) {
     throw new Error('Provide either an MCP command or URL.');
   }
 

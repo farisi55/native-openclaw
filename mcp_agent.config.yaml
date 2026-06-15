@@ -1,4 +1,4 @@
-mcpServers:
-  google-sheets:
-    command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-google-sheets"]
+﻿mcpServers:
+  filesystem:
+    command: "node"
+    args: ["C:/Users/banu.farisi/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "C:/Users/banu.farisi/repo/native-openclaw/workspace"]

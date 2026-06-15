@@ -135,7 +135,7 @@ test('direct email request requires web-fetch then brevo-email verification', as
 
 test('MCP config update routes to self-configuration and excludes self-healing', async () => {
   await withOptimizer(async (optimizer) => {
-    const input = 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml milikmu sekarang. Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".';
+    const input = 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml milikmu sekarang. Gunakan perintah eksekusi "npx -y @node2flow/google-sheets-mcp".';
     const result = await optimizer.optimize({ userInput: input });
 
     assert.equal(result.compiled.intent, 'mcp-config-update');

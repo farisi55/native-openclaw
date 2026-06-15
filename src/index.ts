@@ -365,6 +365,8 @@ async function bootstrap(): Promise<void> {
     allowConfigWrite: getEnvBool('MCP_AGENT_ALLOW_CONFIG_WRITE', true),
     projectRoot: process.cwd(),
     configPath: sharedMcpConfigPath,
+    validateNpmPackage: getEnvBool('MCP_AGENT_VALIDATE_NPM_PACKAGE', true),
+    npmValidateTimeoutMs: getEnvInt('MCP_AGENT_NPM_VALIDATE_TIMEOUT_MS', 15_000),
   });
   if (mcpAgent.enabled) {
     toolRegistry.registerRuntimeTool(createMcpAgentConfigureTool(mcpAgent));

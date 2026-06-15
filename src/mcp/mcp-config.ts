@@ -2,6 +2,11 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, extname, resolve } from 'path';
 import { parseDocument } from 'yaml';
+import {
+  assertMcpCommandAllowed,
+  MCP_ALLOWED_LAUNCHERS,
+} from './mcp-command-resolver';
+import { resolveKnownMcpServerAlias } from './mcp-server-aliases';
 
 export interface McpCommandServerConfig {
   command: string;
@@ -58,33 +63,7 @@ export const MCP_SERVER_PRESETS: Record<string, McpServerConfig> = {
   },
 };
 
-export const MCP_ALLOWED_LAUNCHERS: ReadonlySet<string> = new Set([
-  'npx',
-  'uvx',
-  'node',
-  'nodejs',
-  'python',
-  'python3',
-  'deno',
-]);
-
-function isAbsolutePath(value: string): boolean {
-  return value.startsWith('/') || /^[A-Za-z]:\\/.test(value);
-}
-
-export function assertMcpCommandAllowed(command: string): void {
-  if (!command || command.trim() === '') return;
-  const trimmed = command.trim();
-  if (isAbsolutePath(trimmed)) return;
-
-  const launcher = trimmed.split(/[\\/]/).at(-1)?.split(' ')[0] ?? trimmed;
-  if (!MCP_ALLOWED_LAUNCHERS.has(launcher)) {
-    throw new Error(
-      `MCP server command "${launcher}" is not in the allowed launcher list. ` +
-      `Use an absolute binary path, or one of: ${[...MCP_ALLOWED_LAUNCHERS].join(', ')}.`
-    );
-  }
-}
+export { assertMcpCommandAllowed, MCP_ALLOWED_LAUNCHERS };
 
 export function resolveMcpConfigPath(configPath = './mcp_agent.config.yaml'): string {
   return resolve(process.cwd(), configPath);
@@ -115,8 +94,6 @@ export function validateMcpServerConfig(value: unknown): McpServerConfig {
     }
     return { url };
   }
-
-  assertMcpCommandAllowed(command);
 
   if (candidate['args'] !== undefined) {
     if (!Array.isArray(candidate['args']) || !candidate['args'].every((arg) => typeof arg === 'string')) {
@@ -227,7 +204,8 @@ export function parseMcpServerInput(name: string, rawJson?: string): McpServerCo
   const normalized = name.toLowerCase();
 
   if (!rawJson || rawJson.trim() === '') {
-    const preset = MCP_SERVER_PRESETS[normalized];
+    const alias = resolveKnownMcpServerAlias(normalized);
+    const preset = alias?.config ?? MCP_SERVER_PRESETS[normalized];
     if (!preset) {
       throw new Error(`No MCP preset found for "${name}". Provide a JSON server config.`);
     }

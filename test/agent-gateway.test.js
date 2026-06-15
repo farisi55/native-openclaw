@@ -355,6 +355,7 @@ test('MCP connector writes and lists the shared YAML configuration', async () =>
       allowConfigWrite: true,
       projectRoot: root,
       configPath,
+      validateNpmPackage: false,
     });
     const manager = new McpManager({ configPath });
     await manager.init();
@@ -366,7 +367,7 @@ test('MCP connector writes and lists the shared YAML configuration', async () =>
       id: 'mcp-add',
       intent: 'mcp-config-update',
       capability: 'mcp.config',
-      userInput: 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".',
+      userInput: 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @node2flow/google-sheets-mcp".',
       cwd: root,
     });
     const listed = await gateway.execute({
@@ -380,7 +381,7 @@ test('MCP connector writes and lists the shared YAML configuration', async () =>
     assert.equal(added.ok, true);
     assert.equal(listed.ok, true);
     assert.match(listed.output, /google-sheets/);
-    assert.match(await readFile(configPath, 'utf-8'), /@modelcontextprotocol\/server-google-sheets/);
+    assert.match(await readFile(configPath, 'utf-8'), /@node2flow\/google-sheets-mcp/);
     assert.equal((await manager.listServers())[0].name, 'google-sheets');
   });
 });

@@ -103,6 +103,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { command: '/mcp stop', description: 'Stop MCP server', usage: '/mcp stop <name>', requiresArgument: true },
   { command: '/mcp restart', description: 'Restart MCP server', usage: '/mcp restart <name>', requiresArgument: true },
   { command: '/mcp tools', description: 'List MCP tools' },
+  { command: '/mcp smoke', description: 'Run the built-in MCP everything smoke test' },
   { command: '/network', description: 'Show network diagnostics help', aliases: ['/net'] },
   { command: '/network dns', description: 'Show configured DNS servers' },
   { command: '/network check', description: 'Resolve a host', usage: '/network check <host>', requiresArgument: true },

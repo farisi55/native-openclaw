@@ -17,6 +17,7 @@ async function withService(fn) {
     allowConfigWrite: true,
     projectRoot: root,
     configPath: './mcp_agent.config.yaml',
+    validateNpmPackage: false,
   });
   try {
     await fn({ root, service, configPath: join(root, 'mcp_agent.config.yaml') });
@@ -55,12 +56,10 @@ function actionContext(service) {
   };
 }
 
-test('creates missing YAML and adds google-sheets command server', async () => {
+test('creates missing YAML and adds the auth-required google-sheets alias', async () => {
   await withService(async ({ service, configPath }) => {
     const result = await service.configureServer({
       serverName: 'Google Sheets',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
     });
 
     assert.equal(result.action, 'created');
@@ -68,7 +67,8 @@ test('creates missing YAML and adds google-sheets command server', async () => {
     const yaml = await readFile(configPath, 'utf-8');
     assert.match(yaml, /google-sheets:/);
     assert.match(yaml, /command: "npx"/);
-    assert.match(yaml, /@modelcontextprotocol\/server-google-sheets/);
+    assert.match(yaml, /@node2flow\/google-sheets-mcp/);
+    assert.match(result.warnings.join(' '), /requires authentication/i);
   });
 });
 
@@ -80,15 +80,13 @@ test('runtime manager sees self-configured servers without restart', async () =>
 
     await service.configureServer({
       serverName: 'google-sheets',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
     });
 
     const servers = await manager.listServers();
     assert.equal(servers.length, 1);
     assert.equal(servers[0].name, 'google-sheets');
     assert.equal(servers[0].command, 'npx');
-    assert.deepEqual(servers[0].args, ['-y', '@modelcontextprotocol/server-google-sheets']);
+    assert.deepEqual(servers[0].args, ['-y', '@node2flow/google-sheets-mcp']);
   });
 });
 
@@ -107,7 +105,7 @@ test('preserves existing command and URL servers', async () => {
     await service.configureServer({
       serverName: 'google-sheets',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
+      args: ['-y', '@node2flow/google-sheets-mcp'],
     });
     const listed = await service.listServers();
     assert.deepEqual(Object.keys(listed.servers), ['filesystem', 'canva', 'google-sheets']);
@@ -125,12 +123,12 @@ test('updates changed server and returns unchanged for identical definition', as
     const updated = await service.configureServer({
       serverName: 'google-sheets',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
+      args: ['-y', '@node2flow/google-sheets-mcp'],
     });
     const unchanged = await service.configureServer({
       serverName: 'google-sheets',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-google-sheets'],
+      args: ['-y', '@node2flow/google-sheets-mcp'],
     });
 
     assert.equal(updated.action, 'updated');
@@ -186,23 +184,23 @@ test('rejects invalid names, definitions, and path traversal', async () => {
 
 test('parses Indonesian and English command instructions', () => {
   const indonesian = parseMcpConfigurationInstruction(
-    'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".'
+    'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @node2flow/google-sheets-mcp".'
   );
   const english = parseMcpConfigurationInstruction(
-    'add MCP server google-sheets to mcp_agent.config.yaml using command "npx -y @modelcontextprotocol/server-google-sheets"'
+    'add MCP server google-sheets to mcp_agent.config.yaml using command "npx -y @node2flow/google-sheets-mcp"'
   );
 
   for (const parsed of [indonesian, english]) {
     assert.equal(parsed.action, 'configure');
     assert.equal(parsed.serverName, 'google-sheets');
     assert.equal(parsed.command, 'npx');
-    assert.deepEqual(parsed.args, ['-y', '@modelcontextprotocol/server-google-sheets']);
+    assert.deepEqual(parsed.args, ['-y', '@node2flow/google-sheets-mcp']);
   }
 });
 
 test('action handler uses self-configuration and never enters self-healing', async () => {
   await withService(async ({ service }) => {
-    const input = 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @modelcontextprotocol/server-google-sheets".';
+    const input = 'Tolong tambahkan server MCP google-sheets ke dalam file mcp_agent.config.yaml. Gunakan perintah eksekusi "npx -y @node2flow/google-sheets-mcp".';
     const result = await handleAction(input, actionContext(service), {
       originalInput: input,
       optimizedInput: input,

@@ -1,6 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { isAbsolute } from 'path';
-import { assertMcpCommandAllowed, type McpServerConfig } from './mcp-config';
+import type { McpServerConfig } from './mcp-config';
+import {
+  formatMcpCommandResolutionError,
+  resolveMcpCommand,
+} from './mcp-command-resolver';
+import { normalizeMcpStartError } from './mcp-errors';
 
 export interface McpTool {
   name: string;
@@ -54,18 +59,15 @@ export class McpClient {
   async start(): Promise<void> {
     if (this.isRunning) return;
 
-    try {
-      assertMcpCommandAllowed(this.config.command);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.rejectAll(error);
-      return;
+    const resolution = await resolveMcpCommand(this.config.command);
+    if (!resolution.valid) {
+      throw new Error(formatMcpCommandResolutionError(resolution));
     }
 
-    this.process = spawn(this.config.command, this.config.args ?? [], {
+    this.process = spawn(resolution.command, this.config.args ?? [], {
       env: { ...process.env, ...(this.config.env ?? {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32' && !isAbsolute(this.config.command),
+      shell: process.platform === 'win32' && !isAbsolute(resolution.command),
       windowsHide: true,
     });
 
@@ -77,7 +79,9 @@ export class McpClient {
     this.process.on('exit', (code, signal) => {
       const detail = this.stderrTail.trim();
       const suffix = detail ? `: ${detail}` : '';
-      this.rejectAll(new Error(`MCP server "${this.name}" exited (${code ?? signal ?? 'unknown'})${suffix}`));
+      this.rejectAll(normalizeMcpStartError(
+        new Error(`MCP server "${this.name}" exited (${code ?? signal ?? 'unknown'})${suffix}`)
+      ));
       this.process = null;
     });
 
@@ -143,7 +147,7 @@ export class McpClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`MCP request timed out: ${method}`));
+        reject(normalizeMcpStartError(new Error(`MCP request timed out: ${method}`)));
       }, DEFAULT_TIMEOUT_MS);
 
       this.pending.set(id, { resolve, reject, timer });
@@ -162,38 +166,48 @@ export class McpClient {
 
   private writeMessage(payload: Record<string, unknown>): void {
     if (!this.process) return;
-    const body = JSON.stringify(payload);
-    const header = `Content-Length: ${Buffer.byteLength(body, 'utf-8')}\r\n\r\n`;
-    this.process.stdin.write(header + body);
+    this.process.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
   private handleStdout(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk]);
 
     while (true) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n');
-      if (headerEnd < 0) return;
+      if (/^Content-Length:/i.test(this.buffer.toString('utf-8', 0, 32))) {
+        const headerEnd = this.buffer.indexOf('\r\n\r\n');
+        if (headerEnd < 0) return;
 
-      const header = this.buffer.subarray(0, headerEnd).toString('utf-8');
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match?.[1]) {
-        this.buffer = this.buffer.subarray(headerEnd + 4);
+        const header = this.buffer.subarray(0, headerEnd).toString('utf-8');
+        const match = /Content-Length:\s*(\d+)/i.exec(header);
+        if (!match?.[1]) {
+          this.buffer = this.buffer.subarray(headerEnd + 4);
+          continue;
+        }
+
+        const length = Number.parseInt(match[1], 10);
+        const bodyStart = headerEnd + 4;
+        const bodyEnd = bodyStart + length;
+        if (this.buffer.length < bodyEnd) return;
+
+        const body = this.buffer.subarray(bodyStart, bodyEnd).toString('utf-8');
+        this.buffer = this.buffer.subarray(bodyEnd);
+        this.parseMessage(body);
         continue;
       }
 
-      const length = Number.parseInt(match[1], 10);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (this.buffer.length < bodyEnd) return;
+      const lineEnd = this.buffer.indexOf('\n');
+      if (lineEnd < 0) return;
+      const line = this.buffer.subarray(0, lineEnd).toString('utf-8').replace(/\r$/, '');
+      this.buffer = this.buffer.subarray(lineEnd + 1);
+      if (line.trim()) this.parseMessage(line);
+    }
+  }
 
-      const body = this.buffer.subarray(bodyStart, bodyEnd).toString('utf-8');
-      this.buffer = this.buffer.subarray(bodyEnd);
-
-      try {
-        this.handleMessage(JSON.parse(body) as JsonRpcResponse);
-      } catch (err) {
-        this.rejectAll(err instanceof Error ? err : new Error(String(err)));
-      }
+  private parseMessage(value: string): void {
+    try {
+      this.handleMessage(JSON.parse(value) as JsonRpcResponse);
+    } catch (err) {
+      this.rejectAll(err instanceof Error ? err : new Error(String(err)));
     }
   }
 
