@@ -6,12 +6,19 @@ const { join } = require('node:path');
 
 const {
   assessMcpCommand,
+  createNpmPackageValidator,
+  getBinaryLookupCommand,
+  getGlobalNpmRoot,
   getKnownMcpServerAlias,
+  getNpmCommand,
+  getNpxCommand,
   KNOWN_MCP_SERVER_ALIASES,
   McpManager,
   normalizeMcpStartError,
   resolveKnownMcpServerAlias,
+  resolveKnownMcpServerAliasRuntime,
   resolveMcpCommand,
+  resolveBinaryOnPath,
 } = require('../dist/mcp');
 const {
   McpAgentService,
@@ -176,6 +183,155 @@ test('alias registry uses safe smoke servers and a real auth-required Google She
   assert.equal(naturalLanguage.action, 'configure');
   assert.equal(naturalLanguage.serverName, 'everything');
   assert.equal(naturalLanguage.command, undefined);
+});
+
+test('natural-language MCP aliases parse without requiring command arguments', () => {
+  const cases = [
+    ['add mcp everything', 'everything'],
+    ['add mcp server everything', 'everything'],
+    ['tambahkan MCP everything', 'everything'],
+    ['tambahkan MCP everything untuk smoke test', 'everything'],
+    ['tambahkan server MCP filesystem', 'filesystem'],
+    ['daftarkan MCP filesystem', 'filesystem'],
+    ['register MCP everything', 'everything'],
+  ];
+
+  for (const [input, expectedServer] of cases) {
+    const parsed = parseMcpConfigurationInstruction(input);
+    assert.equal(parsed.action, 'configure', input);
+    assert.equal(parsed.serverName, expectedServer, input);
+    assert.equal(parsed.command, undefined, input);
+  }
+});
+
+test('runtime alias resolver builds cross-platform node configs from global npm root', async () => {
+  const windowsRoot = 'C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules';
+  const everything = await resolveKnownMcpServerAliasRuntime('everything', {
+    platform: 'win32',
+    globalNpmRootResolver: async () => windowsRoot,
+    fileExists: () => true,
+  });
+  assert.equal(everything.config.command, 'node');
+  assert.equal(
+    everything.config.args[0],
+    `${windowsRoot}\\@modelcontextprotocol\\server-everything\\dist\\index.js`
+  );
+
+  const filesystem = await resolveKnownMcpServerAliasRuntime('filesystem', {
+    platform: 'linux',
+    workspacePath: '/workspace/project',
+    globalNpmRootResolver: async () => '/usr/local/lib/node_modules',
+    fileExists: () => true,
+  });
+  assert.equal(filesystem.config.command, 'node');
+  assert.deepEqual(filesystem.config.args, [
+    '/usr/local/lib/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js',
+    '/workspace/project',
+  ]);
+});
+
+test('Windows helpers use npm.cmd, npx.cmd, and where.exe without spawn EINVAL', async () => {
+  assert.equal(getNpmCommand('win32'), 'npm.cmd');
+  assert.equal(getNpxCommand('win32'), 'npx.cmd');
+  assert.equal(getBinaryLookupCommand('win32'), 'where.exe');
+
+  let npmCommand = '';
+  const root = await getGlobalNpmRoot({
+    platform: 'win32',
+    runner: async (command, args) => {
+      npmCommand = command;
+      assert.deepEqual(args, ['root', '-g']);
+      return {
+        stdout: 'C:\\npm\\node_modules\r\n',
+        stderr: '',
+      };
+    },
+  });
+  assert.equal(npmCommand, 'npm.cmd');
+  assert.equal(root, 'C:\\npm\\node_modules');
+
+  const validator = createNpmPackageValidator({
+    platform: 'win32',
+    runner: async (command, args) => {
+      assert.equal(command, 'npm.cmd');
+      assert.deepEqual(args, [
+        'view',
+        '@modelcontextprotocol/server-everything',
+        'version',
+        '--json',
+      ]);
+      return { stdout: '"1.2.3"\n', stderr: '' };
+    },
+  });
+  assert.deepEqual(
+    await validator('@modelcontextprotocol/server-everything', 15_000),
+    {
+      ok: true,
+      packageName: '@modelcontextprotocol/server-everything',
+      version: '1.2.3',
+    }
+  );
+
+  let lookupExecutable = '';
+  const binary = await resolveBinaryOnPath('mcp-server-everything', {
+    platform: 'win32',
+    execFileImpl: (executable, args, options, callback) => {
+      lookupExecutable = executable;
+      assert.deepEqual(args, ['mcp-server-everything']);
+      callback(null, 'C:\\npm\\mcp-server-everything.cmd\r\n', '');
+      return {};
+    },
+  });
+  assert.equal(lookupExecutable, 'where.exe');
+  assert.equal(binary, 'C:\\npm\\mcp-server-everything.cmd');
+});
+
+test('alias-only MCP Agent instruction writes deterministic known server config', async () => {
+  await withTempDir(async (root) => {
+    const configPath = join(root, 'mcp_agent.config.yaml');
+    const everythingEntry = join(
+      'C:\\npm\\node_modules',
+      '@modelcontextprotocol',
+      'server-everything',
+      'dist',
+      'index.js'
+    );
+    const service = new McpAgentService(
+      {
+        enabled: true,
+        allowConfigWrite: true,
+        projectRoot: root,
+        configPath,
+        validateNpmPackage: true,
+      },
+      {
+        aliasResolver: async (serverName) => ({
+          name: serverName,
+          alias: getKnownMcpServerAlias(serverName),
+          config: {
+            command: 'node',
+            args: [everythingEntry],
+          },
+          usingFallback: false,
+        }),
+      }
+    );
+
+    const result = await service.handleInstruction(
+      'tambahkan MCP everything untuk smoke test'
+    );
+    assert.equal(result.serverName, 'everything');
+    assert.equal(result.after.command, 'node');
+    assert.deepEqual(result.after.args, [everythingEntry]);
+    assert.match(await readFile(configPath, 'utf-8'), /everything:/);
+  });
+});
+
+test('spawn EINVAL is normalized without exposing the raw platform error', () => {
+  const normalized = normalizeMcpStartError(new Error('spawn EINVAL'));
+  assert.doesNotMatch(normalized.message, /spawn EINVAL/i);
+  assert.match(normalized.message, /failed while resolving MCP server command/i);
+  assert.match(normalized.message, /npm install -g @modelcontextprotocol\/server-everything/i);
 });
 
 test('MCP Agent rejects the known nonexistent Google Sheets package before writing config', async () => {

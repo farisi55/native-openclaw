@@ -1,5 +1,9 @@
 import { execFile } from 'child_process';
 import { isAbsolute } from 'path';
+import {
+  getBinaryLookupCommand,
+  type McpPlatform,
+} from './mcp-platform';
 
 export const MCP_ALLOWED_LAUNCHERS: ReadonlySet<string> = new Set([
   'npx',
@@ -67,7 +71,8 @@ export function assessMcpCommand(command: string): McpCommandAssessment {
   }
 
   const executable = executableName(trimmed);
-  if (MCP_ALLOWED_LAUNCHERS.has(executable)) {
+  const normalizedExecutable = executable.toLowerCase().replace(/\.cmd$/, '');
+  if (MCP_ALLOWED_LAUNCHERS.has(normalizedExecutable)) {
     return { valid: true, needsResolution: false };
   }
   if (KNOWN_MCP_BINARIES[executable]) {
@@ -86,9 +91,20 @@ export function assessMcpCommand(command: string): McpCommandAssessment {
 }
 
 export function defaultMcpWhichResolver(command: string): Promise<string | undefined> {
-  const executable = process.platform === 'win32' ? 'where.exe' : 'which';
+  return resolveBinaryOnPath(command);
+}
+
+export function resolveBinaryOnPath(
+  command: string,
+  options: {
+    platform?: McpPlatform;
+    execFileImpl?: typeof execFile;
+  } = {}
+): Promise<string | undefined> {
+  const executable = getBinaryLookupCommand(options.platform ?? process.platform);
+  const execFileImpl = options.execFileImpl ?? execFile;
   return new Promise((resolve) => {
-    execFile(executable, [command], { windowsHide: true, timeout: 5_000 }, (error, stdout) => {
+    execFileImpl(executable, [command], { windowsHide: true, timeout: 5_000 }, (error, stdout) => {
       if (error) {
         resolve(undefined);
         return;

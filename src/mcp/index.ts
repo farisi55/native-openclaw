@@ -18,6 +18,7 @@ export {
   formatMcpCommandResolutionError,
   KNOWN_MCP_BINARIES,
   MCP_ALLOWED_LAUNCHERS,
+  resolveBinaryOnPath,
   resolveMcpCommand,
   type McpCommandAssessment,
   type McpCommandResolution,
@@ -27,6 +28,7 @@ export {
 export { normalizeMcpStartError } from './mcp-errors';
 
 export {
+  createNpmPackageValidator,
   extractNpxPackage,
   validateNpmPackageExists,
   validateNpmPackageName,
@@ -35,9 +37,21 @@ export {
 } from './mcp-npm-package';
 
 export {
+  getBinaryLookupCommand,
+  getGlobalNpmRoot,
+  getNpmCommand,
+  getNpxCommand,
+  runMcpCommand,
+  type McpCommandOutput,
+  type McpCommandRunner,
+  type McpPlatform,
+} from './mcp-platform';
+
+export {
   getKnownMcpServerAlias,
   KNOWN_MCP_SERVER_ALIASES,
   resolveKnownMcpServerAlias,
+  resolveKnownMcpServerAliasRuntime,
   type KnownMcpServerAlias,
   type ResolvedMcpServerAlias,
 } from './mcp-server-aliases';

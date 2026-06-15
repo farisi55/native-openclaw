@@ -157,6 +157,21 @@ test('MCP config list routes to self-configuration read intent', async () => {
   });
 });
 
+test('natural-language MCP aliases route to self-configuration', async () => {
+  await withOptimizer(async (optimizer) => {
+    for (const input of [
+      'add mcp everything',
+      'tambahkan MCP everything untuk smoke test',
+      'tambahkan server MCP filesystem',
+    ]) {
+      const result = await optimizer.optimize({ userInput: input });
+      assert.equal(result.compiled.intent, 'mcp-config-update', input);
+      assert.equal(result.compiled.routingHint, 'self-configuration', input);
+      assert.ok(result.compiled.excludedTools.includes('SelfHealingEngine'), input);
+    }
+  });
+});
+
 test('simple chat stays compact and does not route to tools or autonomous engines', async () => {
   await withOptimizer(async (optimizer) => {
     const input = 'hello kamu siapa';

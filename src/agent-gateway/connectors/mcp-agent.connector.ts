@@ -1,5 +1,5 @@
 import { relative, resolve, sep } from 'path';
-import type { McpManager } from '../../mcp';
+import { normalizeMcpStartError, type McpManager } from '../../mcp';
 import type { McpAgentActionResult, McpAgentService } from '../../mcp-agent';
 import { createLogger } from '../../utils/logger';
 import type {
@@ -82,9 +82,15 @@ export class McpAgentConnector implements AgentConnector {
       if (!this.service?.enabled) {
         return this.failure(task, 'MCP_AGENT_DISABLED', 'MCP Agent self-configuration is disabled.');
       }
-      const result = task.capability === 'mcp.server.list'
-        ? await this.service.listServers()
-        : await this.service.handleInstruction(task.userInput);
+      let result: McpAgentActionResult;
+      try {
+        result = task.capability === 'mcp.server.list'
+          ? await this.service.listServers()
+          : await this.service.handleInstruction(task.userInput);
+      } catch (error) {
+        const normalized = normalizeMcpStartError(error);
+        return this.failure(task, 'MCP_CONFIG_FAILED', normalized.message);
+      }
       if (signal?.aborted) return this.failure(task, 'AGENT_ABORTED', 'MCP Agent execution was aborted.');
       if (this.manager) await this.manager.loadConfig();
       const changed = result.action === 'created' || result.action === 'updated' || result.action === 'removed';

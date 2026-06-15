@@ -6,7 +6,7 @@ import {
   assertMcpCommandAllowed,
   MCP_ALLOWED_LAUNCHERS,
 } from './mcp-command-resolver';
-import { resolveKnownMcpServerAlias } from './mcp-server-aliases';
+import { resolveKnownMcpServerAliasRuntime } from './mcp-server-aliases';
 
 export interface McpCommandServerConfig {
   command: string;
@@ -200,11 +200,11 @@ export async function saveMcpConfig(
   await writeFile(absolutePath, stringifyMcpConfig(config, absolutePath), 'utf-8');
 }
 
-export function parseMcpServerInput(name: string, rawJson?: string): McpServerConfig {
+export async function parseMcpServerInput(name: string, rawJson?: string): Promise<McpServerConfig> {
   const normalized = name.toLowerCase();
 
   if (!rawJson || rawJson.trim() === '') {
-    const alias = resolveKnownMcpServerAlias(normalized);
+    const alias = await resolveKnownMcpServerAliasRuntime(normalized);
     const preset = alias?.config ?? MCP_SERVER_PRESETS[normalized];
     if (!preset) {
       throw new Error(`No MCP preset found for "${name}". Provide a JSON server config.`);

@@ -3,9 +3,11 @@ import { createLogger } from '../utils/logger';
 import {
   assertMcpCommandAllowed,
   extractNpxPackage,
-  resolveKnownMcpServerAlias,
+  normalizeMcpStartError,
+  resolveKnownMcpServerAliasRuntime,
   validateNpmPackageExists,
   type NpmPackageValidator,
+  type ResolvedMcpServerAlias,
 } from '../mcp';
 import {
   McpConfigService,
@@ -28,11 +30,15 @@ const INVALID_MCP_PACKAGES = new Set([
 
 export interface McpAgentServiceDependencies {
   npmPackageValidator?: NpmPackageValidator;
+  aliasResolver?: (serverName: string) => Promise<ResolvedMcpServerAlias | undefined>;
 }
 
 export class McpAgentService {
   readonly configService: McpConfigService;
   private readonly npmPackageValidator: NpmPackageValidator;
+  private readonly aliasResolver: (
+    serverName: string
+  ) => Promise<ResolvedMcpServerAlias | undefined>;
 
   constructor(
     private readonly config: McpAgentConfig,
@@ -41,6 +47,13 @@ export class McpAgentService {
     this.configService = new McpConfigService(config.projectRoot, config.configPath);
     this.npmPackageValidator =
       dependencies.npmPackageValidator ?? validateNpmPackageExists;
+    this.aliasResolver = dependencies.aliasResolver ?? (
+      (serverName) => resolveKnownMcpServerAliasRuntime(serverName, {
+        workspacePath:
+          process.env['WORKSPACE_DIR'] ??
+          `${this.config.projectRoot}/workspace`,
+      })
+    );
   }
 
   get enabled(): boolean {
@@ -168,7 +181,7 @@ export class McpAgentService {
     input: ConfigureMcpServerInput
   ): Promise<{ definition: McpAgentServerDefinition; warnings: string[] }> {
     const alias = !input.command && !input.url
-      ? resolveKnownMcpServerAlias(serverName)
+      ? await this.aliasResolver(serverName)
       : undefined;
     const definition = validateMcpAgentServerDefinition(alias?.config ?? {
       ...(input.command !== undefined ? { command: input.command } : {}),
@@ -200,7 +213,9 @@ export class McpAgentService {
             if (/\bE404\b|\b404\b|not\s+found|not in this registry/i.test(detail)) {
               throw new Error(`Package not found in npm registry: ${packageName}`);
             }
-            throw new Error(`Could not verify npm package ${packageName}: ${detail}`);
+            throw normalizeMcpStartError(
+              new Error(`Could not verify npm package ${packageName}: ${detail}`)
+            );
           }
         } else {
           warnings.push(
@@ -215,6 +230,7 @@ export class McpAgentService {
         `${serverName} uses third-party package ${alias.alias.packageName} and requires authentication.`
       );
     }
+    warnings.push(...(alias?.warnings ?? []));
     return { definition, warnings };
   }
 

@@ -15,7 +15,7 @@ import {
   resolveMcpCommand,
 } from './mcp-command-resolver';
 import { normalizeMcpStartError } from './mcp-errors';
-import { resolveKnownMcpServerAlias } from './mcp-server-aliases';
+import { resolveKnownMcpServerAliasRuntime } from './mcp-server-aliases';
 import { createMcpRegisteredTool, makeMcpToolName } from './mcp-tool-adapter';
 
 const logger = createLogger('mcp:manager');
@@ -116,7 +116,7 @@ export class McpManager {
   }
 
   async addServerFromInput(name: string, rawJson?: string): Promise<void> {
-    await this.addServer(name, parseMcpServerInput(name, rawJson));
+    await this.addServer(name, await parseMcpServerInput(name, rawJson));
   }
 
   async removeServer(name: string): Promise<boolean> {
@@ -206,7 +206,7 @@ export class McpManager {
     const server = 'everything';
     await this.loadConfig();
     if (!this.config.mcpServers[server]) {
-      const alias = resolveKnownMcpServerAlias(server);
+      const alias = await resolveKnownMcpServerAliasRuntime(server);
       if (!alias) throw new Error('The built-in MCP smoke server alias is unavailable.');
       this.config.mcpServers[server] = alias.config;
       await this.saveConfig();

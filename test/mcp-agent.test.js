@@ -7,7 +7,7 @@ const {
   McpAgentService,
   parseMcpConfigurationInstruction,
 } = require('../dist/mcp-agent');
-const { McpManager } = require('../dist/mcp');
+const { getNpxCommand, McpManager } = require('../dist/mcp');
 const { handleAction } = require('../dist/agents/action-handler');
 
 async function withService(fn) {
@@ -58,6 +58,7 @@ function actionContext(service) {
 
 test('creates missing YAML and adds the auth-required google-sheets alias', async () => {
   await withService(async ({ service, configPath }) => {
+    const npxCommand = getNpxCommand(process.platform);
     const result = await service.configureServer({
       serverName: 'Google Sheets',
     });
@@ -66,7 +67,7 @@ test('creates missing YAML and adds the auth-required google-sheets alias', asyn
     assert.equal(result.serverName, 'google-sheets');
     const yaml = await readFile(configPath, 'utf-8');
     assert.match(yaml, /google-sheets:/);
-    assert.match(yaml, /command: "npx"/);
+    assert.match(yaml, new RegExp(`command: "${npxCommand.replace('.', '\\.')}"`));
     assert.match(yaml, /@node2flow\/google-sheets-mcp/);
     assert.match(result.warnings.join(' '), /requires authentication/i);
   });
@@ -74,6 +75,7 @@ test('creates missing YAML and adds the auth-required google-sheets alias', asyn
 
 test('runtime manager sees self-configured servers without restart', async () => {
   await withService(async ({ service, configPath }) => {
+    const npxCommand = getNpxCommand(process.platform);
     const manager = new McpManager({ configPath });
     await manager.init();
     assert.deepEqual(await manager.listServers(), []);
@@ -85,7 +87,7 @@ test('runtime manager sees self-configured servers without restart', async () =>
     const servers = await manager.listServers();
     assert.equal(servers.length, 1);
     assert.equal(servers[0].name, 'google-sheets');
-    assert.equal(servers[0].command, 'npx');
+    assert.equal(servers[0].command, npxCommand);
     assert.deepEqual(servers[0].args, ['-y', '@node2flow/google-sheets-mcp']);
   });
 });

@@ -7,6 +7,18 @@ function extractNpmPackage(message: string): string | undefined {
 
 export function normalizeMcpStartError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
+  if (/\bspawn\s+EINVAL\b|\bEINVAL\b[\s\S]*(?:npm|npx|spawn)/i.test(message)) {
+    return new Error([
+      'MCP Agent failed while resolving MCP server command.',
+      'Possible causes:',
+      '- Windows command resolution failed',
+      '- npm/npx launcher was called incorrectly',
+      '- known MCP server package is not installed globally',
+      'Suggested actions:',
+      '- run: npm install -g @modelcontextprotocol/server-everything',
+      '- or configure the server using the node launcher and its dist/index.js path',
+    ].join('\n'));
+  }
   if (/npm(?:\s+error)?\s+(?:code\s+)?E404|\b404\s+Not\s+Found|is not in this registry/i.test(message)) {
     const packageName = extractNpmPackage(message);
     return new Error([

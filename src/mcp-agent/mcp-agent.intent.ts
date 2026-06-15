@@ -1,5 +1,8 @@
 import type { ParsedMcpConfigIntent } from './mcp-agent.types';
-import { getKnownMcpServerAlias } from '../mcp/mcp-server-aliases';
+import {
+  getKnownMcpServerAlias,
+  KNOWN_MCP_SERVER_ALIASES,
+} from '../mcp/mcp-server-aliases';
 
 const MCP_TERM_RE = /\b(?:mcp|model\s+context\s+protocol)\b/i;
 const CONFIG_FILE_RE = /\bmcp_agent\.config\.ya?ml\b/i;
@@ -35,10 +38,34 @@ function extractConfigPath(input: string): string | undefined {
 }
 
 function extractServerName(input: string): string | undefined {
+  const actionPrefix =
+    /\b(?:tambahkan|tambah|daftarkan|register|add|update|ubah|hapus|remove|delete)\b/i;
+  if (actionPrefix.test(input)) {
+    for (const alias of Object.keys(KNOWN_MCP_SERVER_ALIASES)) {
+      const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const aliasPattern = new RegExp(
+        `\\b(?:mcp(?:\\s+server)?|server\\s+mcp)\\s+${escapedAlias}\\b`,
+        'i'
+      );
+      if (aliasPattern.test(input)) return alias;
+    }
+  }
+
+  const suffix =
+    String.raw`\s+(?:ke\s+(?:dalam\s+)?(?:file|config)|dari\s+(?:file|config)|to\b|from\b|gunakan|using|use|pakai|dengan|with|untuk\b|for\b|sebagai\b|as\b|agar\b|supaya\b|buat\b|untuk\s+smoke\s+test)\b|[.,;:]|$`;
   const patterns = [
-    /\b(?:tambahkan|tambah|daftarkan|register|add|update|ubah|hapus|remove|delete)\s+mcp\s+server\s+([a-z0-9][a-z0-9 _.-]*?)(?=\s+(?:ke\s+(?:dalam\s+)?(?:file|config)|dari\s+(?:file|config)|to\b|from\b|gunakan|using|use|pakai|dengan|with)\b|[.,;:]|$)/i,
-    /\b(?:tambahkan|tambah|daftarkan|register|add|update|ubah|hapus|remove|delete)\s+(?:server\s+)?mcp\s+([a-z0-9][a-z0-9 _.-]*?)(?=\s+(?:ke\s+(?:dalam\s+)?(?:file|config)|dari\s+(?:file|config)|to\b|from\b|gunakan|using|use|pakai|dengan|with)\b|[.,;:]|$)/i,
-    /\b(?:server\s+mcp|mcp\s+server)\s+([a-z0-9][a-z0-9 _.-]*?)(?=\s+(?:ke\s+(?:dalam\s+)?(?:file|config)|dari\s+(?:file|config)|to\b|from\b|gunakan|using|use|pakai|dengan|with)\b|[.,;:]|$)/i,
+    new RegExp(
+      String.raw`\b(?:tambahkan|tambah|daftarkan|register|add|update|ubah|hapus|remove|delete)\s+mcp\s+server\s+([a-z0-9][a-z0-9 _.-]*?)(?=${suffix})`,
+      'i'
+    ),
+    new RegExp(
+      String.raw`\b(?:tambahkan|tambah|daftarkan|register|add|update|ubah|hapus|remove|delete)\s+(?:server\s+)?mcp\s+([a-z0-9][a-z0-9 _.-]*?)(?=${suffix})`,
+      'i'
+    ),
+    new RegExp(
+      String.raw`\b(?:server\s+mcp|mcp\s+server)\s+([a-z0-9][a-z0-9 _.-]*?)(?=${suffix})`,
+      'i'
+    ),
   ];
 
   for (const pattern of patterns) {
@@ -84,7 +111,13 @@ export function classifyMcpConfigurationIntent(
 
 export function parseMcpConfigurationInstruction(input: string): ParsedMcpConfigIntent {
   if (!isMcpConfigurationIntent(input)) {
-    throw new Error('Instruction is not an MCP configuration request.');
+    throw new Error([
+      'Saya mengenali ini sebagai permintaan MCP, tetapi belum bisa menentukan server MCP yang ingin ditambahkan.',
+      'Contoh:',
+      '- add mcp everything',
+      '- add mcp filesystem',
+      '- tambahkan MCP everything untuk smoke test',
+    ].join('\n'));
   }
 
   const configPath = extractConfigPath(input);
