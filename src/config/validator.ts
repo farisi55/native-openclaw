@@ -80,6 +80,8 @@ const AppConfigSchema = z.object({
     anthropic: ProviderConfigSchema.optional(),
     gemini: ProviderConfigSchema.optional(),
     zai: ProviderConfigSchema.optional(),
+    huggingface: ProviderConfigSchema.optional(),
+    cohere: ProviderConfigSchema.optional(),
   }),
   agent: AgentConfigSchema,
   storage: StorageConfigSchema,
@@ -122,9 +124,65 @@ function validatePositiveTimeout(key: string): void {
   }
 }
 
+function validateOptionalUrl(key: string): void {
+  const configuredUrl = getOptionalEnv(key)?.trim();
+  if (!configuredUrl) return;
+  try {
+    new URL(configuredUrl);
+  } catch {
+    throw new Error(`[config] ${key} must be a valid URL.`);
+  }
+}
+
+function validateEnabledOpenAiCompatProvider(input: {
+  enabledKey: string;
+  keyCandidates: string[];
+  baseUrlKey: string;
+  defaultBaseUrl: string;
+  defaultModelKey: string;
+  defaultModel: string;
+  timeoutKey: string;
+}): void {
+  validatePositiveTimeout(input.timeoutKey);
+  if (!parseBoolEnv(input.enabledKey, false)) return;
+  if (!input.keyCandidates.some((key) => Boolean(getOptionalEnv(key)?.trim()))) {
+    throw new Error(
+      `[config] ${input.keyCandidates.join(' or ')} is required when ${input.enabledKey}=true.`
+    );
+  }
+  if (!(getOptionalEnv(input.defaultModelKey) ?? input.defaultModel).trim()) {
+    throw new Error(
+      `[config] ${input.defaultModelKey} is required when ${input.enabledKey}=true.`
+    );
+  }
+  try {
+    new URL((getOptionalEnv(input.baseUrlKey) ?? input.defaultBaseUrl).trim());
+  } catch {
+    throw new Error(`[config] ${input.baseUrlKey} must be a valid URL.`);
+  }
+}
+
 function validateProviderEnvironment(): void {
   validatePositiveTimeout('CLOUDFLARE_TIMEOUT_MS');
   validatePositiveTimeout('GITHUB_MODELS_TIMEOUT_MS');
+  validateEnabledOpenAiCompatProvider({
+    enabledKey: 'HUGGINGFACE_ENABLED',
+    keyCandidates: ['HUGGINGFACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],
+    baseUrlKey: 'HUGGINGFACE_BASE_URL',
+    defaultBaseUrl: 'https://router.huggingface.co/v1',
+    defaultModelKey: 'HUGGINGFACE_DEFAULT_MODEL',
+    defaultModel: 'openai/gpt-oss-120b:fastest',
+    timeoutKey: 'HUGGINGFACE_TIMEOUT_MS',
+  });
+  validateEnabledOpenAiCompatProvider({
+    enabledKey: 'COHERE_ENABLED',
+    keyCandidates: ['COHERE_API_KEY'],
+    baseUrlKey: 'COHERE_BASE_URL',
+    defaultBaseUrl: 'https://api.cohere.ai/compatibility/v1',
+    defaultModelKey: 'COHERE_DEFAULT_MODEL',
+    defaultModel: 'command-a-plus-05-2026',
+    timeoutKey: 'COHERE_TIMEOUT_MS',
+  });
 
   if (parseBoolEnv('CLOUDFLARE_AI_ENABLED', false)) {
     if (!getOptionalEnv('CLOUDFLARE_API_KEY')?.trim()) {
@@ -164,14 +222,7 @@ function validateProviderEnvironment(): void {
       );
     }
 
-    const configuredUrl = getOptionalEnv('GITHUB_MODELS_BASE_URL')?.trim();
-    if (configuredUrl) {
-      try {
-        new URL(configuredUrl);
-      } catch {
-        throw new Error('[config] GITHUB_MODELS_BASE_URL must be a valid URL.');
-      }
-    }
+    validateOptionalUrl('GITHUB_MODELS_BASE_URL');
   }
 }
 
@@ -190,6 +241,8 @@ function buildRawConfig(): unknown {
       anthropic: buildProviderConfig('ANTHROPIC', 'https://api.anthropic.com', 'claude-opus-4-20250514'),
       gemini: buildProviderConfig('GEMINI', 'https://generativelanguage.googleapis.com/v1beta', 'gemini-2.0-flash'),
       zai: buildProviderConfig('ZAI', 'https://api.z.ai/api/paas/v4', 'glm-4.5', 'ZAI_MODEL'),
+      huggingface: buildProviderConfig('HUGGINGFACE', 'https://router.huggingface.co/v1', 'openai/gpt-oss-120b:fastest'),
+      cohere: buildProviderConfig('COHERE', 'https://api.cohere.ai/compatibility/v1', 'command-a-plus-05-2026'),
     },
     agent: {
       maxTurns: getEnvInt('AGENT_MAX_TURNS', 20),
@@ -269,6 +322,18 @@ export function validateConfig(): Readonly<AppConfig> {
     (
       parseBoolEnv('GITHUB_MODELS_ENABLED', false) &&
       Boolean(process.env['GITHUB_MODELS_API_KEY'])
+    ) ||
+    (
+      parseBoolEnv('HUGGINGFACE_ENABLED', false) &&
+      (
+        Boolean(process.env['HUGGINGFACE_API_KEY']) ||
+        Boolean(process.env['HF_API_KEY']) ||
+        Boolean(process.env['HF_TOKEN'])
+      )
+    ) ||
+    (
+      parseBoolEnv('COHERE_ENABLED', false) &&
+      Boolean(process.env['COHERE_API_KEY'])
     );
   const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']);
 
@@ -279,6 +344,8 @@ export function validateConfig(): Readonly<AppConfig> {
         '  GROQ_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, ZAI_API_KEY, PUTER_API_KEY,\n' +
         '  CLOUDFLARE_API_KEY with CLOUDFLARE_AI_ENABLED=true,\n' +
         '  GITHUB_MODELS_API_KEY with GITHUB_MODELS_ENABLED=true,\n' +
+        '  HUGGINGFACE_API_KEY, HF_API_KEY, or HF_TOKEN with HUGGINGFACE_ENABLED=true,\n' +
+        '  COHERE_API_KEY with COHERE_ENABLED=true,\n' +
         '  or OLLAMA_BASE_URL'
     );
   }

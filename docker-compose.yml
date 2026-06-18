@@ -91,6 +91,22 @@ services:
       CLOUDFLARE_MODELS: ${CLOUDFLARE_MODELS:-@cf/meta/llama-3.1-8b-instruct,@cf/openai/gpt-oss-120b}
       CLOUDFLARE_TIMEOUT_MS: ${CLOUDFLARE_TIMEOUT_MS:-120000}
 
+      HUGGINGFACE_ENABLED: ${HUGGINGFACE_ENABLED:-false}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      HUGGINGFACE_BASE_URL: ${HUGGINGFACE_BASE_URL:-https://router.huggingface.co/v1}
+      HUGGINGFACE_DEFAULT_MODEL: ${HUGGINGFACE_DEFAULT_MODEL:-openai/gpt-oss-120b:fastest}
+      HUGGINGFACE_MODELS: ${HUGGINGFACE_MODELS:-openai/gpt-oss-120b:fastest}
+      HUGGINGFACE_TIMEOUT_MS: ${HUGGINGFACE_TIMEOUT_MS:-120000}
+      HF_API_KEY: ${HF_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+
+      COHERE_ENABLED: ${COHERE_ENABLED:-false}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      COHERE_BASE_URL: ${COHERE_BASE_URL:-https://api.cohere.ai/compatibility/v1}
+      COHERE_DEFAULT_MODEL: ${COHERE_DEFAULT_MODEL:-command-a-plus-05-2026}
+      COHERE_MODELS: ${COHERE_MODELS:-command-a-plus-05-2026}
+      COHERE_TIMEOUT_MS: ${COHERE_TIMEOUT_MS:-120000}
+
       GITHUB_MODELS_ENABLED: ${GITHUB_MODELS_ENABLED:-false}
       GITHUB_MODELS_API_KEY: ${GITHUB_MODELS_API_KEY:-}
       GITHUB_MODELS_BASE_URL: ${GITHUB_MODELS_BASE_URL:-https://models.github.ai/inference}
@@ -100,7 +116,7 @@ services:
       GITHUB_MODELS_ORG: ${GITHUB_MODELS_ORG:-}
       GITHUB_MODELS_USE_ORG_ENDPOINT: ${GITHUB_MODELS_USE_ORG_ENDPOINT:-false}
       GITHUB_MODELS_TIMEOUT_MS: ${GITHUB_MODELS_TIMEOUT_MS:-120000}
-      PROVIDER_ORDER: ${PROVIDER_ORDER:-groq,sambanova,mistral,cloudflare,github-models,openrouter,gemini,ollama}
+      PROVIDER_ORDER: ${PROVIDER_ORDER:-groq,sambanova,mistral,huggingface,cohere,cloudflare,github-models,openrouter,gemini,ollama}
 
       WEB_UI_ENABLED: ${WEB_UI_ENABLED:-false}
       WEB_UI_HOST: ${WEB_UI_HOST:-0.0.0.0}

@@ -482,6 +482,20 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
       return 'Missing GITHUB_MODELS_ORG.';
     }
   }
+  if (providerId === 'huggingface') {
+    if (process.env['HUGGINGFACE_ENABLED'] !== 'true') return 'Hugging Face disabled.';
+    if (
+      !process.env['HUGGINGFACE_API_KEY']?.trim() &&
+      !process.env['HF_API_KEY']?.trim() &&
+      !process.env['HF_TOKEN']?.trim()
+    ) {
+      return 'Missing HUGGINGFACE_API_KEY, HF_API_KEY, or HF_TOKEN.';
+    }
+  }
+  if (providerId === 'cohere') {
+    if (process.env['COHERE_ENABLED'] !== 'true') return 'Cohere disabled.';
+    if (!process.env['COHERE_API_KEY']?.trim()) return 'Missing COHERE_API_KEY.';
+  }
   return null;
 }
 

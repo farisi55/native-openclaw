@@ -9,7 +9,9 @@ process.env.LOG_LEVEL = 'error';
 
 const {
   CloudflareProvider,
+  CohereProvider,
   GitHubModelsProvider,
+  HuggingFaceProvider,
   createProviderRegistry,
   providerDefaultModelFromEnv,
 } = require('../dist/providers');
@@ -37,6 +39,20 @@ const ENV_KEYS = [
   'GITHUB_MODELS_ORG',
   'GITHUB_MODELS_USE_ORG_ENDPOINT',
   'GITHUB_MODELS_TIMEOUT_MS',
+  'HUGGINGFACE_ENABLED',
+  'HUGGINGFACE_API_KEY',
+  'HUGGINGFACE_BASE_URL',
+  'HUGGINGFACE_DEFAULT_MODEL',
+  'HUGGINGFACE_MODELS',
+  'HUGGINGFACE_TIMEOUT_MS',
+  'HF_API_KEY',
+  'HF_TOKEN',
+  'COHERE_ENABLED',
+  'COHERE_API_KEY',
+  'COHERE_BASE_URL',
+  'COHERE_DEFAULT_MODEL',
+  'COHERE_MODELS',
+  'COHERE_TIMEOUT_MS',
   'PROVIDER_ORDER',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
@@ -81,6 +97,30 @@ function githubEnv(overrides = {}) {
   process.env.GITHUB_MODELS_DEFAULT_MODEL = 'openai/gpt-4.1';
   process.env.GITHUB_MODELS_API_VERSION = '2026-03-10';
   process.env.GITHUB_MODELS_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
+function huggingfaceEnv(overrides = {}) {
+  process.env.HUGGINGFACE_ENABLED = 'true';
+  process.env.HUGGINGFACE_API_KEY = 'hf-test-key';
+  process.env.HUGGINGFACE_DEFAULT_MODEL = 'openai/gpt-oss-120b:fastest';
+  process.env.HUGGINGFACE_MODELS = 'openai/gpt-oss-120b:fastest';
+  process.env.HUGGINGFACE_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
+function cohereEnv(overrides = {}) {
+  process.env.COHERE_ENABLED = 'true';
+  process.env.COHERE_API_KEY = 'cohere-test-key';
+  process.env.COHERE_DEFAULT_MODEL = 'command-a-plus-05-2026';
+  process.env.COHERE_MODELS = 'command-a-plus-05-2026';
+  process.env.COHERE_TIMEOUT_MS = '120000';
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = String(value);
@@ -144,11 +184,15 @@ test('disabled providers are not registered', async () => {
   clearProviderEnv();
   process.env.CLOUDFLARE_AI_ENABLED = 'false';
   process.env.GITHUB_MODELS_ENABLED = 'false';
+  process.env.HUGGINGFACE_ENABLED = 'false';
+  process.env.COHERE_ENABLED = 'false';
 
   const registry = await createProviderRegistry({});
 
   assert.equal(registry.has('cloudflare'), false);
   assert.equal(registry.has('github-models'), false);
+  assert.equal(registry.has('huggingface'), false);
+  assert.equal(registry.has('cohere'), false);
 });
 
 test('Cloudflare enabled config requires API key and account ID', () => {
@@ -170,19 +214,69 @@ test('GitHub Models enabled config requires API key and org for org endpoint', (
   assert.throws(() => validateConfig(), /GITHUB_MODELS_ORG/);
 });
 
+test('Hugging Face enabled config accepts token aliases in priority order', async () => {
+  clearProviderEnv();
+  process.env.HUGGINGFACE_ENABLED = 'true';
+  assert.throws(() => validateConfig(), /HUGGINGFACE_API_KEY or HF_API_KEY or HF_TOKEN/);
+
+  process.env.HF_TOKEN = 'hf-token-key';
+  assert.doesNotThrow(() => validateConfig());
+
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('hf token ok');
+  });
+  await new HuggingFaceProvider().chat(options('openai/gpt-oss-120b:fastest'));
+  assert.equal(request.init.headers.Authorization, 'Bearer hf-token-key');
+
+  process.env.HF_API_KEY = 'hf-api-key';
+  await new HuggingFaceProvider().chat(options('openai/gpt-oss-120b:fastest'));
+  assert.equal(request.init.headers.Authorization, 'Bearer hf-api-key');
+
+  process.env.HUGGINGFACE_API_KEY = 'hf-primary-key';
+  await new HuggingFaceProvider().chat(options('openai/gpt-oss-120b:fastest'));
+  assert.equal(request.init.headers.Authorization, 'Bearer hf-primary-key');
+});
+
+test('Cohere enabled config requires API key', () => {
+  clearProviderEnv();
+  process.env.COHERE_ENABLED = 'true';
+  assert.throws(() => validateConfig(), /COHERE_API_KEY/);
+
+  process.env.COHERE_API_KEY = 'cohere-test-key';
+  assert.doesNotThrow(() => validateConfig());
+});
+
 test('provider timeout config must be positive', () => {
   clearProviderEnv();
   cloudflareEnv({ CLOUDFLARE_TIMEOUT_MS: '0' });
   assert.throws(() => validateConfig(), /CLOUDFLARE_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
+  huggingfaceEnv({ HUGGINGFACE_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /HUGGINGFACE_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
+  cohereEnv({ COHERE_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /COHERE_TIMEOUT_MS must be a positive integer/);
 });
 
-test('Cloudflare and GitHub Models each satisfy provider validation when correctly configured', () => {
+test('Cloudflare, GitHub Models, Hugging Face, and Cohere satisfy provider validation', () => {
   clearProviderEnv();
   cloudflareEnv();
   assert.doesNotThrow(() => validateConfig());
 
   clearProviderEnv();
   githubEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  huggingfaceEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  cohereEnv();
   assert.doesNotThrow(() => validateConfig());
 });
 
@@ -312,12 +406,78 @@ test('GitHub Models supports organization endpoint', async () => {
   );
 });
 
+test('Hugging Face builds router endpoint, headers, and OpenAI-compatible body', async () => {
+  clearProviderEnv();
+  huggingfaceEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('huggingface ok');
+  });
+
+  const provider = new HuggingFaceProvider();
+  const result = await provider.chat(options('openai/gpt-oss-120b:fastest'));
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'https://router.huggingface.co/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, 'Bearer hf-test-key');
+  assert.equal(request.init.headers['Content-Type'], 'application/json');
+  assert.equal(body.model, 'openai/gpt-oss-120b:fastest');
+  assert.equal(body.messages[0].role, 'system');
+  assert.equal(body.messages[1].content, 'Hello');
+  assert.equal(body.temperature, 0.2);
+  assert.equal(body.max_tokens, 64);
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'huggingface ok');
+});
+
+test('Cohere builds compatibility endpoint, headers, and OpenAI-compatible body', async () => {
+  clearProviderEnv();
+  cohereEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('cohere ok');
+  });
+
+  const provider = new CohereProvider();
+  const result = await provider.chat(options('command-a-plus-05-2026'));
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'https://api.cohere.ai/compatibility/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, 'Bearer cohere-test-key');
+  assert.equal(request.init.headers['Content-Type'], 'application/json');
+  assert.equal(body.model, 'command-a-plus-05-2026');
+  assert.equal(body.messages[1].content, 'Hello');
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'cohere ok');
+});
+
+test('Hugging Face and Cohere list configured models without a live /models request', async () => {
+  clearProviderEnv();
+  huggingfaceEnv({
+    HUGGINGFACE_MODELS: 'openai/gpt-oss-120b:fastest,meta-llama/llama-test',
+  });
+  assert.deepEqual(
+    (await new HuggingFaceProvider().listModels()).map((model) => model.id),
+    ['openai/gpt-oss-120b:fastest', 'meta-llama/llama-test']
+  );
+
+  clearProviderEnv();
+  cohereEnv({ COHERE_MODELS: 'command-a-plus-05-2026,command-r-plus' });
+  assert.deepEqual(
+    (await new CohereProvider().listModels()).map((model) => model.id),
+    ['command-a-plus-05-2026', 'command-r-plus']
+  );
+});
+
 for (const spec of [
   {
     name: 'Cloudflare',
     setup: () => cloudflareEnv(),
     create: () => new CloudflareProvider(),
     model: '@cf/meta/llama-3.1-8b-instruct',
+    timeoutKey: 'CLOUDFLARE_TIMEOUT_MS',
     authMessage: /Cloudflare Workers AI authentication failed/,
     rateMessage: /Cloudflare Workers AI rate limit exceeded/,
   },
@@ -326,8 +486,27 @@ for (const spec of [
     setup: () => githubEnv(),
     create: () => new GitHubModelsProvider(),
     model: 'openai/gpt-4.1',
+    timeoutKey: 'GITHUB_MODELS_TIMEOUT_MS',
     authMessage: /GitHub Models authentication failed/,
     rateMessage: /GitHub Models rate limit exceeded/,
+  },
+  {
+    name: 'Hugging Face',
+    setup: () => huggingfaceEnv(),
+    create: () => new HuggingFaceProvider(),
+    model: 'openai/gpt-oss-120b:fastest',
+    timeoutKey: 'HUGGINGFACE_TIMEOUT_MS',
+    authMessage: /Hugging Face authentication failed/,
+    rateMessage: /Hugging Face rate limit exceeded/,
+  },
+  {
+    name: 'Cohere',
+    setup: () => cohereEnv(),
+    create: () => new CohereProvider(),
+    model: 'command-a-plus-05-2026',
+    timeoutKey: 'COHERE_TIMEOUT_MS',
+    authMessage: /Cohere authentication failed/,
+    rateMessage: /Cohere rate limit exceeded/,
   },
 ]) {
   test(`${spec.name} normalizes auth errors`, async () => {
@@ -405,8 +584,7 @@ for (const spec of [
   test(`${spec.name} maps timeout to ProviderError TIMEOUT`, async () => {
     clearProviderEnv();
     spec.setup();
-    if (spec.name === 'Cloudflare') process.env.CLOUDFLARE_TIMEOUT_MS = '5';
-    else process.env.GITHUB_MODELS_TIMEOUT_MS = '5';
+    process.env[spec.timeoutKey] = '5';
     mockFetch(timeoutFetch);
 
     await assert.rejects(
@@ -420,15 +598,19 @@ for (const spec of [
   });
 }
 
-test('enabled Cloudflare and GitHub Models providers register in ProviderRouter registry', async () => {
+test('enabled Cloudflare, GitHub Models, Hugging Face, and Cohere providers register', async () => {
   clearProviderEnv();
   cloudflareEnv();
   githubEnv();
+  huggingfaceEnv();
+  cohereEnv();
 
   const registry = await createProviderRegistry({});
 
   assert.equal(registry.has('cloudflare'), true);
   assert.equal(registry.has('github-models'), true);
+  assert.equal(registry.has('huggingface'), true);
+  assert.equal(registry.has('cohere'), true);
 });
 
 test('hyphenated provider ID resolves GITHUB_MODELS_DEFAULT_MODEL', () => {
@@ -440,11 +622,20 @@ test('hyphenated provider ID resolves GITHUB_MODELS_DEFAULT_MODEL', () => {
   );
 });
 
+test('provider default model env resolves Hugging Face and Cohere', () => {
+  clearProviderEnv();
+  process.env.HUGGINGFACE_DEFAULT_MODEL = 'hf/model';
+  process.env.COHERE_DEFAULT_MODEL = 'cohere-model';
+
+  assert.equal(providerDefaultModelFromEnv('huggingface'), 'hf/model');
+  assert.equal(providerDefaultModelFromEnv('cohere'), 'cohere-model');
+});
+
 test('PROVIDER_ORDER is parsed and de-duplicated', () => {
-  process.env.PROVIDER_ORDER = 'github-models, cloudflare, github-models, groq';
+  process.env.PROVIDER_ORDER = 'huggingface, cohere, huggingface, groq';
   assert.deepEqual(
     configuredProviderOrder(),
-    ['github-models', 'cloudflare', 'groq']
+    ['huggingface', 'cohere', 'groq']
   );
 });
 
@@ -567,6 +758,72 @@ test('router falls back from GitHub Models to the next configured provider', asy
 
     const result = await router.chat(github, 'github-model', {
       model: 'github-model',
+      messages: [],
+    });
+
+    assert.equal(result.providerId, 'openrouter');
+    assert.equal(result.usedFallback, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('router falls back from Hugging Face to Cohere on retryable error', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'openclaw-provider-router-'));
+  process.env.PROVIDER_ORDER = 'huggingface,cohere';
+  try {
+    const huggingface = routerProvider('huggingface', 'rate-limit');
+    const cohere = routerProvider('cohere', 'ok');
+    const router = new ProviderRouter(
+      new Map([
+        ['huggingface', huggingface],
+        ['cohere', cohere],
+      ]),
+      {
+        enabled: true,
+        autoFallback: true,
+        autoSwitch: false,
+        maxAttempts: 2,
+        dataDir: dir,
+      }
+    );
+    await router.init();
+
+    const result = await router.chat(huggingface, 'hf-model', {
+      model: 'hf-model',
+      messages: [],
+    });
+
+    assert.equal(result.providerId, 'cohere');
+    assert.equal(result.usedFallback, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('router falls back from Cohere to the next configured provider', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'openclaw-provider-router-'));
+  process.env.PROVIDER_ORDER = 'cohere,openrouter';
+  try {
+    const cohere = routerProvider('cohere', 'rate-limit');
+    const openrouter = routerProvider('openrouter', 'ok');
+    const router = new ProviderRouter(
+      new Map([
+        ['cohere', cohere],
+        ['openrouter', openrouter],
+      ]),
+      {
+        enabled: true,
+        autoFallback: true,
+        autoSwitch: false,
+        maxAttempts: 2,
+        dataDir: dir,
+      }
+    );
+    await router.init();
+
+    const result = await router.chat(cohere, 'cohere-model', {
+      model: 'cohere-model',
       messages: [],
     });
 

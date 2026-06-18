@@ -21,12 +21,12 @@ export interface RoutingHint {
 
 // Provider preference tiers per task type
 const TASK_PREFERENCE: Record<TaskType, string[]> = {
-  fast_chat:  ['groq', 'sambanova', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'ollama'],
-  reasoning:  ['sambanova', 'gemini', 'github-models', 'cloudflare', 'openrouter', 'groq', 'ollama'],
+  fast_chat:  ['groq', 'sambanova', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'ollama'],
+  reasoning:  ['sambanova', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'ollama'],
   local:      ['ollama'],
-  vision:     ['gemini', 'github-models', 'openrouter', 'ollama'],
-  coding:     ['sambanova', 'groq', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'ollama'],
-  general:    ['groq', 'sambanova', 'mistral', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'ollama'],
+  vision:     ['gemini', 'github-models', 'openrouter', 'huggingface', 'cohere', 'ollama'],
+  coding:     ['sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'ollama'],
+  general:    ['groq', 'sambanova', 'mistral', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'ollama'],
 };
 
 // Default fallback chain
@@ -34,6 +34,8 @@ const DEFAULT_FALLBACK_CHAIN = [
   'groq',
   'sambanova',
   'mistral',
+  'huggingface',
+  'cohere',
   'cloudflare',
   'github-models',
   'openrouter',

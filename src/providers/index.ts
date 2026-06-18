@@ -19,6 +19,8 @@ export { ZaiProvider } from './zai';
 export { PuterProvider } from './puter';
 export { CloudflareProvider } from './cloudflare';
 export { GitHubModelsProvider } from './github-models';
+export { HuggingFaceProvider } from './huggingface';
+export { CohereProvider } from './cohere';
 export {
   parseProviderModels,
   providerDefaultModelFromEnv,
@@ -83,6 +85,20 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
       const { CloudflareProvider } = await import('./cloudflare.js');
       return new CloudflareProvider();
     }, 'cloudflare');
+  }
+
+  if (isEnabled(process.env['HUGGINGFACE_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { HuggingFaceProvider } = await import('./huggingface.js');
+      return new HuggingFaceProvider();
+    }, 'huggingface');
+  }
+
+  if (isEnabled(process.env['COHERE_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { CohereProvider } = await import('./cohere.js');
+      return new CohereProvider();
+    }, 'cohere');
   }
 
   if (isEnabled(process.env['GITHUB_MODELS_ENABLED'])) {
