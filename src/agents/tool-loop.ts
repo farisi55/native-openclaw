@@ -47,6 +47,7 @@ export interface ToolLoopOptions {
   temperature?: number;
   maxTokens?: number;
   preferredTool?: string | null;
+  enableTools?: boolean;
   enableRepair?: boolean;
   maxRepairAttempts?: number;
   /**
@@ -755,6 +756,7 @@ export class ToolLoop {
       temperature: opts.temperature ?? 0.7,
       maxTokens: opts.maxTokens ?? 4096,
       preferredTool: opts.preferredTool ?? null,
+      enableTools: opts.enableTools ?? true,
       enableRepair: opts.enableRepair ?? true,
       maxRepairAttempts: opts.maxRepairAttempts ?? 2,
       isScheduledEmailJob: opts.isScheduledEmailJob ?? false,
@@ -770,11 +772,13 @@ export class ToolLoop {
   ): Promise<ToolLoopResult> {
     // FIX: use conditional spread so optional fields are never explicitly `undefined`
     // (required by exactOptionalPropertyTypes — absent key ≠ key set to undefined)
-    const toolEntries = this.registry.listTools().map((t: RegisteredTool) => ({
-      name: t.manifest.name,
-      ...(t.manifest.description !== undefined && { description: t.manifest.description }),
-      ...(t.manifest.inputSchema !== undefined && { inputSchema: t.manifest.inputSchema as unknown }),
-    }));
+    const toolEntries = this.opts.enableTools
+      ? this.registry.listTools().map((t: RegisteredTool) => ({
+          name: t.manifest.name,
+          ...(t.manifest.description !== undefined && { description: t.manifest.description }),
+          ...(t.manifest.inputSchema !== undefined && { inputSchema: t.manifest.inputSchema as unknown }),
+        }))
+      : [];
 
     const availableTools = toolEntries.map((t) => t.name);
     const stepMessages: Message[] = [];
@@ -946,6 +950,7 @@ export class ToolLoop {
         messageCount: currentMessages.length,
         toolSteps,
         preferredTool: this.opts.preferredTool,
+        toolsEnabled: this.opts.enableTools,
       });
 
       // FIX: extractText imported at top — no inline require
@@ -954,11 +959,13 @@ export class ToolLoop {
         const response = await provider.chat({
           model,
           messages: currentMessages,
-          systemPrompt: appendToolContractToSystemPrompt(
-            systemPrompt,
-            toolContractBlock,
-            this.opts.preferredTool
-          ),
+          systemPrompt: this.opts.enableTools
+            ? appendToolContractToSystemPrompt(
+                systemPrompt,
+                toolContractBlock,
+                this.opts.preferredTool
+              )
+            : systemPrompt,
           temperature: this.opts.temperature,
           maxTokens: this.opts.maxTokens,
           ...(signal !== undefined && { signal }),

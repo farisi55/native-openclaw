@@ -899,6 +899,7 @@ export class Orchestrator {
       temperature: this.opts.temperature,
       maxTokens: this.opts.maxTokens,
       preferredTool: reasoningHint,
+      enableTools: !simpleChat,
       enableRepair: true,
       maxRepairAttempts: 2,
       isScheduledEmailJob: input.isScheduledEmailJob ?? false,

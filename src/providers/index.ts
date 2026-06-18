@@ -21,6 +21,7 @@ export { CloudflareProvider } from './cloudflare';
 export { GitHubModelsProvider } from './github-models';
 export { HuggingFaceProvider } from './huggingface';
 export { CohereProvider } from './cohere';
+export * from './discovery';
 export {
   parseProviderModels,
   providerDefaultModelFromEnv,

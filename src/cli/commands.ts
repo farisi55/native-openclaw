@@ -6,6 +6,11 @@
 import type { IProvider, ProviderRegistry } from '../types/provider';
 import { createMessage } from '../types/message';
 import { providerDefaultModelFromEnv } from '../providers/provider-env';
+import {
+  createProviderModelDiscoveryService,
+  type ProviderModelInfo,
+  type ProviderModelRegistryFilter,
+} from '../providers/discovery';
 import type { SkillRegistry } from '../skills/registry';
 import type { SessionManager, Session } from '../storage/session-manager';
 import type { SettingsManager } from '../storage/settings-manager';
@@ -185,6 +190,13 @@ export async function cmdAgents(
 // ─── /models ──────────────────────────────────────────────────────────────────
 
 export async function cmdModels(ctx: CLIContext, args: string[]): Promise<void> {
+  if (process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true') {
+    const filter = parseModelListArgs(ctx, args, 50);
+    await printUnifiedModels(ctx, filter);
+    process.stdout.write(c('dim', `  Tip: /model <id> to switch model\n\n`));
+    return;
+  }
+
   const targetId = args[0]?.toLowerCase();
 
   const providers = targetId
@@ -252,13 +264,37 @@ export async function cmdModel(ctx: CLIContext, args: string[]): Promise<void> {
     process.stdout.write(c('dim', `  ${hr('─', 50)}\n`));
     process.stdout.write(`  ${c('dim', 'Provider')}  ${c('magenta', ctx.activeProvider.displayName)}\n`);
     process.stdout.write(`  ${c('dim', 'Model   ')}  ${c('cyan', ctx.activeModel)}\n`);
-    process.stdout.write(c('dim', '\n  /model <id> to switch.  /models to list available.\n\n'));
+    if (process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true') {
+      process.stdout.write(c('dim', '\n  Available models for the active provider:\n\n'));
+      await printUnifiedModels(ctx, { providerId: ctx.activeProvider.id, limit: 30 }, false);
+      process.stdout.write(c('dim', '  /model <id> to switch.  /models to list all providers.\n\n'));
+    } else {
+      process.stdout.write(c('dim', '\n  /model <id> to switch.  /models to list available.\n\n'));
+    }
     return;
+  }
+
+  if (process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true') {
+    const first = args[0]?.toLowerCase();
+    if (first === 'search') {
+      await printUnifiedModels(ctx, { search: args.slice(1).join(' ').trim(), limit: 50 });
+      return;
+    }
+    if (first === '--provider' && args[1]) {
+      await printUnifiedModels(ctx, { providerId: args[1].toLowerCase(), limit: 50 });
+      return;
+    }
+    if (args.length === 1 && first && ctx.providers.has(first)) {
+      await printUnifiedModels(ctx, { providerId: first, limit: 50 });
+      return;
+    }
   }
 
   let modelExists = false;
   try {
-    const models = await ctx.activeProvider.listModels();
+    const models = process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true'
+      ? await createProviderModelDiscoveryService(ctx.providers).listProvider(ctx.activeProvider.id, { limit: 500 })
+      : await ctx.activeProvider.listModels();
     modelExists = models.some((m) => m.id === modelId);
   } catch {
     modelExists = true;
@@ -278,6 +314,100 @@ export async function cmdModel(ctx: CLIContext, args: string[]): Promise<void> {
 }
 
 // ─── /skills ──────────────────────────────────────────────────────────────────
+
+function contextWindowLabel(model: ProviderModelInfo): string {
+  const value = model.contextWindow;
+  if (!value || value <= 0) return '?';
+  return value >= 1000 ? `${Math.round(value / 1000)}k` : String(value);
+}
+
+function modelFlags(model: ProviderModelInfo): string {
+  return [
+    model.supportsTools === true ? c('cyan', 'tools') : c('dim', 'tools?'),
+    model.supportsVision ? c('blue', 'vision') : '',
+    c('dim', model.source),
+    model.status === 'tested-ok'
+      ? c('green', model.status)
+      : model.status === 'tested-failed'
+      ? c('red', model.status)
+      : c('dim', model.status ?? 'untested'),
+  ].filter(Boolean).join(' ');
+}
+
+function printModelLine(ctx: CLIContext, model: ProviderModelInfo): void {
+  const active = model.providerId === ctx.activeProvider.id && model.id === ctx.activeModel;
+  const marker = active ? c('green', '*') : ' ';
+  const id = model.id.length > 48 ? `${model.id.slice(0, 45)}...` : model.id;
+  process.stdout.write(
+    `  ${marker} ${c('white', id.padEnd(48))} ${c('dim', contextWindowLabel(model).padStart(5))} ${modelFlags(model)}\n`
+  );
+}
+
+function parseModelListArgs(ctx: CLIContext, args: string[], defaultLimit: number): ProviderModelRegistryFilter {
+  const filter: ProviderModelRegistryFilter = { limit: defaultLimit };
+  const [first, second] = args;
+  if (!first) return filter;
+
+  if (first === 'search') {
+    filter.search = args.slice(1).join(' ').trim();
+    return filter;
+  }
+  if (first === '--provider' && second) {
+    filter.providerId = second.toLowerCase();
+    return filter;
+  }
+  if (first === '--source' && second) {
+    if (['configured', 'discovered', 'custom', 'curated'].includes(second)) {
+      filter.source = second as NonNullable<ProviderModelRegistryFilter['source']>;
+    }
+    return filter;
+  }
+  if (first === '--limit' && second) {
+    const parsed = Number.parseInt(second, 10);
+    filter.limit = Number.isFinite(parsed) ? parsed : defaultLimit;
+    return filter;
+  }
+  if (first === '--tested-only') {
+    filter.testedOnly = true;
+    return filter;
+  }
+  if (ctx.providers.has(first.toLowerCase())) {
+    filter.providerId = first.toLowerCase();
+    return filter;
+  }
+  filter.search = args.join(' ').trim();
+  return filter;
+}
+
+async function printUnifiedModels(
+  ctx: CLIContext,
+  filter: ProviderModelRegistryFilter,
+  includeHeader = true
+): Promise<void> {
+  const discovery = createProviderModelDiscoveryService(ctx.providers);
+  const models = await discovery.list(filter);
+  const providerIds = filter.providerId
+    ? [filter.providerId]
+    : [...new Set(models.map((model) => model.providerId))];
+
+  if (includeHeader) process.stdout.write('\n');
+  if (models.length === 0) {
+    process.stdout.write(c('dim', '  No models found.\n\n'));
+    return;
+  }
+
+  for (const providerId of providerIds) {
+    const provider = ctx.providers.get(providerId);
+    const providerModels = models.filter((model) => model.providerId === providerId);
+    if (providerModels.length === 0) continue;
+    process.stdout.write(
+      `  ${c('bold', c('magenta', provider?.displayName ?? providerId))} ${c('dim', `(${providerId})`)}\n`
+    );
+    process.stdout.write(c('dim', `  ${hr('-', 72)}\n`));
+    for (const model of providerModels) printModelLine(ctx, model);
+    process.stdout.write('\n');
+  }
+}
 
 export function cmdSkills(ctx: CLIContext, args: string[]): void {
   const [action, id] = args;
@@ -499,6 +629,119 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
   return null;
 }
 
+async function runProviderModelsCommand(ctx: CLIContext, args: string[]): Promise<void> {
+  const [action, providerId, ...rest] = args;
+  const discovery = createProviderModelDiscoveryService(ctx.providers);
+
+  if (!action || action === 'help') {
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Provider Model Discovery')}\n`);
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
+    process.stdout.write(c('dim', '  /provider models refresh [provider]\n'));
+    process.stdout.write(c('dim', '  /provider models list [provider]\n'));
+    process.stdout.write(c('dim', '  /provider models cache\n'));
+    process.stdout.write(c('dim', '  /provider models clear-cache\n'));
+    process.stdout.write(c('dim', '  /provider models add <provider> <model>\n'));
+    process.stdout.write(c('dim', '  /provider models remove <provider> <model>\n'));
+    process.stdout.write(c('dim', '  /provider models test <provider> <model>\n\n'));
+    return;
+  }
+
+  if (action === 'refresh') {
+    const results = await discovery.refresh(providerId);
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Provider Model Discovery Refresh')}\n`);
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
+    for (const result of results) {
+      if (result.ok) {
+        process.stdout.write(c('green', `  ${result.providerId}: ${result.models.length} model(s) discovered\n`));
+      } else {
+        const level = result.skipped ? 'yellow' : 'red';
+        process.stdout.write(c(level, `  ${result.providerId}: ${result.error?.message ?? 'refresh failed'}\n`));
+      }
+    }
+    process.stdout.write(c('dim', `\n  Cache: ${discovery.cachePath}\n\n`));
+    return;
+  }
+
+  if (action === 'list') {
+    await printUnifiedModels(ctx, { ...(providerId ? { providerId } : {}), limit: 100 });
+    return;
+  }
+
+  if (action === 'cache') {
+    const summary = await discovery.cacheSummary();
+    process.stdout.write('\n');
+    process.stdout.write(`  ${c('bold', 'Provider Model Cache')}\n`);
+    process.stdout.write(c('dim', `  ${hr('-', 56)}\n`));
+    process.stdout.write(`  ${c('dim', 'Path')} ${summary.path}\n\n`);
+    process.stdout.write(c('dim', '  Discovered:\n'));
+    if (summary.providers.length === 0) process.stdout.write(c('dim', '    none\n'));
+    for (const provider of summary.providers) {
+      process.stdout.write(`    ${provider.providerId.padEnd(16)} ${provider.models} model(s)`);
+      if (provider.updatedAt) process.stdout.write(c('dim', ` updated ${provider.updatedAt}`));
+      if (provider.lastError) process.stdout.write(c('yellow', ` error: ${provider.lastError}`));
+      process.stdout.write('\n');
+    }
+    process.stdout.write(c('dim', '\n  Custom:\n'));
+    if (summary.custom.length === 0) process.stdout.write(c('dim', '    none\n'));
+    for (const custom of summary.custom) {
+      process.stdout.write(`    ${custom.providerId.padEnd(16)} ${custom.models} model(s)\n`);
+    }
+    process.stdout.write('\n');
+    return;
+  }
+
+  if (action === 'clear-cache') {
+    await discovery.clearCache();
+    process.stdout.write(c('green', `\n  Provider model cache cleared: ${discovery.cachePath}\n\n`));
+    return;
+  }
+
+  if (action === 'add') {
+    const model = rest.join(' ').trim();
+    if (!providerId || !model) {
+      process.stdout.write(c('yellow', '\n  Usage: /provider models add <provider> <model>\n\n'));
+      return;
+    }
+    await discovery.addCustomModel(providerId, model);
+    process.stdout.write(c('green', `\n  Custom model added: ${providerId}/${model}\n\n`));
+    return;
+  }
+
+  if (action === 'remove') {
+    const model = rest.join(' ').trim();
+    if (!providerId || !model) {
+      process.stdout.write(c('yellow', '\n  Usage: /provider models remove <provider> <model>\n\n'));
+      return;
+    }
+    const removed = await discovery.removeCustomModel(providerId, model);
+    process.stdout.write(
+      removed
+        ? c('green', `\n  Custom model removed: ${providerId}/${model}\n\n`)
+        : c('yellow', `\n  Custom model not found: ${providerId}/${model}\n\n`)
+    );
+    return;
+  }
+
+  if (action === 'test') {
+    const model = rest.join(' ').trim();
+    if (!providerId || !model) {
+      process.stdout.write(c('yellow', '\n  Usage: /provider models test <provider> <model>\n\n'));
+      return;
+    }
+    const result = await discovery.testModel(providerId, model);
+    process.stdout.write(
+      result.ok
+        ? c('green', `\n  ${providerId}/${model}: tested-ok (${result.message})\n\n`)
+        : c('red', `\n  ${providerId}/${model}: tested-failed (${result.message})\n\n`)
+    );
+    return;
+  }
+
+  process.stdout.write(c('yellow', '\n  Usage: /provider models [refresh|list|cache|clear-cache|add|remove|test] ...\n\n'));
+}
+
 async function runProviderDoctor(ctx: CLIContext, providerId: string | undefined): Promise<void> {
   if (!providerId) {
     process.stdout.write(c('dim', '\n  Usage: /provider doctor <provider-id>\n\n'));
@@ -536,6 +779,11 @@ async function runProviderDoctor(ctx: CLIContext, providerId: string | undefined
 export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void> {
   const [targetId, doctorProviderId] = args;
 
+  if (targetId === 'models') {
+    await runProviderModelsCommand(ctx, args.slice(1));
+    return;
+  }
+
   if (targetId === 'doctor') {
     await runProviderDoctor(ctx, doctorProviderId);
     return;
@@ -554,7 +802,7 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
       const marker = active ? c('green', '▶') : ' ';
       process.stdout.write(`  ${marker} ${c('white', id.padEnd(15))} ${c('dim', p.displayName)}\n`);
     }
-    process.stdout.write(c('dim', '\n  /provider <id>  |  /provider doctor <id>  |  /model <id>\n'));
+    process.stdout.write(c('dim', '\n  /provider <id>  |  /provider doctor <id>  |  /provider models help  |  /model <id>\n'));
     process.stdout.write('\n');
     return;
   }
@@ -580,7 +828,9 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
   } else {
     // Step 3: try listModels
     try {
-      const models = await provider.listModels();
+      const models = process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true'
+        ? await createProviderModelDiscoveryService(ctx.providers).listProvider(targetId, { limit: 100 })
+        : await provider.listModels();
       const first = models[0];
       model = first ? first.id : (providerDefaultModelFromEnv(targetId) ?? 'unknown');
     } catch {

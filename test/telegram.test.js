@@ -280,9 +280,9 @@ test('Telegram /help command replies', async () => {
     const handled = await integration.handleIncomingText('123', '/help');
     assert.equal(handled, true);
     assert.equal(actions.length, 1);
-    assert.equal(sent.length, 2);
+    assert.ok(sent.length >= 2);
     assert.equal(sent[0].text, 'Sedang diproses...');
-    assert.match(sent[1].text, /Command Reference/);
+    assert.match(sent.slice(1).map((msg) => msg.text).join('\n'), /Command Reference/);
   });
 });
 

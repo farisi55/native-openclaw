@@ -56,6 +56,78 @@ function provider(responses) {
   };
 }
 
+test('enableTools=false does not inject tool contract into the provider system prompt', async () => {
+  const tools = {
+    'test-tool': async () => 'TOOL_OUTPUT_42',
+  };
+  let receivedSystemPrompt = '';
+  const plainProvider = {
+    id: 'mock',
+    displayName: 'Mock',
+    async listModels() {
+      return [];
+    },
+    async chat(options) {
+      receivedSystemPrompt = options.systemPrompt;
+      return {
+        message: createMessage({ role: 'assistant', content: 'Halo!' }),
+        model: 'mock',
+        latencyMs: 1,
+      };
+    },
+  };
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 1, enableTools: false });
+  const result = await loop.run(
+    plainProvider,
+    'mock',
+    [createMessage({ role: 'user', content: 'hello' })],
+    'short system prompt'
+  );
+
+  assert.equal(result.finalText, 'Halo!');
+  assert.equal(receivedSystemPrompt, 'short system prompt');
+  assert.doesNotMatch(receivedSystemPrompt, /AVAILABLE TOOLS/);
+  assert.doesNotMatch(receivedSystemPrompt, /test-tool/);
+});
+
+test('enableTools defaults to true and injects the tool contract', async () => {
+  const tools = {
+    'test-tool': async () => 'TOOL_OUTPUT_42',
+  };
+  let receivedSystemPrompt = '';
+  const toolAwareProvider = {
+    id: 'mock',
+    displayName: 'Mock',
+    async listModels() {
+      return [];
+    },
+    async chat(options) {
+      receivedSystemPrompt = options.systemPrompt;
+      return {
+        message: createMessage({
+          role: 'assistant',
+          content: JSON.stringify({ type: 'final_response', content: 'Done.' }),
+        }),
+        model: 'mock',
+        latencyMs: 1,
+      };
+    },
+  };
+
+  const loop = new ToolLoop(registry(tools), { maxSteps: 1 });
+  const result = await loop.run(
+    toolAwareProvider,
+    'mock',
+    [createMessage({ role: 'user', content: 'use tool if needed' })],
+    'system'
+  );
+
+  assert.equal(result.finalText, 'Done.');
+  assert.match(receivedSystemPrompt, /AVAILABLE TOOLS/);
+  assert.match(receivedSystemPrompt, /test-tool/);
+});
+
 test('Valid tool call executes tool and injects result into next message', async () => {
   const tools = {
     'test-tool': async () => 'TOOL_OUTPUT_42',

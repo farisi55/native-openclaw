@@ -165,10 +165,75 @@ Jalankan `/help` di dalam REPL untuk melihat semua command.
 | `/providers` | Tampilkan semua provider |
 | `/provider <id>` | Ganti provider |
 | `/provider doctor <id>` | Smoke test minimal untuk provider |
+| `/provider models refresh [provider]` | Refresh katalog model provider secara on-demand |
+| `/provider models list [provider]` | List configured + discovered + custom + curated models |
+| `/provider models cache` | Tampilkan path dan ringkasan cache katalog model |
+| `/provider models clear-cache` | Hapus cache katalog model |
+| `/provider models add <provider> <model>` | Tambahkan custom model lokal |
+| `/provider models remove <provider> <model>` | Hapus custom model lokal |
+| `/provider models test <provider> <model>` | Smoke test satu model dan simpan status |
 | `/model` | Tampilkan model aktif |
 | `/model <model-id>` | Ganti model |
+| `/model <provider>` | List model untuk provider tertentu |
+| `/model search <text>` | Cari model di unified registry |
 | `/models` | List semua model dari semua provider |
 | `/models <provider>` | List model untuk satu provider |
+
+### Provider Model Discovery
+
+`/model` dan `/models` membaca unified model registry ringan:
+
+```text
+curated + configured + custom + discovered
+```
+
+Sumber model:
+
+- `configured`: daftar dari env/provider adapter, misalnya `HUGGINGFACE_MODELS`.
+- `discovered`: hasil refresh katalog remote via `/provider models refresh`.
+- `custom`: model yang ditambahkan manual via `/provider models add`.
+- `curated`: rekomendasi built-in agar provider tetap punya model yang masuk akal walau discovery gagal.
+
+Provider yang punya adapter katalog khusus memakai endpoint discovery native provider tersebut. Provider registered lain tetap ikut discovery melalui `provider.listModels()` sehingga model dari `ollama`, `openrouter`, `groq`, `mistral`, `gemini`, `sambanova`, dan `zai` dapat masuk cache saat refresh jika provider tersedia.
+
+Refresh katalog tidak berjalan saat startup kecuali:
+
+```env
+PROVIDER_MODEL_DISCOVERY_AUTO_REFRESH=true
+```
+
+Default-nya on-demand:
+
+```text
+/provider models refresh github-models
+/provider models refresh huggingface
+/provider models refresh cloudflare
+/provider models refresh cohere
+/provider models list huggingface
+/provider models add huggingface deepseek-ai/DeepSeek-V3:fireworks-ai
+/provider models test huggingface openai/gpt-oss-120b:fastest
+```
+
+Cache disimpan atomik di:
+
+```text
+data/provider-model-cache.json
+```
+
+Pada Docker, arahkan cache ke volume persist:
+
+```env
+PROVIDER_MODEL_DISCOVERY_CACHE_PATH=/app/data/provider-model-cache.json
+```
+
+Catatan provider:
+
+- GitHub Models memakai catalog API `https://models.github.ai/catalog/models`.
+- Cohere memakai List Models API `/v1/models` dengan pagination dan filter `endpoint=chat`.
+- Hugging Face memakai Hub API `/api/models` dengan `inference_provider` dan `pipeline_tag`; format Router yang dipakai Native OpenClaw adalah `model-id:provider`.
+- Cloudflare Workers AI tetap memakai configured + curated models secara default. Remote catalog discovery Cloudflare dimatikan kecuali `CLOUDFLARE_DISCOVERY_ENABLED=true`, karena endpoint katalog model tidak stabil/tersedia untuk semua account token. Jika discovery dimatikan atau endpoint tidak tersedia, `/model` tetap menampilkan configured + curated models.
+- Provider lain memakai generic `provider.listModels()` discovery. Untuk provider yang tidak menyediakan remote `/models`, hasilnya bisa berupa static/configured model list dari adapter provider.
+- API key tidak disimpan di cache dan tidak dicetak ke log.
 
 ### Sessions
 

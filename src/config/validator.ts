@@ -165,6 +165,10 @@ function validateEnabledOpenAiCompatProvider(input: {
 function validateProviderEnvironment(): void {
   validatePositiveTimeout('CLOUDFLARE_TIMEOUT_MS');
   validatePositiveTimeout('GITHUB_MODELS_TIMEOUT_MS');
+  validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS');
+  validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_CACHE_TTL_HOURS');
+  validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_MAX_MODELS_PER_PROVIDER');
+  validatePositiveTimeout('HUGGINGFACE_DISCOVERY_LIMIT_PER_PROVIDER');
   validateEnabledOpenAiCompatProvider({
     enabledKey: 'HUGGINGFACE_ENABLED',
     keyCandidates: ['HUGGINGFACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],

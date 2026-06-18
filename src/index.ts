@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { createLogger, setRootLogLevel } from './utils/logger';
 import { createProviderRegistry } from './providers';
+import { createProviderModelDiscoveryService } from './providers/discovery';
 import { providerDefaultModelFromEnv } from './providers/provider-env';
 import { SkillRegistry } from './skills';
 import { SessionManager, SettingsManager, MemoryManager } from './storage';
@@ -265,6 +266,24 @@ async function bootstrap(): Promise<void> {
 
   await router.init();
   logger.info(`Router: ${routerEnabled ? 'enabled' : 'disabled'}, autoFallback: ${autoFallback}`);
+
+  if (getEnvBool('PROVIDER_MODEL_DISCOVERY_ENABLED', true) &&
+      getEnvBool('PROVIDER_MODEL_DISCOVERY_AUTO_REFRESH', false)) {
+    const discovery = createProviderModelDiscoveryService(providers);
+    void discovery.refresh()
+      .then((results) => {
+        logger.info('Provider model discovery auto-refresh finished', {
+          ok: results.filter((result) => result.ok).length,
+          failed: results.filter((result) => !result.ok && !result.skipped).length,
+          skipped: results.filter((result) => result.skipped).length,
+        });
+      })
+      .catch((err: unknown) => {
+        logger.warn('Provider model discovery auto-refresh failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
 
   const skillRegistry = new SkillRegistry();
   await skillRegistry.load();
