@@ -34,10 +34,12 @@ const logger = createLogger('providers');
 export async function createProviderRegistry(_config: AppConfig): Promise<ProviderRegistry> {
   const registry: ProviderRegistry = new Map();
 
-  await tryRegister(registry, async () => {
-    const { OllamaProvider } = await import('./ollama.js');
-    return new OllamaProvider();
-  }, 'ollama');
+  if (isEnabled(process.env['OLLAMA_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { OllamaProvider } = await import('./ollama.js');
+      return new OllamaProvider();
+    }, 'ollama');
+  }
 
   if (process.env['OPENROUTER_API_KEY']) {
     await tryRegister(registry, async () => {

@@ -15,7 +15,10 @@ const PROVIDER_ENV_KEYS = [
   'MISTRAL_API_KEY',
   'OPENROUTER_API_KEY',
   'PUTER_API_KEY',
+  'OLLAMA_ENABLED',
   'OLLAMA_BASE_URL',
+  'OLLAMA_DEFAULT_MODEL',
+  'OLLAMA_TIMEOUT_MS',
   'CLOUDFLARE_AI_ENABLED',
   'CLOUDFLARE_API_KEY',
   'CLOUDFLARE_ACCOUNT_ID',
@@ -67,9 +70,18 @@ test('validateConfig throws when no provider keys are set', () => {
   });
 });
 
-test('validateConfig does NOT throw when OLLAMA_BASE_URL is set', () => {
-  withProviderEnv({ OLLAMA_BASE_URL: 'http://localhost:11434' }, () => {
+test('validateConfig does NOT throw when OLLAMA_ENABLED=true', () => {
+  withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_BASE_URL: 'http://localhost:11434' }, () => {
     assert.doesNotThrow(() => validateConfig());
+  });
+});
+
+test('validateConfig validates Ollama URL and timeout when enabled', () => {
+  withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_BASE_URL: 'not-a-url' }, () => {
+    assert.throws(() => validateConfig(), /OLLAMA_BASE_URL/);
+  });
+  withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_TIMEOUT_MS: '0' }, () => {
+    assert.throws(() => validateConfig(), /OLLAMA_TIMEOUT_MS/);
   });
 });
 

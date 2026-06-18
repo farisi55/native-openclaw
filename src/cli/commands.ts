@@ -27,6 +27,7 @@ import {
   getDnsServers,
   getProxyConfig,
   maskProxyUrl,
+  networkFetch,
   networkCheck,
 } from '../network';
 import {
@@ -292,9 +293,12 @@ export async function cmdModel(ctx: CLIContext, args: string[]): Promise<void> {
 
   let modelExists = false;
   try {
-    const models = process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true'
+    let models = process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true'
       ? await createProviderModelDiscoveryService(ctx.providers).listProvider(ctx.activeProvider.id, { limit: 500 })
       : await ctx.activeProvider.listModels();
+    if (models.length === 0 && process.env['PROVIDER_MODEL_REGISTRY_DISABLED'] !== 'true') {
+      models = await ctx.activeProvider.listModels();
+    }
     modelExists = models.some((m) => m.id === modelId);
   } catch {
     modelExists = true;
@@ -343,6 +347,35 @@ function printModelLine(ctx: CLIContext, model: ProviderModelInfo): void {
   );
 }
 
+async function directProviderModelFallback(
+  ctx: CLIContext,
+  providerId: string,
+  limit: number
+): Promise<ProviderModelInfo[]> {
+  const provider = ctx.providers.get(providerId);
+  if (!provider) return [];
+
+  try {
+    const models = await provider.listModels();
+    return models.slice(0, limit).map((model): ProviderModelInfo => {
+      const info: ProviderModelInfo = {
+        id: model.id,
+        providerId,
+        source: 'configured',
+        status: 'unknown',
+      };
+      if (model.name) info.displayName = model.name;
+      if (model.contextWindow !== undefined) info.contextWindow = model.contextWindow;
+      if (model.maxOutputTokens !== undefined) info.raw = { maxOutputTokens: model.maxOutputTokens };
+      if (model.supportsTools !== undefined) info.supportsTools = model.supportsTools;
+      if (model.supportsVision !== undefined) info.supportsVision = model.supportsVision;
+      return info;
+    });
+  } catch {
+    return [];
+  }
+}
+
 function parseModelListArgs(ctx: CLIContext, args: string[], defaultLimit: number): ProviderModelRegistryFilter {
   const filter: ProviderModelRegistryFilter = { limit: defaultLimit };
   const [first, second] = args;
@@ -385,7 +418,10 @@ async function printUnifiedModels(
   includeHeader = true
 ): Promise<void> {
   const discovery = createProviderModelDiscoveryService(ctx.providers);
-  const models = await discovery.list(filter);
+  let models = await discovery.list(filter);
+  if (models.length === 0 && filter.providerId && !filter.source && !filter.testedOnly) {
+    models = await directProviderModelFallback(ctx, filter.providerId, filter.limit ?? 50);
+  }
   const providerIds = filter.providerId
     ? [filter.providerId]
     : [...new Set(models.map((model) => model.providerId))];
@@ -597,6 +633,9 @@ export async function cmdSession(ctx: CLIContext, args: string[]): Promise<void>
 // ─── /provider ────────────────────────────────────────────────────────────────
 
 function providerDoctorConfigurationIssue(providerId: string): string | null {
+  if (providerId === 'ollama') {
+    if (!envEnabled(process.env['OLLAMA_ENABLED'])) return 'Ollama disabled.';
+  }
   if (providerId === 'cloudflare') {
     if (process.env['CLOUDFLARE_AI_ENABLED'] !== 'true') return 'Cloudflare disabled.';
     if (!process.env['CLOUDFLARE_API_KEY']?.trim()) return 'Missing CLOUDFLARE_API_KEY.';
@@ -627,6 +666,106 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
     if (!process.env['COHERE_API_KEY']?.trim()) return 'Missing COHERE_API_KEY.';
   }
   return null;
+}
+
+function envEnabled(value: string | undefined): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((value ?? '').trim().toLowerCase());
+}
+
+function ollamaBaseUrl(): string {
+  return (process.env['OLLAMA_BASE_URL']?.trim() || 'http://localhost:11434').replace(/\/$/, '');
+}
+
+function ollamaBaseUrlCandidates(): string[] {
+  const primary = ollamaBaseUrl();
+  const urls = [primary];
+
+  try {
+    const parsed = new URL(primary);
+    const port = parsed.port ? `:${parsed.port}` : ':11434';
+    const protocol = parsed.protocol || 'http:';
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'ollama' || host === 'host.docker.internal') {
+      urls.push(`${protocol}//localhost${port}`);
+      urls.push(`${protocol}//127.0.0.1${port}`);
+    } else if (host === 'localhost') {
+      urls.push(`${protocol}//127.0.0.1${port}`);
+    } else if (host === '127.0.0.1') {
+      urls.push(`${protocol}//localhost${port}`);
+    }
+  } catch {
+    // Keep the configured value; validation/doctor output will report failure.
+  }
+
+  return [...new Set(urls.map((url) => url.replace(/\/$/, '')))];
+}
+
+function ollamaDefaultModel(): string {
+  return process.env['OLLAMA_DEFAULT_MODEL']?.trim() || 'qwen2.5:0.5b';
+}
+
+async function fetchOllamaTags(): Promise<{ baseUrl: string; models: string[] }> {
+  const timeoutMs = Number.parseInt(process.env['OLLAMA_TIMEOUT_MS'] ?? '120000', 10);
+  let firstError: unknown;
+
+  for (const baseUrl of ollamaBaseUrlCandidates()) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 120_000);
+    try {
+      const response = await networkFetch(`${baseUrl}/api/tags`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json() as { models?: Array<{ name?: unknown; model?: unknown }> };
+      const models = (data.models ?? [])
+        .map((model) => typeof model.name === 'string' ? model.name : typeof model.model === 'string' ? model.model : '')
+        .filter(Boolean);
+      return { baseUrl, models };
+    } catch (error) {
+      firstError ??= error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw firstError;
+}
+
+async function runOllamaDoctor(provider: IProvider): Promise<void> {
+  const model = ollamaDefaultModel();
+
+  let installedModels: string[];
+  let activeBaseUrl = ollamaBaseUrl();
+  try {
+    const result = await fetchOllamaTags();
+    installedModels = result.models;
+    activeBaseUrl = result.baseUrl;
+  } catch {
+    process.stdout.write(c('red', `\n  ollama: Ollama server unavailable at ${ollamaBaseUrl()}.\n`));
+    process.stdout.write(c('dim', '  If Native OpenClaw runs on your host machine, use OLLAMA_BASE_URL=http://localhost:11434.\n\n'));
+    return;
+  }
+
+  if (!installedModels.includes(model)) {
+    process.stdout.write(c('yellow', `\n  ollama: Model ${model} not found. Run: ollama pull ${model}.\n\n`));
+    return;
+  }
+
+  try {
+    await provider.chat({
+      model,
+      messages: [createMessage({ role: 'user', content: 'Reply with exactly: OK' })],
+      temperature: 0,
+      maxTokens: 4,
+    });
+    process.stdout.write(c('green', `\n  ollama: Ollama OK at ${activeBaseUrl}.\n\n`));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(c('red', `\n  ollama: Ollama chat failed: ${message}\n\n`));
+  }
 }
 
 async function runProviderModelsCommand(ctx: CLIContext, args: string[]): Promise<void> {
@@ -755,6 +894,11 @@ async function runProviderDoctor(ctx: CLIContext, providerId: string | undefined
     return;
   }
 
+  if (providerId === 'ollama') {
+    await runOllamaDoctor(provider);
+    return;
+  }
+
   try {
     const models = await provider.listModels();
     const model = providerDefaultModelFromEnv(providerId) ?? models[0]?.id;
@@ -810,6 +954,11 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
   const provider = ctx.providers.get(targetId);
   if (!provider) {
     process.stdout.write(c('red', `\n  Provider "${targetId}" not found.\n`));
+    if (targetId === 'ollama') {
+      process.stdout.write(c('yellow', '  Ollama is installed locally only after the provider is enabled in Native OpenClaw.\n'));
+      process.stdout.write(c('dim', '  Local host setup: set OLLAMA_ENABLED=true and OLLAMA_BASE_URL=http://localhost:11434, then restart.\n'));
+      process.stdout.write(c('dim', '  Docker setup: use OLLAMA_BASE_URL=http://ollama:11434 with docker compose --profile ollama up -d.\n'));
+    }
     process.stdout.write(c('dim', `  Available: ${[...ctx.providers.keys()].join(', ')}\n\n`));
     return;
   }

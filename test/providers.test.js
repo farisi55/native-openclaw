@@ -14,6 +14,7 @@ const {
   PuterProvider,
 } = require('../dist/providers');
 const { createMessage } = require('../dist/types/message');
+const { cmdModel, cmdProvider } = require('../dist/cli/commands');
 
 const originalFetch = global.fetch;
 const originalEnv = {
@@ -23,7 +24,12 @@ const originalEnv = {
   GROQ_BASE_URL: process.env.GROQ_BASE_URL,
   MISTRAL_API_KEY: process.env.MISTRAL_API_KEY,
   MISTRAL_BASE_URL: process.env.MISTRAL_BASE_URL,
+  OLLAMA_ENABLED: process.env.OLLAMA_ENABLED,
   OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+  OLLAMA_DEFAULT_MODEL: process.env.OLLAMA_DEFAULT_MODEL,
+  OLLAMA_MODELS: process.env.OLLAMA_MODELS,
+  OLLAMA_TIMEOUT_MS: process.env.OLLAMA_TIMEOUT_MS,
+  PROVIDER_MODEL_DISCOVERY_SHOW_UNTESTED: process.env.PROVIDER_MODEL_DISCOVERY_SHOW_UNTESTED,
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
   OPENROUTER_SITE_NAME: process.env.OPENROUTER_SITE_NAME,
@@ -114,6 +120,23 @@ function setPuterEnv(overrides = {}) {
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = String(value);
+  }
+}
+
+async function captureStdout(fn) {
+  const originalWrite = process.stdout.write;
+  let output = '';
+  process.stdout.write = ((chunk, ...args) => {
+    output += String(chunk);
+    const callback = args.find((arg) => typeof arg === 'function');
+    if (callback) callback();
+    return true;
+  });
+  try {
+    await fn();
+    return output.replace(/\x1b\[[0-9;]*m/g, '');
+  } finally {
+    process.stdout.write = originalWrite;
   }
 }
 
@@ -363,6 +386,7 @@ test('Gemini listModels() falls back gracefully when API returns 401', async () 
 });
 
 test('Ollama chat() sends request to configured base URL', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
   process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
   let calledUrl = '';
 
@@ -387,8 +411,96 @@ test('Ollama chat() sends request to configured base URL', async () => {
   assert.equal(response.message.content, 'hello world');
 });
 
-test('Ollama listModels() returns empty array when server is unreachable', async () => {
+test('Ollama chat() uses qwen2.5 default model when no model is provided', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
   process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+  delete process.env.OLLAMA_DEFAULT_MODEL;
+  delete process.env.OLLAMA_MODELS;
+  let body;
+
+  mockFetch((_url, init) => {
+    body = JSON.parse(init.body);
+    return okJson({
+      model: body.model,
+      message: { role: 'assistant', content: 'hello world' },
+      done: true,
+    });
+  });
+
+  const provider = new OllamaProvider();
+  await provider.chat({
+    messages: [createMessage({ role: 'user', content: 'hello' })],
+  });
+
+  assert.equal(body.model, 'qwen2.5:0.5b');
+});
+
+test('Ollama chat() falls back from Docker hostname to local host endpoint', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+  process.env.OLLAMA_DEFAULT_MODEL = 'qwen2.5:0.5b';
+  const calledUrls = [];
+
+  mockFetch((url) => {
+    calledUrls.push(url);
+    if (url.startsWith('http://ollama:11434')) {
+      throw new Error('getaddrinfo ENOTFOUND ollama');
+    }
+    return okJson({
+      model: 'qwen2.5:0.5b',
+      message: { role: 'assistant', content: 'local ok' },
+      done: true,
+    });
+  });
+
+  const provider = new OllamaProvider();
+  const response = await provider.chat({
+    model: 'qwen2.5:0.5b',
+    messages: [createMessage({ role: 'user', content: 'hai' })],
+  });
+
+  assert.deepEqual(calledUrls, [
+    'http://ollama:11434/api/chat',
+    'http://localhost:11434/api/chat',
+  ]);
+  assert.equal(response.message.content, 'local ok');
+});
+
+test('Ollama listModels() falls back from Docker hostname to local installed models', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+  process.env.OLLAMA_DEFAULT_MODEL = 'qwen2.5:0.5b';
+  const calledUrls = [];
+
+  mockFetch((url) => {
+    calledUrls.push(url);
+    if (url.startsWith('http://ollama:11434')) {
+      throw new Error('getaddrinfo ENOTFOUND ollama');
+    }
+    return okJson({
+      models: [
+        { name: 'qwen3.6', model: 'qwen3.6' },
+        { name: 'llama3.2', model: 'llama3.2' },
+      ],
+    });
+  });
+
+  const provider = new OllamaProvider();
+  const models = await provider.listModels();
+
+  assert.deepEqual(calledUrls, [
+    'http://ollama:11434/api/tags',
+    'http://localhost:11434/api/tags',
+  ]);
+  assert.ok(models.some((model) => model.id === 'qwen3.6'));
+  assert.ok(models.some((model) => model.id === 'llama3.2'));
+  assert.ok(models.some((model) => model.id === 'qwen2.5:0.5b'));
+});
+
+test('Ollama listModels() falls back to configured model when server is unreachable', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+  process.env.OLLAMA_DEFAULT_MODEL = 'qwen2.5:0.5b';
 
   mockFetch(() => {
     throw new Error('ECONNREFUSED');
@@ -397,5 +509,93 @@ test('Ollama listModels() returns empty array when server is unreachable', async
   const provider = new OllamaProvider();
   const models = await provider.listModels();
 
-  assert.deepEqual(models, []);
+  assert.equal(models[0].id, 'qwen2.5:0.5b');
+});
+
+test('Ollama listModels includes configured default model with qwen2.5 smoke default', async () => {
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+  delete process.env.OLLAMA_DEFAULT_MODEL;
+  delete process.env.OLLAMA_MODELS;
+
+  mockFetch(() => okJson({ models: [] }));
+
+  const provider = new OllamaProvider();
+  const models = await provider.listModels();
+
+  assert.ok(models.some((model) => model.id === 'qwen2.5:0.5b'));
+});
+
+test('/model falls back to active provider list when registry hides untested local models', async () => {
+  process.env.PROVIDER_MODEL_DISCOVERY_SHOW_UNTESTED = 'false';
+  const provider = {
+    id: 'ollama',
+    displayName: 'Ollama (local)',
+    async listModels() {
+      return [
+        { id: 'qwen2.5:0.5b', name: 'qwen2.5:0.5b' },
+        { id: 'llama3.2', name: 'llama3.2' },
+      ];
+    },
+    async chat() {
+      throw new Error('not used');
+    },
+  };
+
+  const output = await captureStdout(() =>
+    cmdModel({
+      activeProvider: provider,
+      activeModel: 'qwen2.5:0.5b',
+      providers: new Map([['ollama', provider]]),
+    }, [])
+  );
+
+  assert.match(output, /qwen2\.5:0\.5b/);
+  assert.match(output, /llama3\.2/);
+  assert.doesNotMatch(output, /No models found/);
+});
+
+test('Ollama provider doctor reports disabled, unavailable, missing model, and OK states', async () => {
+  process.env.OLLAMA_ENABLED = 'false';
+  let output = await captureStdout(() => cmdProvider({ providers: new Map() }, ['doctor', 'ollama']));
+  assert.match(output, /Ollama disabled/);
+
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+  process.env.OLLAMA_DEFAULT_MODEL = 'qwen2.5:0.5b';
+  let provider = new OllamaProvider();
+
+  mockFetch(() => {
+    throw new Error('ECONNREFUSED');
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['ollama', provider]]) }, ['doctor', 'ollama'])
+  );
+  assert.match(output, /Ollama server unavailable at http:\/\/localhost:11434/);
+
+  mockFetch((url) => {
+    assert.match(url, /\/api\/tags$/);
+    return okJson({ models: [{ name: 'llama3.2:1b' }] });
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['ollama', provider]]) }, ['doctor', 'ollama'])
+  );
+  assert.match(output, /Model qwen2\.5:0\.5b not found/);
+
+  provider = new OllamaProvider();
+  mockFetch((url) => {
+    if (url.endsWith('/api/tags')) {
+      return okJson({ models: [{ name: 'qwen2.5:0.5b' }] });
+    }
+    assert.match(url, /\/api\/chat$/);
+    return okJson({
+      model: 'qwen2.5:0.5b',
+      message: { role: 'assistant', content: 'OK' },
+      done: true,
+    });
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['ollama', provider]]) }, ['doctor', 'ollama'])
+  );
+  assert.match(output, /Ollama OK/);
 });

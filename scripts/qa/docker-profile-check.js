@@ -31,6 +31,21 @@ const checks = [
       'spreadsheet-agent',
     ],
   },
+  {
+    name: 'ollama',
+    args: ['--profile', 'ollama'],
+    expected: ['ollama', 'ollama-pull', 'openclaw'],
+  },
+  {
+    name: 'local-ai',
+    args: ['--profile', 'local-ai'],
+    expected: ['ollama', 'ollama-pull', 'openclaw'],
+  },
+  {
+    name: 'ollama-preloaded',
+    args: ['--profile', 'ollama-preloaded'],
+    expected: ['ollama-preloaded', 'openclaw'],
+  },
 ];
 
 function serviceList(args) {

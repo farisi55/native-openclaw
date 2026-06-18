@@ -81,7 +81,12 @@ services:
       npm_config_https_proxy: ${HTTPS_PROXY:-}
       npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
 
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen2.5:0.5b}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-120000}
+      OLLAMA_REQUIRE_ON_STARTUP: ${OLLAMA_REQUIRE_ON_STARTUP:-false}
 
       CLOUDFLARE_AI_ENABLED: ${CLOUDFLARE_AI_ENABLED:-false}
       CLOUDFLARE_API_KEY: ${CLOUDFLARE_API_KEY:-}
@@ -205,6 +210,60 @@ services:
 
     restart: unless-stopped
 
+  ollama:
+    profiles: ["ollama", "local-ai"]
+    image: ollama/ollama:latest
+    container_name: native-openclaw-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  ollama-pull:
+    profiles: ["ollama", "local-ai"]
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_BOOTSTRAP_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
+    entrypoint: ["/bin/sh", "-lc"]
+    command: |
+      until ollama list >/dev/null 2>&1; do
+        echo "Waiting for Ollama...";
+        sleep 2;
+      done;
+      echo "Pulling Ollama model: $OLLAMA_BOOTSTRAP_MODEL";
+      ollama pull "$OLLAMA_BOOTSTRAP_MODEL";
+      echo "Ollama model ready: $OLLAMA_BOOTSTRAP_MODEL"
+
+  ollama-preloaded:
+    profiles: ["ollama-preloaded"]
+    build:
+      context: .
+      dockerfile: docker/ollama/Dockerfile
+      args:
+        OLLAMA_PRELOAD_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
+    container_name: native-openclaw-ollama-preloaded
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+
   browser-agent:
     profiles: ["browser", "external-agents"]
     build:
@@ -256,3 +315,6 @@ services:
     ports:
       - "${SPREADSHEET_AGENT_PORT:-3103}:3103"
     restart: unless-stopped
+
+volumes:
+  ollama-data:

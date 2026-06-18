@@ -12,6 +12,7 @@ const originalEnv = {
   ZAI_API_KEY: process.env.ZAI_API_KEY,
   ZAI_BASE_URL: process.env.ZAI_BASE_URL,
   ZAI_MODEL: process.env.ZAI_MODEL,
+  OLLAMA_ENABLED: process.env.OLLAMA_ENABLED,
 };
 
 function restoreEnv() {
@@ -47,6 +48,7 @@ test('provider registry does not register zai without ZAI_API_KEY', async () => 
   delete process.env.ZAI_API_KEY;
   delete process.env.ZAI_BASE_URL;
   delete process.env.ZAI_MODEL;
+  delete process.env.OLLAMA_ENABLED;
 
   const registry = await createProviderRegistry({});
 
@@ -57,6 +59,7 @@ test('provider registry registers zai when ZAI_API_KEY is set', async () => {
   process.env.ZAI_API_KEY = 'test-key';
   process.env.ZAI_BASE_URL = 'https://example.test/v4';
   process.env.ZAI_MODEL = 'glm-4.5';
+  delete process.env.OLLAMA_ENABLED;
 
   const registry = await createProviderRegistry({});
 

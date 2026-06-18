@@ -279,4 +279,23 @@ test('Docker Compose default and profile service sets remain isolated', async ()
     'spreadsheet',
     'external-agents',
   ]);
+  assert.deepEqual(compose.services.ollama.profiles, ['ollama', 'local-ai']);
+  assert.deepEqual(compose.services['ollama-pull'].profiles, ['ollama', 'local-ai']);
+  assert.deepEqual(compose.services['ollama-preloaded'].profiles, ['ollama-preloaded']);
+  assert.equal(compose.services.ollama.image, 'ollama/ollama:latest');
+  assert.equal(compose.services['ollama-pull'].environment.OLLAMA_BOOTSTRAP_MODEL, '${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}');
+  assert.ok(compose.services.ollama.volumes.includes('ollama-data:/root/.ollama'));
+  assert.ok(compose.services['ollama-pull'].volumes.includes('ollama-data:/root/.ollama'));
+  assert.ok(Object.prototype.hasOwnProperty.call(compose.volumes, 'ollama-data'));
+
+  const coreEnv = compose.services.openclaw.environment;
+  assert.equal(coreEnv.OLLAMA_ENABLED, '${OLLAMA_ENABLED:-false}');
+  assert.equal(coreEnv.OLLAMA_BASE_URL, '${OLLAMA_BASE_URL:-http://ollama:11434}');
+  assert.equal(coreEnv.OLLAMA_DEFAULT_MODEL, '${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}');
+  assert.equal(coreEnv.OLLAMA_MODELS, '${OLLAMA_MODELS:-qwen2.5:0.5b}');
+  assert.equal(coreEnv.OLLAMA_TIMEOUT_MS, '${OLLAMA_TIMEOUT_MS:-120000}');
+  assert.equal(
+    compose.services['ollama-preloaded'].build.args.OLLAMA_PRELOAD_MODEL,
+    '${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}'
+  );
 });

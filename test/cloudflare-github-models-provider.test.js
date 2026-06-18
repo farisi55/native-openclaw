@@ -64,7 +64,11 @@ const ENV_KEYS = [
   'SAMBANOVA_API_KEY',
   'PUTER_ENABLED',
   'PUTER_API_KEY',
+  'OLLAMA_ENABLED',
   'OLLAMA_BASE_URL',
+  'OLLAMA_DEFAULT_MODEL',
+  'OLLAMA_MODELS',
+  'OLLAMA_TIMEOUT_MS',
 ];
 const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -186,6 +190,7 @@ test('disabled providers are not registered', async () => {
   process.env.GITHUB_MODELS_ENABLED = 'false';
   process.env.HUGGINGFACE_ENABLED = 'false';
   process.env.COHERE_ENABLED = 'false';
+  process.env.OLLAMA_ENABLED = 'false';
 
   const registry = await createProviderRegistry({});
 
@@ -193,6 +198,19 @@ test('disabled providers are not registered', async () => {
   assert.equal(registry.has('github-models'), false);
   assert.equal(registry.has('huggingface'), false);
   assert.equal(registry.has('cohere'), false);
+  assert.equal(registry.has('ollama'), false);
+});
+
+test('Ollama registers only when OLLAMA_ENABLED=true', async () => {
+  clearProviderEnv();
+  process.env.OLLAMA_ENABLED = 'true';
+  process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+  process.env.OLLAMA_DEFAULT_MODEL = 'qwen2.5:0.5b';
+
+  const registry = await createProviderRegistry({});
+
+  assert.equal(registry.has('ollama'), true);
+  assert.equal(registry.get('ollama').displayName, 'Ollama (local)');
 });
 
 test('Cloudflare enabled config requires API key and account ID', () => {

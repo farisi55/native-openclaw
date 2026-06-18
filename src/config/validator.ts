@@ -165,6 +165,7 @@ function validateEnabledOpenAiCompatProvider(input: {
 function validateProviderEnvironment(): void {
   validatePositiveTimeout('CLOUDFLARE_TIMEOUT_MS');
   validatePositiveTimeout('GITHUB_MODELS_TIMEOUT_MS');
+  validatePositiveTimeout('OLLAMA_TIMEOUT_MS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_CACHE_TTL_HOURS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_MAX_MODELS_PER_PROVIDER');
@@ -227,6 +228,21 @@ function validateProviderEnvironment(): void {
     }
 
     validateOptionalUrl('GITHUB_MODELS_BASE_URL');
+  }
+
+  if (parseBoolEnv('OLLAMA_ENABLED', false)) {
+    const configuredUrl = getOptionalEnv('OLLAMA_BASE_URL', 'http://localhost:11434')?.trim();
+    if (!configuredUrl) {
+      throw new Error('[config] OLLAMA_BASE_URL is required when OLLAMA_ENABLED=true.');
+    }
+    try {
+      new URL(configuredUrl);
+    } catch {
+      throw new Error('[config] OLLAMA_BASE_URL must be a valid URL.');
+    }
+    if (!(getOptionalEnv('OLLAMA_DEFAULT_MODEL', 'qwen2.5:0.5b') ?? '').trim()) {
+      throw new Error('[config] OLLAMA_DEFAULT_MODEL is required when OLLAMA_ENABLED=true.');
+    }
   }
 }
 
@@ -339,7 +355,7 @@ export function validateConfig(): Readonly<AppConfig> {
       parseBoolEnv('COHERE_ENABLED', false) &&
       Boolean(process.env['COHERE_API_KEY'])
     );
-  const hasOllama = Boolean(process.env['OLLAMA_BASE_URL']);
+  const hasOllama = parseBoolEnv('OLLAMA_ENABLED', false);
 
   if (!hasLegacyProvider && !hasExternalProvider && !hasOllama) {
     throw new Error(
@@ -350,7 +366,7 @@ export function validateConfig(): Readonly<AppConfig> {
         '  GITHUB_MODELS_API_KEY with GITHUB_MODELS_ENABLED=true,\n' +
         '  HUGGINGFACE_API_KEY, HF_API_KEY, or HF_TOKEN with HUGGINGFACE_ENABLED=true,\n' +
         '  COHERE_API_KEY with COHERE_ENABLED=true,\n' +
-        '  or OLLAMA_BASE_URL'
+        '  or OLLAMA_ENABLED=true'
     );
   }
 

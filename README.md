@@ -68,7 +68,7 @@ Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runti
 | Puter | `PUTER_API_KEY` | `gpt-5.5` | Backend ProviderRouter only |
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `@cf/meta/llama-3.1-8b-instruct` | Requires account ID and enable flag |
 | GitHub Models | `GITHUB_MODELS_API_KEY` | `openai/gpt-4.1` | Token needs Models read access |
-| Ollama | *(none)* | — | `OLLAMA_BASE_URL=http://localhost:11434` |
+| Ollama | *(none)* | `qwen2.5:0.5b` | Optional local provider. Enable with `OLLAMA_ENABLED=true`; Docker uses `http://ollama:11434` |
 
 Cloudflare and GitHub Models are normal LLM providers. They run through `ProviderRouter`
 and participate in its fallback path; they are not AgentGateway connectors.
@@ -87,6 +87,24 @@ GITHUB_MODELS_DEFAULT_MODEL=openai/gpt-4.1
 Switch manually with `/provider cloudflare` or `/provider github-models`. Run a
 minimal live diagnostic with `/provider doctor cloudflare` or
 `/provider doctor github-models`.
+
+Ollama is intentionally disabled by default so the core app stays lightweight.
+For local host usage, use `OLLAMA_BASE_URL=http://localhost:11434`. For Docker
+Compose usage, use `OLLAMA_BASE_URL=http://ollama:11434` and enable the Compose
+profile. Native OpenClaw also tries `localhost` automatically if the Docker
+hostname is configured but the app is running on the host.
+
+Docker profile env:
+
+```env
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
+OLLAMA_MODELS=qwen2.5:0.5b
+OLLAMA_TIMEOUT_MS=120000
+```
+
+Then run `/provider ollama`, `/model qwen2.5:0.5b`, or `/provider doctor ollama`.
 
 ### Smart Router
 
@@ -712,6 +730,70 @@ Scaffold Phase 3 sengaja ringan:
 Runtime tersebut dapat ditambahkan kemudian hanya ke image worker masing-masing, tanpa menambah
 dependency atau ukuran image core Native OpenClaw.
 
+## Ollama Docker Profile
+
+Ollama berjalan sebagai service Compose terpisah agar image core Native OpenClaw tetap ringan.
+Default `docker compose up -d` tidak menyalakan Ollama. Gunakan profile `ollama` saat ingin local AI:
+
+```bash
+docker compose --profile ollama up -d
+```
+
+Profile ini menjalankan:
+
+- `openclaw`: core Native OpenClaw.
+- `ollama`: server Ollama di `http://ollama:11434`.
+- `ollama-pull`: job bootstrap yang memastikan model `qwen2.5:0.5b` sudah ter-pull.
+- volume `ollama-data`: penyimpanan model agar tidak hilang saat container dibuat ulang.
+
+Aktifkan provider di `.env`:
+
+```env
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
+OLLAMA_MODELS=qwen2.5:0.5b
+OLLAMA_TIMEOUT_MS=120000
+OLLAMA_BOOTSTRAP_MODEL=qwen2.5:0.5b
+```
+
+Verifikasi:
+
+```bash
+docker compose --profile ollama ps
+docker compose exec ollama ollama list
+docker compose exec openclaw sh -lc 'curl -s http://ollama:11434/api/tags'
+```
+
+Di CLI Native OpenClaw:
+
+```text
+/provider ollama
+/model qwen2.5:0.5b
+/provider doctor ollama
+```
+
+`qwen2.5:0.5b` sengaja kecil untuk smoke test CPU-only dan server hemat resource. Untuk kualitas
+jawaban lebih baik, set `OLLAMA_BOOTSTRAP_MODEL`, `OLLAMA_DEFAULT_MODEL`, dan `OLLAMA_MODELS` ke
+model yang lebih besar sesuai RAM/VRAM mesin. GPU tidak wajib; jika ingin GPU, tambahkan konfigurasi
+runtime NVIDIA ke service `ollama` sesuai environment Docker host.
+
+Optional build-time preload tersedia via profile `ollama-preloaded` dan `docker/ollama/Dockerfile`,
+tetapi runtime pull lewat `ollama-pull` tetap direkomendasikan karena image preloaded bisa besar dan
+daemon Ollama saat Docker build lebih mudah flaky.
+
+Troubleshooting cepat:
+
+- `Ollama server unavailable`: pastikan `docker compose --profile ollama up -d` sudah berjalan dan
+  `OLLAMA_BASE_URL=http://ollama:11434` untuk container.
+- `Model qwen2.5:0.5b not found`: jalankan `docker compose run --rm ollama-pull` atau
+  `docker compose exec ollama ollama pull qwen2.5:0.5b`.
+- Pull lambat atau gagal di proxy corporate: pastikan `HTTP_PROXY`, `HTTPS_PROXY`, dan `NO_PROXY`
+  sudah benar; `NO_PROXY` sebaiknya menyertakan `ollama`.
+- Port `11434` sudah dipakai di host: set `OLLAMA_PORT=11435`; internal container tetap memakai
+  `http://ollama:11434`.
+- Memori kecil: tetap gunakan `qwen2.5:0.5b` atau model kecil lain.
+
 ### Phase 3.5 Stabilization and QA
 
 Phase 3.5 mengeraskan integrasi yang sudah ada tanpa menambah runtime berat. Jalur utama tetap
@@ -764,7 +846,7 @@ npm run qa:docker-profiles
 ```
 
 Perintah tersebut menjalankan `docker compose config --services` untuk konfigurasi default serta
-profile `browser`, `research`, `spreadsheet`, dan `external-agents`. Validasi runtime container tetap
+profile `browser`, `research`, `spreadsheet`, `external-agents`, dan `ollama`. Validasi runtime container tetap
 dapat dilakukan manual:
 
 ```bash
@@ -776,6 +858,7 @@ docker compose --profile browser up -d
 docker compose --profile research up -d
 docker compose --profile spreadsheet up -d
 docker compose --profile external-agents up -d
+docker compose --profile ollama up -d
 ```
 
 Jika capability eksternal diminta saat worker disabled, respons hanya memberi instruksi profile dan
@@ -1131,7 +1214,10 @@ NO_PROXY=localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
 ZAI_API_KEY=
-OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_ENABLED=false
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
+OLLAMA_MODELS=qwen2.5:0.5b
 ```
 
 > Jangan commit `.env`: `echo ".env" >> .gitignore`
@@ -1236,7 +1322,11 @@ services:
       STORAGE_BACKEND: file
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-18789}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen2.5:0.5b}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-120000}
 
     volumes:
       - ./data:/data
@@ -1252,6 +1342,29 @@ services:
       - "host.docker.internal:host-gateway"
 
     restart: unless-stopped
+
+  ollama:
+    profiles: ["ollama", "local-ai"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+
+  ollama-pull:
+    profiles: ["ollama", "local-ai"]
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_BOOTSTRAP_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
+
+volumes:
+  ollama-data:
 ```
 
 ### Docker Compose Operations
