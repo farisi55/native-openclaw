@@ -1,5 +1,5 @@
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:24.16.0-alpine AS builder
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -7,7 +7,7 @@ ARG NO_PROXY
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy
-ARG SELF_HEALING_RUNTIME=false
+ARG SELF_HEALING_RUNTIME=true
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
@@ -54,7 +54,7 @@ RUN if [ "$SELF_HEALING_RUNTIME" != "true" ]; then \
 
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:24.16.0-alpine AS runtime
 
 # su-exec is used by entrypoint.sh to fix bind-mount ownership as root,
 # then drop privileges to the non-root openclaw user.
@@ -67,8 +67,8 @@ ARG http_proxy
 ARG https_proxy
 ARG no_proxy
 
-ARG SELF_HEALING_RUNTIME=false
-ARG OPENCODE_AUTO_INSTALL=false
+ARG SELF_HEALING_RUNTIME=true
+ARG OPENCODE_AUTO_INSTALL=true
 ARG OPENCODE_DEFAULT_MODEL=opencode/deepseek-v4-flash-free
 ARG OPENCODE_DEFAULT_SMALL_MODEL=opencode/mimo-v2.5-free
 ARG MCP_SMOKE_SERVERS_INSTALL=false

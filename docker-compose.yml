@@ -297,24 +297,24 @@ services:
       - "${RESEARCH_AGENT_PORT:-3102}:3102"
     restart: unless-stopped
 
-  spreadsheet-agent:
-    profiles: ["spreadsheet", "external-agents"]
-    build:
-      context: ./agents/spreadsheet-agent
-      dockerfile: Dockerfile
-    environment:
-      NODE_ENV: production
-      SPREADSHEET_AGENT_PORT: 3103
-      SPREADSHEET_AGENT_WORKSPACE: /workspace
-      SPREADSHEET_AGENT_API_KEY: ${AGENT_SPREADSHEET_API_KEY:-}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
-      SPREADSHEET_GOOGLE_CREDENTIALS_JSON: ${SPREADSHEET_GOOGLE_CREDENTIALS_JSON:-}
-      SPREADSHEET_MCP_URL: ${SPREADSHEET_MCP_URL:-}
-    volumes:
-      - ./workspace:/workspace
-    ports:
-      - "${SPREADSHEET_AGENT_PORT:-3103}:3103"
-    restart: unless-stopped
+  # spreadsheet-agent:
+  #   profiles: ["spreadsheet", "external-agents"]
+  #   build:
+  #     context: ./agents/spreadsheet-agent
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     NODE_ENV: production
+  #     SPREADSHEET_AGENT_PORT: 3103
+  #     SPREADSHEET_AGENT_WORKSPACE: /workspace
+  #     SPREADSHEET_AGENT_API_KEY: ${AGENT_SPREADSHEET_API_KEY:-}
+  #     GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+  #     SPREADSHEET_GOOGLE_CREDENTIALS_JSON: ${SPREADSHEET_GOOGLE_CREDENTIALS_JSON:-}
+  #     SPREADSHEET_MCP_URL: ${SPREADSHEET_MCP_URL:-}
+  #   volumes:
+  #     - ./workspace:/workspace
+  #   ports:
+  #     - "${SPREADSHEET_AGENT_PORT:-3103}:3103"
+  #   restart: unless-stopped
 
 volumes:
   ollama-data:
