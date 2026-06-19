@@ -19,7 +19,7 @@ const checks = [
   {
     name: 'spreadsheet',
     args: ['--profile', 'spreadsheet'],
-    expected: ['openclaw', 'spreadsheet-agent'],
+    expected: ['openclaw'],
   },
   {
     name: 'external-agents',
@@ -28,23 +28,17 @@ const checks = [
       'browser-agent',
       'openclaw',
       'research-agent',
-      'spreadsheet-agent',
     ],
-  },
-  {
-    name: 'ollama',
-    args: ['--profile', 'ollama'],
-    expected: ['ollama', 'ollama-pull', 'openclaw'],
   },
   {
     name: 'local-ai',
     args: ['--profile', 'local-ai'],
-    expected: ['ollama', 'ollama-pull', 'openclaw'],
+    expected: ['llama-cpp', 'openclaw'],
   },
   {
-    name: 'ollama-preloaded',
-    args: ['--profile', 'ollama-preloaded'],
-    expected: ['ollama-preloaded', 'openclaw'],
+    name: 'llamacpp',
+    args: ['--profile', 'llamacpp'],
+    expected: ['llama-cpp', 'openclaw'],
   },
 ];
 

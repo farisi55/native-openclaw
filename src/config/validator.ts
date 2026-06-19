@@ -166,6 +166,7 @@ function validateProviderEnvironment(): void {
   validatePositiveTimeout('CLOUDFLARE_TIMEOUT_MS');
   validatePositiveTimeout('GITHUB_MODELS_TIMEOUT_MS');
   validatePositiveTimeout('OLLAMA_TIMEOUT_MS');
+  validatePositiveTimeout('LLAMACPP_TIMEOUT_MS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_CACHE_TTL_HOURS');
   validatePositiveTimeout('PROVIDER_MODEL_DISCOVERY_MAX_MODELS_PER_PROVIDER');
@@ -242,6 +243,21 @@ function validateProviderEnvironment(): void {
     }
     if (!(getOptionalEnv('OLLAMA_DEFAULT_MODEL', 'qwen2.5:0.5b') ?? '').trim()) {
       throw new Error('[config] OLLAMA_DEFAULT_MODEL is required when OLLAMA_ENABLED=true.');
+    }
+  }
+
+  if (parseBoolEnv('LLAMACPP_ENABLED', false)) {
+    const configuredUrl = getOptionalEnv('LLAMACPP_BASE_URL', 'http://llama-cpp:8091')?.trim();
+    if (!configuredUrl) {
+      throw new Error('[config] LLAMACPP_BASE_URL is required when LLAMACPP_ENABLED=true.');
+    }
+    try {
+      new URL(configuredUrl);
+    } catch {
+      throw new Error('[config] LLAMACPP_BASE_URL must be a valid URL.');
+    }
+    if (!(getOptionalEnv('LLAMACPP_DEFAULT_MODEL', 'qwen2.5-0.5b-instruct-q4_k_m.gguf') ?? '').trim()) {
+      throw new Error('[config] LLAMACPP_DEFAULT_MODEL is required when LLAMACPP_ENABLED=true.');
     }
   }
 }
@@ -356,8 +372,9 @@ export function validateConfig(): Readonly<AppConfig> {
       Boolean(process.env['COHERE_API_KEY'])
     );
   const hasOllama = parseBoolEnv('OLLAMA_ENABLED', false);
+  const hasLlamaCpp = parseBoolEnv('LLAMACPP_ENABLED', false);
 
-  if (!hasLegacyProvider && !hasExternalProvider && !hasOllama) {
+  if (!hasLegacyProvider && !hasExternalProvider && !hasOllama && !hasLlamaCpp) {
     throw new Error(
       '[config] No provider API keys found. Set at least one of:\n' +
         '  OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,\n' +
@@ -366,7 +383,7 @@ export function validateConfig(): Readonly<AppConfig> {
         '  GITHUB_MODELS_API_KEY with GITHUB_MODELS_ENABLED=true,\n' +
         '  HUGGINGFACE_API_KEY, HF_API_KEY, or HF_TOKEN with HUGGINGFACE_ENABLED=true,\n' +
         '  COHERE_API_KEY with COHERE_ENABLED=true,\n' +
-        '  or OLLAMA_ENABLED=true'
+        '  or OLLAMA_ENABLED=true / LLAMACPP_ENABLED=true'
     );
   }
 

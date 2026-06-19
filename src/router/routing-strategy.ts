@@ -21,12 +21,12 @@ export interface RoutingHint {
 
 // Provider preference tiers per task type
 const TASK_PREFERENCE: Record<TaskType, string[]> = {
-  fast_chat:  ['groq', 'sambanova', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'ollama'],
-  reasoning:  ['sambanova', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'ollama'],
-  local:      ['ollama'],
-  vision:     ['gemini', 'github-models', 'openrouter', 'huggingface', 'cohere', 'ollama'],
-  coding:     ['sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'ollama'],
-  general:    ['groq', 'sambanova', 'mistral', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'ollama'],
+  fast_chat:  ['groq', 'sambanova', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'llamacpp', 'ollama'],
+  reasoning:  ['sambanova', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'llamacpp', 'ollama'],
+  local:      ['llamacpp', 'ollama'],
+  vision:     ['gemini', 'github-models', 'openrouter', 'huggingface', 'cohere', 'llamacpp', 'ollama'],
+  coding:     ['sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'llamacpp', 'ollama'],
+  general:    ['groq', 'sambanova', 'mistral', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'llamacpp', 'ollama'],
 };
 
 // Default fallback chain
@@ -40,6 +40,7 @@ const DEFAULT_FALLBACK_CHAIN = [
   'github-models',
   'openrouter',
   'gemini',
+  'llamacpp',
   'ollama',
 ];
 
@@ -77,7 +78,7 @@ export class RoutingStrategy {
     else score += (preferred.length - preferenceIdx) * 15;
 
     // Local preference
-    if (hint.preferLocal && providerId === 'ollama') score += 50;
+    if (hint.preferLocal && (providerId === 'llamacpp' || providerId === 'ollama')) score += 50;
 
     // Latency bonus (lower = better)
     const avgLat = this.health.avgLatency(providerId);

@@ -275,27 +275,34 @@ test('Docker Compose default and profile service sets remain isolated', async ()
     'research',
     'external-agents',
   ]);
-  assert.deepEqual(compose.services['spreadsheet-agent'].profiles, [
-    'spreadsheet',
-    'external-agents',
-  ]);
-  assert.deepEqual(compose.services.ollama.profiles, ['ollama', 'local-ai']);
-  assert.deepEqual(compose.services['ollama-pull'].profiles, ['ollama', 'local-ai']);
-  assert.deepEqual(compose.services['ollama-preloaded'].profiles, ['ollama-preloaded']);
-  assert.equal(compose.services.ollama.image, 'ollama/ollama:latest');
-  assert.equal(compose.services['ollama-pull'].environment.OLLAMA_BOOTSTRAP_MODEL, '${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}');
-  assert.ok(compose.services.ollama.volumes.includes('ollama-data:/root/.ollama'));
-  assert.ok(compose.services['ollama-pull'].volumes.includes('ollama-data:/root/.ollama'));
-  assert.ok(Object.prototype.hasOwnProperty.call(compose.volumes, 'ollama-data'));
+  if (compose.services['spreadsheet-agent']) {
+    assert.deepEqual(compose.services['spreadsheet-agent'].profiles, [
+      'spreadsheet',
+      'external-agents',
+    ]);
+  }
+  assert.equal(compose.services.ollama, undefined);
+  assert.equal(compose.services['ollama-pull'], undefined);
+  assert.equal(compose.services['ollama-preloaded'], undefined);
+  assert.deepEqual(compose.services['llama-cpp'].profiles, ['llamacpp', 'local-ai']);
+  assert.equal(compose.services['llama-cpp'].image, 'ghcr.io/ggml-org/llama.cpp:server');
+  assert.ok(compose.services['llama-cpp'].ports.includes('${LLAMACPP_PORT:-8091}:8091'));
+  assert.ok(compose.services['llama-cpp'].volumes.includes('./models:/models'));
+  assert.ok(compose.services['llama-cpp'].volumes.includes('llama-cpp-cache:/root/.cache/llama.cpp'));
+  assert.ok(compose.services['llama-cpp'].command.includes('-hf'));
+  assert.ok(compose.services['llama-cpp'].command.includes('${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}'));
+  assert.ok(compose.services['llama-cpp'].command.includes('--port'));
+  assert.ok(compose.services['llama-cpp'].command.includes('8091'));
+  assert.ok(Object.prototype.hasOwnProperty.call(compose.volumes, 'llama-cpp-cache'));
+  assert.equal(Object.prototype.hasOwnProperty.call(compose.volumes, 'ollama-data'), false);
 
   const coreEnv = compose.services.openclaw.environment;
-  assert.equal(coreEnv.OLLAMA_ENABLED, '${OLLAMA_ENABLED:-false}');
-  assert.equal(coreEnv.OLLAMA_BASE_URL, '${OLLAMA_BASE_URL:-http://ollama:11434}');
-  assert.equal(coreEnv.OLLAMA_DEFAULT_MODEL, '${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}');
-  assert.equal(coreEnv.OLLAMA_MODELS, '${OLLAMA_MODELS:-qwen2.5:0.5b}');
-  assert.equal(coreEnv.OLLAMA_TIMEOUT_MS, '${OLLAMA_TIMEOUT_MS:-120000}');
-  assert.equal(
-    compose.services['ollama-preloaded'].build.args.OLLAMA_PRELOAD_MODEL,
-    '${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}'
-  );
+  assert.equal(coreEnv.LLAMACPP_ENABLED, '${LLAMACPP_ENABLED:-false}');
+  assert.equal(coreEnv.LLAMACPP_BASE_URL, '${LLAMACPP_BASE_URL:-http://llama-cpp:8091}');
+  assert.equal(coreEnv.LLAMACPP_DEFAULT_MODEL, '${LLAMACPP_DEFAULT_MODEL:-qwen2.5-0.5b-instruct-q4_k_m.gguf}');
+  assert.equal(coreEnv.LLAMACPP_MODELS, '${LLAMACPP_MODELS:-qwen2.5-0.5b-instruct-q4_k_m.gguf}');
+  assert.equal(coreEnv.LLAMACPP_TIMEOUT_MS, '${LLAMACPP_TIMEOUT_MS:-120000}');
+  assert.match(coreEnv.NO_PROXY, /llama-cpp/);
+  assert.match(coreEnv.no_proxy, /llama-cpp/);
+  assert.match(coreEnv.npm_config_noproxy, /llama-cpp/);
 });

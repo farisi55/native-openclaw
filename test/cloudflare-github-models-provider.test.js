@@ -12,6 +12,7 @@ const {
   CohereProvider,
   GitHubModelsProvider,
   HuggingFaceProvider,
+  LlamaCppProvider,
   createProviderRegistry,
   providerDefaultModelFromEnv,
 } = require('../dist/providers');
@@ -69,6 +70,12 @@ const ENV_KEYS = [
   'OLLAMA_DEFAULT_MODEL',
   'OLLAMA_MODELS',
   'OLLAMA_TIMEOUT_MS',
+  'LLAMACPP_ENABLED',
+  'LLAMACPP_BASE_URL',
+  'LLAMACPP_DEFAULT_MODEL',
+  'LLAMACPP_MODELS',
+  'LLAMACPP_TIMEOUT_MS',
+  'LLAMACPP_CTX_SIZE',
 ];
 const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -125,6 +132,19 @@ function cohereEnv(overrides = {}) {
   process.env.COHERE_DEFAULT_MODEL = 'command-a-plus-05-2026';
   process.env.COHERE_MODELS = 'command-a-plus-05-2026';
   process.env.COHERE_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
+function llamaCppEnv(overrides = {}) {
+  process.env.LLAMACPP_ENABLED = 'true';
+  process.env.LLAMACPP_BASE_URL = 'http://llama-cpp:8091';
+  process.env.LLAMACPP_DEFAULT_MODEL = 'qwen2.5-0.5b-instruct-q4_k_m.gguf';
+  process.env.LLAMACPP_MODELS = 'qwen2.5-0.5b-instruct-q4_k_m.gguf';
+  process.env.LLAMACPP_TIMEOUT_MS = '120000';
+  process.env.LLAMACPP_CTX_SIZE = '8192';
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = String(value);
@@ -191,6 +211,7 @@ test('disabled providers are not registered', async () => {
   process.env.HUGGINGFACE_ENABLED = 'false';
   process.env.COHERE_ENABLED = 'false';
   process.env.OLLAMA_ENABLED = 'false';
+  process.env.LLAMACPP_ENABLED = 'false';
 
   const registry = await createProviderRegistry({});
 
@@ -199,6 +220,7 @@ test('disabled providers are not registered', async () => {
   assert.equal(registry.has('huggingface'), false);
   assert.equal(registry.has('cohere'), false);
   assert.equal(registry.has('ollama'), false);
+  assert.equal(registry.has('llamacpp'), false);
 });
 
 test('Ollama registers only when OLLAMA_ENABLED=true', async () => {
@@ -211,6 +233,16 @@ test('Ollama registers only when OLLAMA_ENABLED=true', async () => {
 
   assert.equal(registry.has('ollama'), true);
   assert.equal(registry.get('ollama').displayName, 'Ollama (local)');
+});
+
+test('llama.cpp registers only when LLAMACPP_ENABLED=true', async () => {
+  clearProviderEnv();
+  llamaCppEnv();
+
+  const registry = await createProviderRegistry({});
+
+  assert.equal(registry.has('llamacpp'), true);
+  assert.equal(registry.get('llamacpp').displayName, 'llama.cpp Server');
 });
 
 test('Cloudflare enabled config requires API key and account ID', () => {
@@ -278,9 +310,13 @@ test('provider timeout config must be positive', () => {
   clearProviderEnv();
   cohereEnv({ COHERE_TIMEOUT_MS: '0' });
   assert.throws(() => validateConfig(), /COHERE_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
+  llamaCppEnv({ LLAMACPP_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /LLAMACPP_TIMEOUT_MS must be a positive integer/);
 });
 
-test('Cloudflare, GitHub Models, Hugging Face, and Cohere satisfy provider validation', () => {
+test('Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp satisfy provider validation', () => {
   clearProviderEnv();
   cloudflareEnv();
   assert.doesNotThrow(() => validateConfig());
@@ -295,6 +331,10 @@ test('Cloudflare, GitHub Models, Hugging Face, and Cohere satisfy provider valid
 
   clearProviderEnv();
   cohereEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  llamaCppEnv();
   assert.doesNotThrow(() => validateConfig());
 });
 
@@ -471,6 +511,59 @@ test('Cohere builds compatibility endpoint, headers, and OpenAI-compatible body'
   assert.equal(result.message.content, 'cohere ok');
 });
 
+test('llama.cpp builds OpenAI-compatible endpoint without Authorization header', async () => {
+  clearProviderEnv();
+  llamaCppEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('llamacpp ok');
+  });
+
+  const provider = new LlamaCppProvider();
+  const result = await provider.chat(options('qwen2.5-0.5b-instruct-q4_k_m.gguf'));
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'http://llama-cpp:8091/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, undefined);
+  assert.equal(request.init.headers['Content-Type'], 'application/json');
+  assert.equal(body.model, 'qwen2.5-0.5b-instruct-q4_k_m.gguf');
+  assert.equal(body.messages[0].role, 'system');
+  assert.equal(body.messages[1].content, 'Hello');
+  assert.equal(body.temperature, 0.2);
+  assert.equal(body.max_tokens, 64);
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'llamacpp ok');
+});
+
+test('llama.cpp discovers /v1/models and keeps configured fallback model', async () => {
+  clearProviderEnv();
+  llamaCppEnv({ LLAMACPP_MODELS: 'qwen2.5-0.5b-instruct-q4_k_m.gguf,custom.gguf' });
+  mockFetch((url) => {
+    assert.equal(url, 'http://llama-cpp:8091/v1/models');
+    return response(200, { data: [{ id: 'served.gguf' }] });
+  });
+
+  const models = await new LlamaCppProvider().listModels();
+
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ['served.gguf', 'qwen2.5-0.5b-instruct-q4_k_m.gguf', 'custom.gguf']
+  );
+});
+
+test('llama.cpp listModels falls back to configured model when server is unreachable', async () => {
+  clearProviderEnv();
+  llamaCppEnv();
+  mockFetch(() => {
+    throw new Error('ECONNREFUSED');
+  });
+
+  const models = await new LlamaCppProvider().listModels();
+
+  assert.equal(models[0].id, 'qwen2.5-0.5b-instruct-q4_k_m.gguf');
+});
+
 test('Hugging Face and Cohere list configured models without a live /models request', async () => {
   clearProviderEnv();
   huggingfaceEnv({
@@ -616,12 +709,13 @@ for (const spec of [
   });
 }
 
-test('enabled Cloudflare, GitHub Models, Hugging Face, and Cohere providers register', async () => {
+test('enabled Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp providers register', async () => {
   clearProviderEnv();
   cloudflareEnv();
   githubEnv();
   huggingfaceEnv();
   cohereEnv();
+  llamaCppEnv();
 
   const registry = await createProviderRegistry({});
 
@@ -629,6 +723,7 @@ test('enabled Cloudflare, GitHub Models, Hugging Face, and Cohere providers regi
   assert.equal(registry.has('github-models'), true);
   assert.equal(registry.has('huggingface'), true);
   assert.equal(registry.has('cohere'), true);
+  assert.equal(registry.has('llamacpp'), true);
 });
 
 test('hyphenated provider ID resolves GITHUB_MODELS_DEFAULT_MODEL', () => {
@@ -647,6 +742,13 @@ test('provider default model env resolves Hugging Face and Cohere', () => {
 
   assert.equal(providerDefaultModelFromEnv('huggingface'), 'hf/model');
   assert.equal(providerDefaultModelFromEnv('cohere'), 'cohere-model');
+});
+
+test('provider default model env resolves llama.cpp', () => {
+  clearProviderEnv();
+  process.env.LLAMACPP_DEFAULT_MODEL = 'local-model.gguf';
+
+  assert.equal(providerDefaultModelFromEnv('llamacpp'), 'local-model.gguf');
 });
 
 test('PROVIDER_ORDER is parsed and de-duplicated', () => {

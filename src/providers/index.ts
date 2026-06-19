@@ -10,6 +10,7 @@ import { createLogger } from '../utils/logger';
 
 export { BaseProvider } from './base';
 export { OllamaProvider } from './ollama';
+export { LlamaCppProvider } from './llamacpp';
 export { OpenRouterProvider } from './openrouter';
 export { GroqProvider } from './groq';
 export { MistralProvider } from './mistral';
@@ -39,6 +40,13 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
       const { OllamaProvider } = await import('./ollama.js');
       return new OllamaProvider();
     }, 'ollama');
+  }
+
+  if (isEnabled(process.env['LLAMACPP_ENABLED'])) {
+    await tryRegister(registry, async () => {
+      const { LlamaCppProvider } = await import('./llamacpp.js');
+      return new LlamaCppProvider();
+    }, 'llamacpp');
   }
 
   if (process.env['OPENROUTER_API_KEY']) {
@@ -119,7 +127,7 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
   }
 
   if (registry.size === 0) {
-    logger.warn('No providers registered. Set at least one API key or ensure Ollama is running.');
+    logger.warn('No providers registered. Set at least one API key or enable a local provider.');
   } else {
     logger.info(`Registered providers: ${[...registry.keys()].join(', ')}`);
   }

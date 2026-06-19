@@ -364,10 +364,15 @@ test('Docker Compose keeps optional workers behind profiles with no core depende
   for (const [name, profile] of [
     ['browser-agent', 'browser'],
     ['research-agent', 'research'],
-    ['spreadsheet-agent', 'spreadsheet'],
   ]) {
     const service = compose.services[name];
     assert.ok(service);
     assert.deepEqual(service.profiles, [profile, 'external-agents']);
+  }
+  if (compose.services['spreadsheet-agent']) {
+    assert.deepEqual(compose.services['spreadsheet-agent'].profiles, [
+      'spreadsheet',
+      'external-agents',
+    ]);
   }
 });

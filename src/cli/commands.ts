@@ -636,6 +636,11 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
   if (providerId === 'ollama') {
     if (!envEnabled(process.env['OLLAMA_ENABLED'])) return 'Ollama disabled.';
   }
+  if (providerId === 'llamacpp') {
+    if (!envEnabled(process.env['LLAMACPP_ENABLED'])) {
+      return 'llama.cpp provider disabled. Set LLAMACPP_ENABLED=true and start it with: docker compose --profile llamacpp up -d';
+    }
+  }
   if (providerId === 'cloudflare') {
     if (process.env['CLOUDFLARE_AI_ENABLED'] !== 'true') return 'Cloudflare disabled.';
     if (!process.env['CLOUDFLARE_API_KEY']?.trim()) return 'Missing CLOUDFLARE_API_KEY.';
@@ -765,6 +770,104 @@ async function runOllamaDoctor(provider: IProvider): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stdout.write(c('red', `\n  ollama: Ollama chat failed: ${message}\n\n`));
+  }
+}
+
+function llamaCppBaseUrl(): string {
+  return (process.env['LLAMACPP_BASE_URL']?.trim() || 'http://llama-cpp:8091').replace(/\/+$/, '').replace(/\/v1$/i, '');
+}
+
+function llamaCppBaseUrlCandidates(): string[] {
+  const primary = llamaCppBaseUrl();
+  const urls = [primary];
+
+  try {
+    const parsed = new URL(primary);
+    const port = parsed.port ? `:${parsed.port}` : ':8091';
+    const protocol = parsed.protocol || 'http:';
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'llama-cpp' || host === 'host.docker.internal') {
+      urls.push(`${protocol}//localhost${port}`);
+      urls.push(`${protocol}//127.0.0.1${port}`);
+    } else if (host === 'localhost') {
+      urls.push(`${protocol}//127.0.0.1${port}`);
+    } else if (host === '127.0.0.1') {
+      urls.push(`${protocol}//localhost${port}`);
+    }
+  } catch {
+    // Keep the configured value; validation/doctor output will report failure.
+  }
+
+  return [...new Set(urls.map((url) => url.replace(/\/+$/, '').replace(/\/v1$/i, '')))];
+}
+
+function llamaCppDefaultModel(): string {
+  return process.env['LLAMACPP_DEFAULT_MODEL']?.trim() || 'qwen2.5-0.5b-instruct-q4_k_m.gguf';
+}
+
+async function fetchLlamaCppModels(): Promise<{ baseUrl: string; models: string[] }> {
+  const timeoutMs = Number.parseInt(process.env['LLAMACPP_TIMEOUT_MS'] ?? '120000', 10);
+  let firstError: unknown;
+
+  for (const baseUrl of llamaCppBaseUrlCandidates()) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 120_000);
+    try {
+      const response = await networkFetch(`${baseUrl}/v1/models`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json() as { data?: Array<{ id?: unknown }> };
+      const models = (data.data ?? [])
+        .map((model) => typeof model.id === 'string' ? model.id : '')
+        .filter(Boolean);
+      return { baseUrl, models };
+    } catch (error) {
+      firstError ??= error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw firstError;
+}
+
+async function runLlamaCppDoctor(provider: IProvider): Promise<void> {
+  const model = llamaCppDefaultModel();
+
+  let servedModels: string[];
+  let activeBaseUrl = llamaCppBaseUrl();
+  try {
+    const result = await fetchLlamaCppModels();
+    servedModels = result.models;
+    activeBaseUrl = result.baseUrl;
+  } catch {
+    process.stdout.write(c('red', `\n  llamacpp: llama.cpp server unavailable at ${llamaCppBaseUrl()}.\n`));
+    process.stdout.write(c('dim', '  Docker setup: docker compose --profile llamacpp up -d\n'));
+    process.stdout.write(c('dim', '  Host setup: set LLAMACPP_BASE_URL=http://localhost:8091 if you run llama.cpp outside Docker.\n\n'));
+    return;
+  }
+
+  if (!servedModels.includes(model)) {
+    process.stdout.write(c('yellow', `\n  llamacpp: Model ${model} not found. Check: docker compose logs llama-cpp\n\n`));
+    return;
+  }
+
+  try {
+    await provider.chat({
+      model,
+      messages: [createMessage({ role: 'user', content: 'Reply with exactly: OK' })],
+      temperature: 0,
+      maxTokens: 4,
+    });
+    process.stdout.write(c('green', `\n  llamacpp: llama.cpp OK at ${activeBaseUrl}. Model: ${model}\n\n`));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(c('red', `\n  llamacpp: llama.cpp chat failed: ${message}\n`));
+    process.stdout.write(c('dim', '  Check server logs: docker compose logs llama-cpp\n\n'));
   }
 }
 
@@ -899,6 +1002,11 @@ async function runProviderDoctor(ctx: CLIContext, providerId: string | undefined
     return;
   }
 
+  if (providerId === 'llamacpp') {
+    await runLlamaCppDoctor(provider);
+    return;
+  }
+
   try {
     const models = await provider.listModels();
     const model = providerDefaultModelFromEnv(providerId) ?? models[0]?.id;
@@ -957,7 +1065,12 @@ export async function cmdProvider(ctx: CLIContext, args: string[]): Promise<void
     if (targetId === 'ollama') {
       process.stdout.write(c('yellow', '  Ollama is installed locally only after the provider is enabled in Native OpenClaw.\n'));
       process.stdout.write(c('dim', '  Local host setup: set OLLAMA_ENABLED=true and OLLAMA_BASE_URL=http://localhost:11434, then restart.\n'));
-      process.stdout.write(c('dim', '  Docker setup: use OLLAMA_BASE_URL=http://ollama:11434 with docker compose --profile ollama up -d.\n'));
+      process.stdout.write(c('dim', '  Docker local inference now uses llama.cpp; keep Ollama for host-local usage outside Docker.\n'));
+    }
+    if (targetId === 'llamacpp') {
+      process.stdout.write(c('yellow', '  llama.cpp provider is available after it is enabled in Native OpenClaw.\n'));
+      process.stdout.write(c('dim', '  Docker setup: set LLAMACPP_ENABLED=true and run docker compose --profile llamacpp up -d.\n'));
+      process.stdout.write(c('dim', '  Host setup: set LLAMACPP_BASE_URL=http://localhost:8091 if you run llama.cpp outside Docker.\n'));
     }
     process.stdout.write(c('dim', `  Available: ${[...ctx.providers.keys()].join(', ')}\n\n`));
     return;

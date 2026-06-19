@@ -72,21 +72,27 @@ services:
 
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,llama-cpp,host.docker.internal,.local,.internal}
       http_proxy: ${HTTP_PROXY:-}
       https_proxy: ${HTTPS_PROXY:-}
-      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,llama-cpp,host.docker.internal,.local,.internal}
 
       npm_config_proxy: ${HTTP_PROXY:-}
       npm_config_https_proxy: ${HTTPS_PROXY:-}
-      npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,ollama,host.docker.internal,.local,.internal}
+      npm_config_noproxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,browser-agent,research-agent,spreadsheet-agent,llama-cpp,host.docker.internal,.local,.internal}
 
-      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-false}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}
-      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen2.5:0.5b}
-      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-120000}
-      OLLAMA_REQUIRE_ON_STARTUP: ${OLLAMA_REQUIRE_ON_STARTUP:-false}
+      LLAMACPP_ENABLED: ${LLAMACPP_ENABLED:-false}
+      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://llama-cpp:8091}
+      LLAMACPP_DEFAULT_MODEL: ${LLAMACPP_DEFAULT_MODEL:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODELS: ${LLAMACPP_MODELS:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_TIMEOUT_MS: ${LLAMACPP_TIMEOUT_MS:-120000}
+      LLAMACPP_REQUIRE_ON_STARTUP: ${LLAMACPP_REQUIRE_ON_STARTUP:-false}
+      LLAMACPP_PORT: ${LLAMACPP_PORT:-8091}
+      LLAMACPP_MODEL_SOURCE: ${LLAMACPP_MODEL_SOURCE:-hf}
+      LLAMACPP_HF_MODEL: ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_PATH: ${LLAMACPP_MODEL_PATH:-/models/qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
+      LLAMACPP_THREADS: ${LLAMACPP_THREADS:-4}
 
       CLOUDFLARE_AI_ENABLED: ${CLOUDFLARE_AI_ENABLED:-false}
       CLOUDFLARE_API_KEY: ${CLOUDFLARE_API_KEY:-}
@@ -135,7 +141,7 @@ services:
       HUGGINGFACE_DISCOVERY_PIPELINE_TAGS: ${HUGGINGFACE_DISCOVERY_PIPELINE_TAGS:-text-generation,conversational}
       HUGGINGFACE_DISCOVERY_LIMIT_PER_PROVIDER: ${HUGGINGFACE_DISCOVERY_LIMIT_PER_PROVIDER:-50}
       CLOUDFLARE_DISCOVERY_ENABLED: ${CLOUDFLARE_DISCOVERY_ENABLED:-false}
-      PROVIDER_ORDER: ${PROVIDER_ORDER:-groq,sambanova,mistral,huggingface,cohere,cloudflare,github-models,openrouter,gemini,ollama}
+      PROVIDER_ORDER: ${PROVIDER_ORDER:-groq,sambanova,mistral,huggingface,cohere,cloudflare,github-models,openrouter,gemini,llamacpp,ollama}
 
       WEB_UI_ENABLED: ${WEB_UI_ENABLED:-false}
       WEB_UI_HOST: ${WEB_UI_HOST:-0.0.0.0}
@@ -210,59 +216,27 @@ services:
 
     restart: unless-stopped
 
-  ollama:
-    profiles: ["ollama", "local-ai"]
-    image: ollama/ollama:latest
-    container_name: native-openclaw-ollama
+  llama-cpp:
+    profiles: ["llamacpp", "local-ai"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: native-openclaw-llama-cpp
     restart: unless-stopped
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "${LLAMACPP_PORT:-8091}:8091"
     volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-
-  ollama-pull:
-    profiles: ["ollama", "local-ai"]
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_started
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_BOOTSTRAP_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
-    entrypoint: ["/bin/sh", "-lc"]
-    command: |
-      until ollama list >/dev/null 2>&1; do
-        echo "Waiting for Ollama...";
-        sleep 2;
-      done;
-      echo "Pulling Ollama model: $OLLAMA_BOOTSTRAP_MODEL";
-      ollama pull "$OLLAMA_BOOTSTRAP_MODEL";
-      echo "Ollama model ready: $OLLAMA_BOOTSTRAP_MODEL"
-
-  ollama-preloaded:
-    profiles: ["ollama-preloaded"]
-    build:
-      context: .
-      dockerfile: docker/ollama/Dockerfile
-      args:
-        OLLAMA_PRELOAD_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
-    container_name: native-openclaw-ollama-preloaded
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
+      - ./models:/models
+      - llama-cpp-cache:/root/.cache/llama.cpp
+    command:
+      - -hf
+      - ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8091"
+      - --ctx-size
+      - ${LLAMACPP_CTX_SIZE:-8192}
+      - --threads
+      - ${LLAMACPP_THREADS:-4}
 
   browser-agent:
     profiles: ["browser", "external-agents"]
@@ -317,4 +291,4 @@ services:
   #   restart: unless-stopped
 
 volumes:
-  ollama-data:
+  llama-cpp-cache:

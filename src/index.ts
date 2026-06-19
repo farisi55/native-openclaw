@@ -249,7 +249,7 @@ async function bootstrap(): Promise<void> {
 
   const providers = await createProviderRegistry(config);
   if (providers.size === 0) {
-    logger.warn('No providers available. Set at least one API key or start Ollama.');
+    logger.warn('No providers available. Set at least one API key or enable a local provider.');
   }
 
   const settings = new SettingsManager(config.storage.dataDir);

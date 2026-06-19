@@ -19,6 +19,10 @@ const PROVIDER_ENV_KEYS = [
   'OLLAMA_BASE_URL',
   'OLLAMA_DEFAULT_MODEL',
   'OLLAMA_TIMEOUT_MS',
+  'LLAMACPP_ENABLED',
+  'LLAMACPP_BASE_URL',
+  'LLAMACPP_DEFAULT_MODEL',
+  'LLAMACPP_TIMEOUT_MS',
   'CLOUDFLARE_AI_ENABLED',
   'CLOUDFLARE_API_KEY',
   'CLOUDFLARE_ACCOUNT_ID',
@@ -76,12 +80,27 @@ test('validateConfig does NOT throw when OLLAMA_ENABLED=true', () => {
   });
 });
 
+test('validateConfig does NOT throw when LLAMACPP_ENABLED=true', () => {
+  withProviderEnv({ LLAMACPP_ENABLED: 'true', LLAMACPP_BASE_URL: 'http://llama-cpp:8091' }, () => {
+    assert.doesNotThrow(() => validateConfig());
+  });
+});
+
 test('validateConfig validates Ollama URL and timeout when enabled', () => {
   withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_BASE_URL: 'not-a-url' }, () => {
     assert.throws(() => validateConfig(), /OLLAMA_BASE_URL/);
   });
   withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_TIMEOUT_MS: '0' }, () => {
     assert.throws(() => validateConfig(), /OLLAMA_TIMEOUT_MS/);
+  });
+});
+
+test('validateConfig validates llama.cpp URL and timeout when enabled', () => {
+  withProviderEnv({ LLAMACPP_ENABLED: 'true', LLAMACPP_BASE_URL: 'not-a-url' }, () => {
+    assert.throws(() => validateConfig(), /LLAMACPP_BASE_URL/);
+  });
+  withProviderEnv({ LLAMACPP_ENABLED: 'true', LLAMACPP_TIMEOUT_MS: '0' }, () => {
+    assert.throws(() => validateConfig(), /LLAMACPP_TIMEOUT_MS/);
   });
 });
 

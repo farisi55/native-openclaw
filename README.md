@@ -1,6 +1,6 @@
-# native-openclaw
+﻿# native-openclaw
 
-> Multi-provider AI agent terminal — native TypeScript, zero framework lock-in.
+> Multi-provider AI agent terminal â€” native TypeScript, zero framework lock-in.
 
 Interactive chat REPL dengan arsitektur reasoning-first yang mendukung 10 provider LLM secara bersamaan. Setiap percakapan disimpan sebagai plain JSON. Skill system berbasis file Markdown. Dilengkapi HTTP API, Web UI, Telegram bot, cronjob scheduler, semantic memory, self-healing, dan self-upgrade.
 
@@ -8,20 +8,20 @@ Interactive chat REPL dengan arsitektur reasoning-first yang mendukung 10 provid
 
 ## Features
 
-- **Multi-provider router** — 12 provider aktif bersamaan, auto-fallback, task-aware routing
-- **Reasoning-first orchestrator** — internal reasoning sebelum setiap tool call
-- **Semantic memory** — TF-IDF local (tanpa vector DB eksternal), persisten antar sesi
-- **ReAct loop** — Reason → Action → Observe → Answer, hingga 4 steps per turn
-- **Prompt optimizer** — compresses context, classifies intent, optimizes token usage
-- **Workspace** — local-first agent home dengan MEMORY.md, WORKFLOW.md, HEARTBEAT.md
-- **Scheduler** — cronjob dari natural language, timezone-aware, email notification
-- **Self-Improving** — ekstraksi skill otomatis dari setiap percakapan
-- **Self-Healing** — deteksi bug → patch → QA → rollback, fully autonomous
-- **Self-Upgrade** — implementasi fitur baru ke codebase sendiri
-- **MCP** — Model Context Protocol dengan preset server (tavily, firecrawl, brevo, e2b)
-- **HTTP API** — REST endpoint dengan auth token dan rate limiting
-- **Web UI** — lightweight chat UI (smooth) berbasis vanilla HTML/CSS/JS
-- **Telegram** — full bot integration dengan polling dan queue management
+- **Multi-provider router** â€” 12 provider aktif bersamaan, auto-fallback, task-aware routing
+- **Reasoning-first orchestrator** â€” internal reasoning sebelum setiap tool call
+- **Semantic memory** â€” TF-IDF local (tanpa vector DB eksternal), persisten antar sesi
+- **ReAct loop** â€” Reason â†’ Action â†’ Observe â†’ Answer, hingga 4 steps per turn
+- **Prompt optimizer** â€” compresses context, classifies intent, optimizes token usage
+- **Workspace** â€” local-first agent home dengan MEMORY.md, WORKFLOW.md, HEARTBEAT.md
+- **Scheduler** â€” cronjob dari natural language, timezone-aware, email notification
+- **Self-Improving** â€” ekstraksi skill otomatis dari setiap percakapan
+- **Self-Healing** â€” deteksi bug â†’ patch â†’ QA â†’ rollback, fully autonomous
+- **Self-Upgrade** â€” implementasi fitur baru ke codebase sendiri
+- **MCP** â€” Model Context Protocol dengan preset server (tavily, firecrawl, brevo, e2b)
+- **HTTP API** â€” REST endpoint dengan auth token dan rate limiting
+- **Web UI** â€” lightweight chat UI (smooth) berbasis vanilla HTML/CSS/JS
+- **Telegram** â€” full bot integration dengan polling dan queue management
 
 ---
 
@@ -42,7 +42,7 @@ cd native-openclaw
 npm install
 
 cp .env.example .env
-# Edit .env — tambahkan minimal satu API key provider
+# Edit .env â€” tambahkan minimal satu API key provider
 
 npm run dev      # development, tanpa build step
 # atau
@@ -68,7 +68,8 @@ Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runti
 | Puter | `PUTER_API_KEY` | `gpt-5.5` | Backend ProviderRouter only |
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `@cf/meta/llama-3.1-8b-instruct` | Requires account ID and enable flag |
 | GitHub Models | `GITHUB_MODELS_API_KEY` | `openai/gpt-4.1` | Token needs Models read access |
-| Ollama | *(none)* | `qwen2.5:0.5b` | Optional local provider. Enable with `OLLAMA_ENABLED=true`; Docker uses `http://ollama:11434` |
+| llama.cpp Server | *(none)* | `qwen2.5-0.5b-instruct-q4_k_m.gguf` | Optional Docker local provider. Enable with `LLAMACPP_ENABLED=true`; Docker uses `http://llama-cpp:8091` |
+| Ollama | *(none)* | `qwen2.5:0.5b` | Optional host-local provider outside Docker. Enable with `OLLAMA_ENABLED=true`; use `http://localhost:11434` |
 
 Cloudflare and GitHub Models are normal LLM providers. They run through `ProviderRouter`
 and participate in its fallback path; they are not AgentGateway connectors.
@@ -88,17 +89,29 @@ Switch manually with `/provider cloudflare` or `/provider github-models`. Run a
 minimal live diagnostic with `/provider doctor cloudflare` or
 `/provider doctor github-models`.
 
-Ollama is intentionally disabled by default so the core app stays lightweight.
-For local host usage, use `OLLAMA_BASE_URL=http://localhost:11434`. For Docker
-Compose usage, use `OLLAMA_BASE_URL=http://ollama:11434` and enable the Compose
-profile. Native OpenClaw also tries `localhost` automatically if the Docker
-hostname is configured but the app is running on the host.
+Local inference is intentionally disabled by default so the core app stays
+lightweight. Docker Compose local inference uses `llama.cpp` through the
+`llamacpp` profile. Ollama remains available for host-local usage outside Docker.
 
-Docker profile env:
+Docker llama.cpp profile env:
+
+```env
+LLAMACPP_ENABLED=true
+LLAMACPP_BASE_URL=http://llama-cpp:8091
+LLAMACPP_DEFAULT_MODEL=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_MODELS=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_TIMEOUT_MS=120000
+```
+
+Start it with `docker compose --profile llamacpp up -d`, then run
+`/provider llamacpp`, `/model qwen2.5-0.5b-instruct-q4_k_m.gguf`, or
+`/provider doctor llamacpp`.
+
+Host-local Ollama remains supported:
 
 ```env
 OLLAMA_ENABLED=true
-OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
 OLLAMA_MODELS=qwen2.5:0.5b
 OLLAMA_TIMEOUT_MS=120000
@@ -112,19 +125,19 @@ Then run `/provider ollama`, `/model qwen2.5:0.5b`, or `/provider doctor ollama`
 
 | Task Type | Priority Order |
 |-----------|----------------|
-| `fast_chat` | groq → sambanova → cloudflare → github-models → openrouter → mistral → ollama |
-| `reasoning` | sambanova → gemini → github-models → cloudflare → openrouter → groq → ollama |
-| `coding` | sambanova → groq → github-models → mistral → cloudflare → openrouter → ollama |
-| `vision` | gemini → github-models → openrouter → ollama |
-| `local` | ollama |
+| `fast_chat` | groq -> sambanova -> cloudflare -> github-models -> openrouter -> mistral -> llamacpp -> ollama |
+| `reasoning` | sambanova -> gemini -> github-models -> cloudflare -> openrouter -> groq -> llamacpp -> ollama |
+| `coding` | sambanova -> groq -> github-models -> mistral -> cloudflare -> openrouter -> llamacpp -> ollama |
+| `vision` | gemini -> github-models -> openrouter -> llamacpp -> ollama |
+| `local` | llamacpp -> ollama |
 
-Router melacak health setiap provider (latency, error rate). Jika provider utama gagal, auto-fallback ke provider berikutnya — transparan tanpa interrupsi.
+Router melacak health setiap provider (latency, error rate). Jika provider utama gagal, auto-fallback ke provider berikutnya â€” transparan tanpa interrupsi.
 
 ```env
 ROUTER_ENABLED=true    # aktifkan multi-provider router
 AUTO_FALLBACK=true     # auto-switch ke provider lain saat gagal
 AUTO_SWITCH=true       # proactive switching berdasarkan task type
-PROVIDER_ORDER=groq,mistral,cloudflare,github-models,gemini,openrouter,ollama
+PROVIDER_ORDER=groq,mistral,cloudflare,github-models,gemini,openrouter,llamacpp,ollama
 ```
 
 ---
@@ -133,41 +146,41 @@ PROVIDER_ORDER=groq,mistral,cloudflare,github-models,gemini,openrouter,ollama
 
 ```
 User Input
-    │
-    ▼
-Memory Extractor       ← extract & persist learned facts from conversation
-    │
-    ▼
-Capability Installer   ← deteksi natural-language install intent
-    │
-    ▼
-Action Handler         ← CLI management actions (/session, /skills, dst)
-    │
-    ▼
-Reasoning Engine       ← internal micro-LLM: tool needed? which one? (temp=0)
-    │
-    ▼
-Context Compressor     ← TF-IDF semantic retrieval + sliding window
-    │
-    ▼
-Prompt Builder         ← base prompt + memory + workspace + skills + tools
-    │
-    ▼
-ReAct Loop / ToolLoop  ← LLM via ProviderRouter → tool calls → observe → repeat
-    │
-    ▼
-Semantic Memory Store  ← index exchange untuk future retrieval
-    │
-    ▼
+    â”‚
+    â–¼
+Memory Extractor       â† extract & persist learned facts from conversation
+    â”‚
+    â–¼
+Capability Installer   â† deteksi natural-language install intent
+    â”‚
+    â–¼
+Action Handler         â† CLI management actions (/session, /skills, dst)
+    â”‚
+    â–¼
+Reasoning Engine       â† internal micro-LLM: tool needed? which one? (temp=0)
+    â”‚
+    â–¼
+Context Compressor     â† TF-IDF semantic retrieval + sliding window
+    â”‚
+    â–¼
+Prompt Builder         â† base prompt + memory + workspace + skills + tools
+    â”‚
+    â–¼
+ReAct Loop / ToolLoop  â† LLM via ProviderRouter â†’ tool calls â†’ observe â†’ repeat
+    â”‚
+    â–¼
+Semantic Memory Store  â† index exchange untuk future retrieval
+    â”‚
+    â–¼
 Response
 ```
 
 **ReAct Loop** internal per turn:
-1. **REASON** — LLM memutuskan action (JSON internal, `temp=0`)
-2. **ACTION** — jalankan tool / browse / shell command / direct answer
-3. **OBSERVE** — inject tool result ke LLM
-4. **REASON** — LLM bisa ambil step berikutnya (maks `REACT_MAX_STEPS=4`)
-5. **ANSWER** — LLM generate final response ke user
+1. **REASON** â€” LLM memutuskan action (JSON internal, `temp=0`)
+2. **ACTION** â€” jalankan tool / browse / shell command / direct answer
+3. **OBSERVE** â€” inject tool result ke LLM
+4. **REASON** â€” LLM bisa ambil step berikutnya (maks `REACT_MAX_STEPS=4`)
+5. **ANSWER** â€” LLM generate final response ke user
 
 ---
 
@@ -212,7 +225,7 @@ Sumber model:
 - `custom`: model yang ditambahkan manual via `/provider models add`.
 - `curated`: rekomendasi built-in agar provider tetap punya model yang masuk akal walau discovery gagal.
 
-Provider yang punya adapter katalog khusus memakai endpoint discovery native provider tersebut. Provider registered lain tetap ikut discovery melalui `provider.listModels()` sehingga model dari `ollama`, `openrouter`, `groq`, `mistral`, `gemini`, `sambanova`, dan `zai` dapat masuk cache saat refresh jika provider tersedia.
+Provider yang punya adapter katalog khusus memakai endpoint discovery native provider tersebut. Provider registered lain tetap ikut discovery melalui `provider.listModels()` sehingga model dari `llamacpp`, `ollama`, `openrouter`, `groq`, `mistral`, `gemini`, `sambanova`, dan `zai` dapat masuk cache saat refresh jika provider tersedia.
 
 Refresh katalog tidak berjalan saat startup kecuali:
 
@@ -352,15 +365,15 @@ Catatan provider:
 ### Natural Language Actions (Tanpa Slash)
 
 ```text
-list skills               → sama seperti /skills
-use skill <id>            → aktifkan skill
-install skill <id>        → install skill
-disable skill <id>        → nonaktifkan skill
-delete session <id>       → hapus session
-what time is it?          → system time (via tool)
-what is the news?         → web search (via browsing tool)
-fetch url <url>           → web fetch
-get data from API /path   → internal API client
+list skills               â†’ sama seperti /skills
+use skill <id>            â†’ aktifkan skill
+install skill <id>        â†’ install skill
+disable skill <id>        â†’ nonaktifkan skill
+delete session <id>       â†’ hapus session
+what time is it?          â†’ system time (via tool)
+what is the news?         â†’ web search (via browsing tool)
+fetch url <url>           â†’ web fetch
+get data from API /path   â†’ internal API client
 ```
 
 ---
@@ -371,7 +384,7 @@ Tool tersedia otomatis untuk LLM selama percakapan.
 
 | Tool | Fungsi |
 |------|--------|
-| `web-fetch` | Fetch URL dan ekstrak konten (Tavily → Firecrawl fallback) |
+| `web-fetch` | Fetch URL dan ekstrak konten (Tavily â†’ Firecrawl fallback) |
 | `system-execute` | Eksekusi shell command lokal dengan risk classification |
 | `api-client` | HTTP request ke internal/external API |
 | `opencode-agent` | External coding agent (opsional, perlu instalasi) |
@@ -429,7 +442,7 @@ priority: 10                 # lebih tinggi = diinjeksi lebih awal (default: 0)
 enabled: true
 ---
 
-Konten Markdown — diinjeksi verbatim ke system prompt.
+Konten Markdown â€” diinjeksi verbatim ke system prompt.
 ```
 
 ### Contoh Skill
@@ -470,20 +483,20 @@ Local-first agent home. Setiap instance menyimpan state, memory, report, dan art
 
 ```
 workspace/
-├── IDENTITY.md      # identitas dan persona agent
-├── SOUL.md          # nilai dan prinsip agent
-├── AGENTS.md        # definisi multi-agent
-├── USER.md          # preferensi dan info user
-├── TOOLS.md         # panduan penggunaan tool
-├── MEMORY.md        # long-term memory yang dikurasi
-├── WORKFLOW.md      # instruksi workflow otomatis
-├── HEARTBEAT.md     # recurring checklist
-├── state/           # session state
-├── memory/          # daily memory logs (YYYY-MM-DD.md)
-├── reports/         # output workflow dan laporan
-├── artifacts/       # file hasil kerja agent
-├── backup/          # backup otomatis
-└── trash/           # file yang dihapus (recoverable)
+â”œâ”€â”€ IDENTITY.md      # identitas dan persona agent
+â”œâ”€â”€ SOUL.md          # nilai dan prinsip agent
+â”œâ”€â”€ AGENTS.md        # definisi multi-agent
+â”œâ”€â”€ USER.md          # preferensi dan info user
+â”œâ”€â”€ TOOLS.md         # panduan penggunaan tool
+â”œâ”€â”€ MEMORY.md        # long-term memory yang dikurasi
+â”œâ”€â”€ WORKFLOW.md      # instruksi workflow otomatis
+â”œâ”€â”€ HEARTBEAT.md     # recurring checklist
+â”œâ”€â”€ state/           # session state
+â”œâ”€â”€ memory/          # daily memory logs (YYYY-MM-DD.md)
+â”œâ”€â”€ reports/         # output workflow dan laporan
+â”œâ”€â”€ artifacts/       # file hasil kerja agent
+â”œâ”€â”€ backup/          # backup otomatis
+â””â”€â”€ trash/           # file yang dihapus (recoverable)
 ```
 
 ### Workspace Memory
@@ -523,7 +536,7 @@ Sebelum setiap turn, optimizer menganalisis input dan mengompres context untuk e
 |------|-----------|
 | `off` | Disabled |
 | `fast` | Minimal processing, low overhead |
-| `balanced` | Default — intent classification + context compression |
+| `balanced` | Default â€” intent classification + context compression |
 | `strict` | Full analysis, ambiguity detection, risk flagging |
 
 ```env
@@ -565,14 +578,14 @@ Job yang membutuhkan email otomatis generate subject dan HTML content via LLM, l
 
 Autonomous bug-fix loop. Ketika diaktifkan dan error terdeteksi:
 
-1. **Bug Analyzer** — analisis error log dan isolasi root cause
-2. **Patch Planner** — rencanakan perubahan file
-3. **Snapshot** — buat snapshot sebelum apply patch
-4. **Patch Applier** — terapkan diff ke source code
-5. **Dependency Resolver** — install missing packages jika dibutuhkan
-6. **Test Runner** — jalankan test commands (build + test)
-7. **QA Agent** — review hasil test
-8. **Rollback** — jika gagal, rollback ke snapshot otomatis
+1. **Bug Analyzer** â€” analisis error log dan isolasi root cause
+2. **Patch Planner** â€” rencanakan perubahan file
+3. **Snapshot** â€” buat snapshot sebelum apply patch
+4. **Patch Applier** â€” terapkan diff ke source code
+5. **Dependency Resolver** â€” install missing packages jika dibutuhkan
+6. **Test Runner** â€” jalankan test commands (build + test)
+7. **QA Agent** â€” review hasil test
+8. **Rollback** â€” jika gagal, rollback ke snapshot otomatis
 
 ```env
 SELF_HEALING_ENABLED=false
@@ -598,7 +611,7 @@ SELF_UPGRADE_ENABLED=false
 SELF_UPGRADE_MAX_LOOPS=3
 SELF_UPGRADE_AUTO_APPLY=true
 SELF_UPGRADE_AUTO_ROLLBACK=true
-SELF_UPGRADE_AUTO_RESTART=true          # exit code 42 → Docker restart
+SELF_UPGRADE_AUTO_RESTART=true          # exit code 42 â†’ Docker restart
 SELF_UPGRADE_AUTO_REGISTER=true
 SELF_UPGRADE_ALLOWED_TARGETS=repo
 ```
@@ -730,69 +743,65 @@ Scaffold Phase 3 sengaja ringan:
 Runtime tersebut dapat ditambahkan kemudian hanya ke image worker masing-masing, tanpa menambah
 dependency atau ukuran image core Native OpenClaw.
 
-## Ollama Docker Profile
+## llama.cpp Docker Profile
 
-Ollama berjalan sebagai service Compose terpisah agar image core Native OpenClaw tetap ringan.
-Default `docker compose up -d` tidak menyalakan Ollama. Gunakan profile `ollama` saat ingin local AI:
+Docker local inference menggunakan `llama.cpp` server agar image core Native OpenClaw tetap ringan.
+Default `docker compose up -d` tidak menyalakan local model server. Gunakan profile `llamacpp` saat ingin local AI:
 
 ```bash
-docker compose --profile ollama up -d
+docker compose --profile llamacpp up -d
 ```
 
 Profile ini menjalankan:
 
 - `openclaw`: core Native OpenClaw.
-- `ollama`: server Ollama di `http://ollama:11434`.
-- `ollama-pull`: job bootstrap yang memastikan model `qwen2.5:0.5b` sudah ter-pull.
-- volume `ollama-data`: penyimpanan model agar tidak hilang saat container dibuat ulang.
+- `llama-cpp`: server llama.cpp OpenAI-compatible di `http://llama-cpp:8091`.
+- volume `llama-cpp-cache`: cache model HF agar tidak hilang saat container dibuat ulang.
 
 Aktifkan provider di `.env`:
 
 ```env
-OLLAMA_ENABLED=true
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
-OLLAMA_MODELS=qwen2.5:0.5b
-OLLAMA_TIMEOUT_MS=120000
-OLLAMA_BOOTSTRAP_MODEL=qwen2.5:0.5b
+LLAMACPP_ENABLED=true
+LLAMACPP_BASE_URL=http://llama-cpp:8091
+LLAMACPP_DEFAULT_MODEL=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_MODELS=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_TIMEOUT_MS=120000
+LLAMACPP_HF_MODEL=Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf
 ```
 
 Verifikasi:
 
 ```bash
-docker compose --profile ollama ps
-docker compose exec ollama ollama list
-docker compose exec openclaw sh -lc 'curl -s http://ollama:11434/api/tags'
+docker compose --profile llamacpp ps
+docker compose logs llama-cpp
+docker compose exec openclaw sh -lc 'curl -s http://llama-cpp:8091/v1/models'
 ```
 
 Di CLI Native OpenClaw:
 
 ```text
-/provider ollama
-/model qwen2.5:0.5b
-/provider doctor ollama
+/provider llamacpp
+/model qwen2.5-0.5b-instruct-q4_k_m.gguf
+/provider doctor llamacpp
 ```
 
-`qwen2.5:0.5b` sengaja kecil untuk smoke test CPU-only dan server hemat resource. Untuk kualitas
-jawaban lebih baik, set `OLLAMA_BOOTSTRAP_MODEL`, `OLLAMA_DEFAULT_MODEL`, dan `OLLAMA_MODELS` ke
-model yang lebih besar sesuai RAM/VRAM mesin. GPU tidak wajib; jika ingin GPU, tambahkan konfigurasi
-runtime NVIDIA ke service `ollama` sesuai environment Docker host.
+`qwen2.5-0.5b-instruct-q4_k_m.gguf` sengaja kecil untuk smoke test CPU-only dan server hemat
+resource. Untuk kualitas jawaban lebih baik, set `LLAMACPP_HF_MODEL`, `LLAMACPP_DEFAULT_MODEL`, dan
+`LLAMACPP_MODELS` ke model GGUF yang lebih besar sesuai RAM/VRAM mesin.
 
-Optional build-time preload tersedia via profile `ollama-preloaded` dan `docker/ollama/Dockerfile`,
-tetapi runtime pull lewat `ollama-pull` tetap direkomendasikan karena image preloaded bisa besar dan
-daemon Ollama saat Docker build lebih mudah flaky.
+Ollama tetap didukung sebagai provider host-local di luar Docker. Jika ingin memakai Ollama lokal,
+jalankan Ollama di host dan set `OLLAMA_BASE_URL=http://localhost:11434`.
 
 Troubleshooting cepat:
 
-- `Ollama server unavailable`: pastikan `docker compose --profile ollama up -d` sudah berjalan dan
-  `OLLAMA_BASE_URL=http://ollama:11434` untuk container.
-- `Model qwen2.5:0.5b not found`: jalankan `docker compose run --rm ollama-pull` atau
-  `docker compose exec ollama ollama pull qwen2.5:0.5b`.
+- `llama.cpp server unavailable`: pastikan `docker compose --profile llamacpp up -d` sudah berjalan dan
+  `LLAMACPP_BASE_URL=http://llama-cpp:8091` untuk container.
+- `Model qwen2.5-0.5b-instruct-q4_k_m.gguf not found`: cek `docker compose logs llama-cpp`.
 - Pull lambat atau gagal di proxy corporate: pastikan `HTTP_PROXY`, `HTTPS_PROXY`, dan `NO_PROXY`
-  sudah benar; `NO_PROXY` sebaiknya menyertakan `ollama`.
-- Port `11434` sudah dipakai di host: set `OLLAMA_PORT=11435`; internal container tetap memakai
-  `http://ollama:11434`.
-- Memori kecil: tetap gunakan `qwen2.5:0.5b` atau model kecil lain.
+  sudah benar; `NO_PROXY` sebaiknya menyertakan `llama-cpp`.
+- Port `8091` sudah dipakai di host: set `LLAMACPP_PORT=8092`; internal container tetap memakai
+  `http://llama-cpp:8091`.
+- Memori kecil: tetap gunakan model 0.5B/1.5B quantized atau model GGUF kecil lain.
 
 ### Phase 3.5 Stabilization and QA
 
@@ -846,7 +855,7 @@ npm run qa:docker-profiles
 ```
 
 Perintah tersebut menjalankan `docker compose config --services` untuk konfigurasi default serta
-profile `browser`, `research`, `spreadsheet`, `external-agents`, dan `ollama`. Validasi runtime container tetap
+profile `browser`, `research`, `spreadsheet`, `external-agents`, dan `llamacpp`. Validasi runtime container tetap
 dapat dilakukan manual:
 
 ```bash
@@ -858,7 +867,7 @@ docker compose --profile browser up -d
 docker compose --profile research up -d
 docker compose --profile spreadsheet up -d
 docker compose --profile external-agents up -d
-docker compose --profile ollama up -d
+docker compose --profile llamacpp up -d
 ```
 
 Jika capability eksternal diminta saat worker disabled, respons hanya memberi instruksi profile dan
@@ -868,7 +877,7 @@ env yang perlu diaktifkan. Sistem tidak mengklaim browser, riset, atau spreadshe
 
 ## OpenCode Agent
 
-Integrasi opsional dengan OpenCode sebagai external coding agent — bukan provider chat biasa.
+Integrasi opsional dengan OpenCode sebagai external coding agent â€” bukan provider chat biasa.
 
 **Use cases**: self-healing patch generation, self-upgrade, code review, analisis task coding.
 
@@ -1104,7 +1113,7 @@ curl -X POST "http://127.0.0.1:18789/native-openclaw/v1/chat" \
 }
 ```
 
-Field `preferredProvider` dan `preferredModel` opsional — tanpa keduanya, router memilih provider terbaik secara otomatis.
+Field `preferredProvider` dan `preferredModel` opsional â€” tanpa keduanya, router memilih provider terbaik secara otomatis.
 
 ---
 
@@ -1159,15 +1168,15 @@ TELEGRAM_PROCESS_TIMEOUT_MS=90000
 TELEGRAM_SUPPRESS_CONFLICT_ERRORS=true           # suppress polling conflict log
 ```
 
-Pastikan hanya satu instance yang berjalan dengan bot token yang sama — polling conflict terjadi jika ada dua consumer sekaligus.
+Pastikan hanya satu instance yang berjalan dengan bot token yang sama â€” polling conflict terjadi jika ada dua consumer sekaligus.
 
 ---
 
 ## Docker
 
-Dockerfile menggunakan 2-stage build (builder → runtime). Runtime berjalan sebagai non-root user `openclaw`.
+Dockerfile menggunakan 2-stage build (builder â†’ runtime). Runtime berjalan sebagai non-root user `openclaw`.
 
-### Docker Compose — Deployment
+### Docker Compose â€” Deployment
 
 **1. Buat folder persistent**
 
@@ -1205,19 +1214,19 @@ API_HOST=0.0.0.0
 API_PORT=18789
 API_AUTH_TOKEN=ganti_token_ini
 
-# Proxy — kosongkan jika tidak dibutuhkan
+# Proxy â€” kosongkan jika tidak dibutuhkan
 HTTP_PROXY=
 HTTPS_PROXY=
-NO_PROXY=localhost,127.0.0.1,::1,openclaw,ollama,host.docker.internal
+NO_PROXY=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal
 
-# Provider keys — isi yang digunakan saja
+# Provider keys â€” isi yang digunakan saja
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
 ZAI_API_KEY=
-OLLAMA_ENABLED=false
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_DEFAULT_MODEL=qwen2.5:0.5b
-OLLAMA_MODELS=qwen2.5:0.5b
+LLAMACPP_ENABLED=false
+LLAMACPP_BASE_URL=http://llama-cpp:8091
+LLAMACPP_DEFAULT_MODEL=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_MODELS=qwen2.5-0.5b-instruct-q4_k_m.gguf
 ```
 
 > Jangan commit `.env`: `echo ".env" >> .gitignore`
@@ -1266,7 +1275,7 @@ docker compose logs -f openclaw
 ```bash
 docker attach native-openclaw
 # Detach tanpa stop: Ctrl+P, lalu Ctrl+Q
-# JANGAN Ctrl+C — akan menghentikan Node process
+# JANGAN Ctrl+C â€” akan menghentikan Node process
 ```
 
 **6. Install OpenCode di Docker (opsional)**
@@ -1322,11 +1331,11 @@ services:
       STORAGE_BACKEND: file
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-18789}
-      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-false}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen2.5:0.5b}
-      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen2.5:0.5b}
-      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-120000}
+      LLAMACPP_ENABLED: ${LLAMACPP_ENABLED:-false}
+      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://llama-cpp:8091}
+      LLAMACPP_DEFAULT_MODEL: ${LLAMACPP_DEFAULT_MODEL:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODELS: ${LLAMACPP_MODELS:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_TIMEOUT_MS: ${LLAMACPP_TIMEOUT_MS:-120000}
 
     volumes:
       - ./data:/data
@@ -1343,28 +1352,28 @@ services:
 
     restart: unless-stopped
 
-  ollama:
-    profiles: ["ollama", "local-ai"]
-    image: ollama/ollama:latest
+  llama-cpp:
+    profiles: ["llamacpp", "local-ai"]
+    image: ghcr.io/ggml-org/llama.cpp:server
     volumes:
-      - ollama-data:/root/.ollama
+      - ./models:/models
+      - llama-cpp-cache:/root/.cache/llama.cpp
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-
-  ollama-pull:
-    profiles: ["ollama", "local-ai"]
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_started
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_BOOTSTRAP_MODEL: ${OLLAMA_BOOTSTRAP_MODEL:-qwen2.5:0.5b}
+      - "${LLAMACPP_PORT:-8091}:8091"
+    command:
+      - -hf
+      - ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8091"
+      - --ctx-size
+      - ${LLAMACPP_CTX_SIZE:-8192}
+      - --threads
+      - ${LLAMACPP_THREADS:-4}
 
 volumes:
-  ollama-data:
+  llama-cpp-cache:
 ```
 
 ### Docker Compose Operations
@@ -1424,7 +1433,7 @@ Salin `.env.example` ke `.env`. Referensi lengkap:
 | Variable | Default | Keterangan |
 |----------|---------|-----------|
 | `AGENT_MAX_TURNS` | `20` | Maks turns per session |
-| `AGENT_TEMPERATURE` | `0.7` | Default temperature (0–2) |
+| `AGENT_TEMPERATURE` | `0.7` | Default temperature (0â€“2) |
 | `AGENT_MAX_TOKENS` | `4096` | Default max output tokens |
 | `AGENT_SYSTEM_PROMPT` | `You are a helpful AI assistant.` | Base system prompt |
 | `REASONING_ENABLED` | `true` | Aktifkan reasoning-first step |
@@ -1508,7 +1517,7 @@ OPENCODE_AGENT_KILL_GRACE_MS=10000
 OPENCODE_AGENT_KILL_TREE=true
 ```
 
-Windows — cek dan kill proses:
+Windows â€” cek dan kill proses:
 
 ```powershell
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "opencode" }
@@ -1532,7 +1541,7 @@ Untuk SELinux: tambahkan `:Z` pada setiap volume di `docker-compose.yml`.
 
 ### Docker: Self-Healing `EACCES: permission denied, copyfile ... -> /app/src/...`
 
-Error ini berbeda dari EACCES pada `/workspace`. Self-healing engine mencoba menulis patch hasil analisis ke `/app/src/` (atau `/app/test/`, `/app/tools/`, dst), namun direktori-direktori tersebut di-bind-mount dari host dengan kepemilikan host user — bukan user `openclaw` di container.
+Error ini berbeda dari EACCES pada `/workspace`. Self-healing engine mencoba menulis patch hasil analisis ke `/app/src/` (atau `/app/test/`, `/app/tools/`, dst), namun direktori-direktori tersebut di-bind-mount dari host dengan kepemilikan host user â€” bukan user `openclaw` di container.
 
 **Gejala di log:**
 ```
@@ -1581,7 +1590,7 @@ Lalu modifikasi `Dockerfile` di runtime stage, tepat sebelum `USER openclaw`:
 ```dockerfile
 COPY --chown=root:root entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-# USER openclaw   ← baris ini tetap ada di bawahnya
+# USER openclaw   â† baris ini tetap ada di bawahnya
 
 ENTRYPOINT ["/entrypoint.sh"]
 # (hapus baris: ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"])
@@ -1595,7 +1604,7 @@ docker compose build --no-cache && docker compose up -d
 
 ### Docker: Warning `.env not found at /app/.env`
 
-Aman diabaikan jika menggunakan `env_file` di Compose — variabel sudah diinjeksi ke `process.env`. Untuk menghilangkan warning, mount eksplisit:
+Aman diabaikan jika menggunakan `env_file` di Compose â€” variabel sudah diinjeksi ke `process.env`. Untuk menghilangkan warning, mount eksplisit:
 
 ```yaml
 volumes:
@@ -1683,59 +1692,59 @@ RESTART_NOTIFY_TELEGRAM=true
 
 ```
 native-openclaw/
-├── src/
-│   ├── index.ts                    # Bootstrap v8 — entry point
-│   ├── agents/
-│   │   ├── orchestrator.ts         # Reasoning-first turn loop
-│   │   ├── reasoning-engine.ts     # Internal tool decision layer
-│   │   ├── react-loop.ts           # ReAct (Reason→Action→Observe→Answer)
-│   │   ├── tool-loop.ts            # LLM + tool call execution
-│   │   ├── prompt-builder.ts       # System prompt assembly
-│   │   └── message-assembler.ts    # Sliding-window context prep
-│   ├── providers/                  # groq, mistral, openrouter, ollama,
-│   │   └── ...                     # zai, sambanova, puter, gemini, dll
-│   ├── router/
-│   │   ├── provider-router.ts      # Central router
-│   │   ├── provider-health.ts      # Health tracking per provider
-│   │   ├── routing-strategy.ts     # Task-aware scoring
-│   │   └── fallback-manager.ts     # Auto-fallback logic
-│   ├── memory/
-│   │   ├── semantic-memory.ts      # TF-IDF local semantic store
-│   │   └── context-compressor.ts   # Context window management
-│   ├── skills/
-│   │   ├── registry.ts             # Skill activation & injection
-│   │   ├── self-improving-engine.ts # Auto skill extraction loop
-│   │   └── skill-evaluator.ts      # Quality evaluation
-│   ├── self-healing/
-│   │   ├── self-healing-engine.ts  # Autonomous bug-fix orchestrator
-│   │   ├── self-upgrade-engine.ts  # Autonomous feature implementor
-│   │   ├── bug-analyzer-agent.ts   # Root cause analysis
-│   │   ├── patch-planner.ts        # Diff planning
-│   │   ├── patch-applier.ts        # File modification
-│   │   ├── qa-agent.ts             # Post-patch quality check
-│   │   └── snapshot-manager.ts     # Rollback checkpoint
-│   ├── prompt-optimizer/           # Context compression & intent classification
-│   ├── scheduler/                  # Cronjob engine, store, types
-│   ├── tools/
-│   │   ├── tool-registry.ts        # Plugin-based tool registry
-│   │   ├── plugins/                # Built-in tool plugins
-│   │   └── opencode-agent.ts       # External coding agent wrapper
-│   ├── mcp/                        # Model Context Protocol integration
-│   ├── api/                        # HTTP REST API server
-│   ├── web-ui/                     # smooth — Web chat UI
-│   ├── integrations/               # Telegram bot integration
-│   ├── workflows/                  # WORKFLOW.md runner
-│   ├── workspace/                  # Local-first agent workspace
-│   ├── storage/                    # Session, settings, memory managers
-│   ├── network/                    # Proxy & DNS configuration
-│   └── config/                     # Env loader & Zod validator
-├── skills/                         # Drop .md skill files here
-├── workspace/                      # Agent workspace (auto-created)
-├── data/                           # Storage: sessions, semantic memory
-├── tools/                          # Installed external tools
-├── Dockerfile                      # 2-stage build (builder → runtime)
-├── docker-compose.yml
-└── .env.example
+â”œâ”€â”€ src/
+â”‚   â”œâ”€â”€ index.ts                    # Bootstrap v8 â€” entry point
+â”‚   â”œâ”€â”€ agents/
+â”‚   â”‚   â”œâ”€â”€ orchestrator.ts         # Reasoning-first turn loop
+â”‚   â”‚   â”œâ”€â”€ reasoning-engine.ts     # Internal tool decision layer
+â”‚   â”‚   â”œâ”€â”€ react-loop.ts           # ReAct (Reasonâ†’Actionâ†’Observeâ†’Answer)
+â”‚   â”‚   â”œâ”€â”€ tool-loop.ts            # LLM + tool call execution
+â”‚   â”‚   â”œâ”€â”€ prompt-builder.ts       # System prompt assembly
+â”‚   â”‚   â””â”€â”€ message-assembler.ts    # Sliding-window context prep
+â”‚   â”œâ”€â”€ providers/                  # groq, mistral, openrouter, llamacpp, ollama,
+â”‚   â”‚   â””â”€â”€ ...                     # zai, sambanova, puter, gemini, dll
+â”‚   â”œâ”€â”€ router/
+â”‚   â”‚   â”œâ”€â”€ provider-router.ts      # Central router
+â”‚   â”‚   â”œâ”€â”€ provider-health.ts      # Health tracking per provider
+â”‚   â”‚   â”œâ”€â”€ routing-strategy.ts     # Task-aware scoring
+â”‚   â”‚   â””â”€â”€ fallback-manager.ts     # Auto-fallback logic
+â”‚   â”œâ”€â”€ memory/
+â”‚   â”‚   â”œâ”€â”€ semantic-memory.ts      # TF-IDF local semantic store
+â”‚   â”‚   â””â”€â”€ context-compressor.ts   # Context window management
+â”‚   â”œâ”€â”€ skills/
+â”‚   â”‚   â”œâ”€â”€ registry.ts             # Skill activation & injection
+â”‚   â”‚   â”œâ”€â”€ self-improving-engine.ts # Auto skill extraction loop
+â”‚   â”‚   â””â”€â”€ skill-evaluator.ts      # Quality evaluation
+â”‚   â”œâ”€â”€ self-healing/
+â”‚   â”‚   â”œâ”€â”€ self-healing-engine.ts  # Autonomous bug-fix orchestrator
+â”‚   â”‚   â”œâ”€â”€ self-upgrade-engine.ts  # Autonomous feature implementor
+â”‚   â”‚   â”œâ”€â”€ bug-analyzer-agent.ts   # Root cause analysis
+â”‚   â”‚   â”œâ”€â”€ patch-planner.ts        # Diff planning
+â”‚   â”‚   â”œâ”€â”€ patch-applier.ts        # File modification
+â”‚   â”‚   â”œâ”€â”€ qa-agent.ts             # Post-patch quality check
+â”‚   â”‚   â””â”€â”€ snapshot-manager.ts     # Rollback checkpoint
+â”‚   â”œâ”€â”€ prompt-optimizer/           # Context compression & intent classification
+â”‚   â”œâ”€â”€ scheduler/                  # Cronjob engine, store, types
+â”‚   â”œâ”€â”€ tools/
+â”‚   â”‚   â”œâ”€â”€ tool-registry.ts        # Plugin-based tool registry
+â”‚   â”‚   â”œâ”€â”€ plugins/                # Built-in tool plugins
+â”‚   â”‚   â””â”€â”€ opencode-agent.ts       # External coding agent wrapper
+â”‚   â”œâ”€â”€ mcp/                        # Model Context Protocol integration
+â”‚   â”œâ”€â”€ api/                        # HTTP REST API server
+â”‚   â”œâ”€â”€ web-ui/                     # smooth â€” Web chat UI
+â”‚   â”œâ”€â”€ integrations/               # Telegram bot integration
+â”‚   â”œâ”€â”€ workflows/                  # WORKFLOW.md runner
+â”‚   â”œâ”€â”€ workspace/                  # Local-first agent workspace
+â”‚   â”œâ”€â”€ storage/                    # Session, settings, memory managers
+â”‚   â”œâ”€â”€ network/                    # Proxy & DNS configuration
+â”‚   â””â”€â”€ config/                     # Env loader & Zod validator
+â”œâ”€â”€ skills/                         # Drop .md skill files here
+â”œâ”€â”€ workspace/                      # Agent workspace (auto-created)
+â”œâ”€â”€ data/                           # Storage: sessions, semantic memory
+â”œâ”€â”€ tools/                          # Installed external tools
+â”œâ”€â”€ Dockerfile                      # 2-stage build (builder â†’ runtime)
+â”œâ”€â”€ docker-compose.yml
+â””â”€â”€ .env.example
 ```
 
 ---

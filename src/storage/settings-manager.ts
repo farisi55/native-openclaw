@@ -24,6 +24,7 @@ export interface AppSettings {
 
 const BUILTIN_DEFAULTS: Record<string, string> = {
   ollama:      'qwen2.5:1.5b',
+  llamacpp:    'qwen2.5-0.5b-instruct-q4_k_m.gguf',
   groq:        'llama-3.1-8b-instant',
   mistral:     'mistral-small-latest',
   openrouter:  'liquid/lfm-2.5-1.2b-instruct:free',

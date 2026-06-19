@@ -7,6 +7,7 @@ process.env.LOG_LEVEL = 'error';
 const {
   GeminiProvider,
   GroqProvider,
+  LlamaCppProvider,
   MistralProvider,
   OllamaProvider,
   OpenRouterProvider,
@@ -29,6 +30,12 @@ const originalEnv = {
   OLLAMA_DEFAULT_MODEL: process.env.OLLAMA_DEFAULT_MODEL,
   OLLAMA_MODELS: process.env.OLLAMA_MODELS,
   OLLAMA_TIMEOUT_MS: process.env.OLLAMA_TIMEOUT_MS,
+  LLAMACPP_ENABLED: process.env.LLAMACPP_ENABLED,
+  LLAMACPP_BASE_URL: process.env.LLAMACPP_BASE_URL,
+  LLAMACPP_DEFAULT_MODEL: process.env.LLAMACPP_DEFAULT_MODEL,
+  LLAMACPP_MODELS: process.env.LLAMACPP_MODELS,
+  LLAMACPP_TIMEOUT_MS: process.env.LLAMACPP_TIMEOUT_MS,
+  LLAMACPP_CTX_SIZE: process.env.LLAMACPP_CTX_SIZE,
   PROVIDER_MODEL_DISCOVERY_SHOW_UNTESTED: process.env.PROVIDER_MODEL_DISCOVERY_SHOW_UNTESTED,
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL,
@@ -598,4 +605,50 @@ test('Ollama provider doctor reports disabled, unavailable, missing model, and O
     cmdProvider({ providers: new Map([['ollama', provider]]) }, ['doctor', 'ollama'])
   );
   assert.match(output, /Ollama OK/);
+});
+
+test('llama.cpp provider doctor reports disabled, unavailable, missing model, and OK states', async () => {
+  process.env.LLAMACPP_ENABLED = 'false';
+  let output = await captureStdout(() => cmdProvider({ providers: new Map() }, ['doctor', 'llamacpp']));
+  assert.match(output, /llama\.cpp provider disabled/);
+  assert.match(output, /docker compose --profile llamacpp up -d/);
+
+  process.env.LLAMACPP_ENABLED = 'true';
+  process.env.LLAMACPP_BASE_URL = 'http://llama-cpp:8091';
+  process.env.LLAMACPP_DEFAULT_MODEL = 'qwen2.5-0.5b-instruct-q4_k_m.gguf';
+  process.env.LLAMACPP_MODELS = 'qwen2.5-0.5b-instruct-q4_k_m.gguf';
+  let provider = new LlamaCppProvider();
+
+  mockFetch(() => {
+    throw new Error('ECONNREFUSED');
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['llamacpp', provider]]) }, ['doctor', 'llamacpp'])
+  );
+  assert.match(output, /llama\.cpp server unavailable at http:\/\/llama-cpp:8091/);
+  assert.match(output, /docker compose --profile llamacpp up -d/);
+
+  mockFetch((url) => {
+    assert.match(url, /\/v1\/models$/);
+    return okJson({ data: [{ id: 'other-model.gguf' }] });
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['llamacpp', provider]]) }, ['doctor', 'llamacpp'])
+  );
+  assert.match(output, /Model qwen2\.5-0\.5b-instruct-q4_k_m\.gguf not found/);
+  assert.match(output, /docker compose logs llama-cpp/);
+
+  provider = new LlamaCppProvider();
+  mockFetch((url) => {
+    if (url.endsWith('/v1/models')) {
+      return okJson({ data: [{ id: 'qwen2.5-0.5b-instruct-q4_k_m.gguf' }] });
+    }
+    assert.match(url, /\/v1\/chat\/completions$/);
+    return openAiChatResponse('OK');
+  });
+  output = await captureStdout(() =>
+    cmdProvider({ providers: new Map([['llamacpp', provider]]) }, ['doctor', 'llamacpp'])
+  );
+  assert.match(output, /llama\.cpp OK at/);
+  assert.match(output, /qwen2\.5-0\.5b-instruct-q4_k_m\.gguf/);
 });
