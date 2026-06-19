@@ -745,20 +745,29 @@ dependency atau ukuran image core Native OpenClaw.
 
 ## llama.cpp Docker Profile
 
-Docker local inference menggunakan `llama.cpp` server agar image core Native OpenClaw tetap ringan.
-Default `docker compose up -d` tidak menyalakan local model server. Gunakan profile `llamacpp` saat ingin local AI:
+Docker local inference menggunakan `llama.cpp` server agar image core Native OpenClaw tetap ringan. Default `docker compose up -d` **tidak** menyalakan local model server. Gunakan profile `llamacpp` saat ingin local AI:
 
 ```bash
-docker compose --profile llamacpp up -d
+docker compose --profile llamacpp up -d --build
 ```
 
 Profile ini menjalankan:
 
 - `openclaw`: core Native OpenClaw.
+- `llama-model-download`: init/downloader container berbasis `curlimages/curl` untuk memastikan file GGUF tersedia di `./models`.
 - `llama-cpp`: server llama.cpp OpenAI-compatible di `http://llama-cpp:8091`.
-- volume `llama-cpp-cache`: cache model HF agar tidak hilang saat container dibuat ulang.
+- volume `llama-cpp-cache`: cache runtime llama.cpp.
 
-Aktifkan provider di `.env`:
+Model **tidak dibake ke image Dockerfile**. Model diunduh otomatis saat `docker compose --profile llamacpp up -d --build` dijalankan, lalu disimpan di folder host `./models`. Jika file model sudah ada, downloader akan skip dan tidak download ulang.
+
+Alasan desain ini:
+
+- image core Native OpenClaw tetap kecil;
+- deploy ulang tidak perlu download ulang selama `./models` tidak dihapus;
+- lebih stabil di corporate proxy karena download dilakukan oleh `curl`, bukan downloader internal `llama.cpp -hf`;
+- runtime `llama-cpp` memakai `--model /models/...gguf`, sehingga tidak butuh internet saat inference.
+
+### Konfigurasi `.env` untuk llama.cpp Docker
 
 ```env
 LLAMACPP_ENABLED=true
@@ -766,15 +775,72 @@ LLAMACPP_BASE_URL=http://llama-cpp:8091
 LLAMACPP_DEFAULT_MODEL=qwen2.5-0.5b-instruct-q4_k_m.gguf
 LLAMACPP_MODELS=qwen2.5-0.5b-instruct-q4_k_m.gguf
 LLAMACPP_TIMEOUT_MS=120000
-LLAMACPP_HF_MODEL=Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_REQUIRE_ON_STARTUP=false
+
+LLAMACPP_PORT=8091
+LLAMACPP_MODEL_SOURCE=local
+LLAMACPP_MODEL_FILE=qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_MODEL_PATH=/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
+LLAMACPP_CTX_SIZE=8192
+LLAMACPP_THREADS=4
 ```
 
-Verifikasi:
+Jika memakai proxy corporate, isi juga:
+
+```env
+HTTP_PROXY=http://10.131.18.14:3128
+HTTPS_PROXY=http://10.131.18.14:3128
+ALL_PROXY=http://10.131.18.14:3128
+http_proxy=http://10.131.18.14:3128
+https_proxy=http://10.131.18.14:3128
+all_proxy=http://10.131.18.14:3128
+
+NO_PROXY=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal
+no_proxy=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal
+```
+
+### Deploy dengan auto-download model
+
+Normal deploy dengan llama.cpp:
 
 ```bash
-docker compose --profile llamacpp ps
-docker compose logs llama-cpp
-docker compose exec openclaw sh -lc 'curl -s http://llama-cpp:8091/v1/models'
+docker compose --profile llamacpp up -d --build
+```
+
+Cek proses download model:
+
+```bash
+docker compose logs -f llama-model-download
+```
+
+Expected saat deploy pertama:
+
+```text
+Model not found. Downloading:
+...
+Model downloaded successfully:
+-rw-r--r-- ... qwen2.5-0.5b-instruct-q4_k_m.gguf
+```
+
+Expected saat deploy berikutnya:
+
+```text
+Model already exists:
+-rw-r--r-- ... qwen2.5-0.5b-instruct-q4_k_m.gguf
+```
+
+Cek server llama.cpp:
+
+```bash
+docker compose logs -f llama-cpp
+curl http://localhost:8091/v1/models
+```
+
+Test dari container `openclaw`:
+
+```bash
+docker compose exec openclaw sh -lc 'node -e "fetch("http://llama-cpp:8091/v1/models").then(async r => { console.log(r.status); console.log(await r.text()) }).catch(e => { console.error(e); process.exit(1) })"'
 ```
 
 Di CLI Native OpenClaw:
@@ -783,25 +849,68 @@ Di CLI Native OpenClaw:
 /provider llamacpp
 /model qwen2.5-0.5b-instruct-q4_k_m.gguf
 /provider doctor llamacpp
+hai
 ```
 
-`qwen2.5-0.5b-instruct-q4_k_m.gguf` sengaja kecil untuk smoke test CPU-only dan server hemat
-resource. Untuk kualitas jawaban lebih baik, set `LLAMACPP_HF_MODEL`, `LLAMACPP_DEFAULT_MODEL`, dan
-`LLAMACPP_MODELS` ke model GGUF yang lebih besar sesuai RAM/VRAM mesin.
+### Deploy tanpa llama.cpp
 
-Ollama tetap didukung sebagai provider host-local di luar Docker. Jika ingin memakai Ollama lokal,
-jalankan Ollama di host dan set `OLLAMA_BASE_URL=http://localhost:11434`.
+Jika hanya ingin menjalankan core Native OpenClaw tanpa local model server:
 
-Troubleshooting cepat:
+```bash
+docker compose up -d --build
+```
 
-- `llama.cpp server unavailable`: pastikan `docker compose --profile llamacpp up -d` sudah berjalan dan
-  `LLAMACPP_BASE_URL=http://llama-cpp:8091` untuk container.
-- `Model qwen2.5-0.5b-instruct-q4_k_m.gguf not found`: cek `docker compose logs llama-cpp`.
-- Pull lambat atau gagal di proxy corporate: pastikan `HTTP_PROXY`, `HTTPS_PROXY`, dan `NO_PROXY`
-  sudah benar; `NO_PROXY` sebaiknya menyertakan `llama-cpp`.
-- Port `8091` sudah dipakai di host: set `LLAMACPP_PORT=8092`; internal container tetap memakai
-  `http://llama-cpp:8091`.
+Pastikan `.env` memakai:
+
+```env
+LLAMACPP_ENABLED=false
+```
+
+### Kapan perlu `down`?
+
+Untuk deploy normal, tidak wajib `down` dulu. Cukup:
+
+```bash
+docker compose --profile llamacpp up -d --build
+```
+
+Gunakan `down` hanya untuk clean reset, misalnya setelah mengganti service/volume/command compose besar:
+
+```bash
+docker compose --profile llamacpp down
+docker compose --profile llamacpp up -d --build
+```
+
+`docker compose down` tanpa `-v` tidak menghapus folder bind mount `./models`. Jangan gunakan `down -v` kecuali memang ingin reset volume Docker.
+
+### Permission dan SELinux
+
+Downloader memakai bind mount:
+
+```yaml
+- ./models:/models:Z
+```
+
+Pada RHEL/SELinux, suffix `:Z` membantu Docker memberi label SELinux yang benar. Jika server tidak memakai SELinux dan mount bermasalah, `:Z` boleh dihapus.
+
+Jika ingin menyiapkan folder manual:
+
+```bash
+mkdir -p models
+sudo chown -R $(id -u):$(id -g) models
+chmod 775 models
+```
+
+### Troubleshooting cepat
+
+- `failed to download model from Hugging Face` pada mode `-hf`: jangan pakai `-hf` di Docker corporate proxy. Gunakan flow `llama-model-download` + `--model` file lokal.
+- `Permission denied` saat download ke `/models`: pastikan volume memakai `:Z` di RHEL/SELinux, atau buat folder `models` dan atur permission.
+- `llama.cpp server unavailable`: pastikan `docker compose --profile llamacpp up -d --build` sudah berjalan dan `LLAMACPP_BASE_URL=http://llama-cpp:8091`.
+- `Connection refused` dari `openclaw` ke `llama-cpp`: cek `docker compose ps`, `docker compose logs llama-cpp`, dan pastikan model sudah selesai diunduh.
+- Port `8091` sudah dipakai di host: set `LLAMACPP_PORT=8092`; internal container tetap memakai `http://llama-cpp:8091`.
 - Memori kecil: tetap gunakan model 0.5B/1.5B quantized atau model GGUF kecil lain.
+
+Ollama tetap didukung sebagai provider host-local di luar Docker. Jika ingin memakai Ollama lokal, jalankan Ollama di host dan set `OLLAMA_BASE_URL=http://localhost:11434`.
 
 ### Phase 3.5 Stabilization and QA
 
@@ -1181,8 +1290,8 @@ Dockerfile menggunakan 2-stage build (builder â†’ runtime). Runtime berjala
 **1. Buat folder persistent**
 
 ```bash
-sudo mkdir -p data skills workspace
-sudo chmod -R 775 data skills workspace
+sudo mkdir -p data skills workspace models
+sudo chmod -R 775 data skills workspace models
 ```
 
 | Host | Container | Isi |
@@ -1190,6 +1299,7 @@ sudo chmod -R 775 data skills workspace
 | `./data` | `/data` | Sessions, settings, MCP config, JSON storage |
 | `./skills` | `/skills` | Markdown skill files |
 | `./workspace` | `/workspace` | Memory, reports, artifacts, workflow state |
+| `./models` | `/models` | GGUF model files for llama.cpp profile |
 
 **2. Konfigurasi `.env`**
 
@@ -1263,12 +1373,23 @@ Untuk SELinux server, tambahkan `:Z` pada volume mount di `docker-compose.yml`.
 
 **4. Build dan start**
 
+Core-only:
+
 ```bash
-docker compose build --no-cache
-docker compose up -d
+docker compose up -d --build
 docker compose ps
 docker compose logs -f openclaw
 ```
+
+Dengan llama.cpp local provider dan auto-download model:
+
+```bash
+docker compose --profile llamacpp up -d --build
+docker compose logs -f llama-model-download
+docker compose logs -f llama-cpp
+```
+
+Downloader akan skip jika `./models/qwen2.5-0.5b-instruct-q4_k_m.gguf` sudah ada.
 
 **5. Akses CLI**
 
@@ -1295,74 +1416,70 @@ INSTALL_OPENCODE=true docker compose build --no-cache
 
 ### Docker Compose Referensi
 
+Konfigurasi aktual ada di `docker-compose.yml`. Bagian penting untuk llama.cpp harus memakai pola berikut: downloader model berjalan sekali, lalu `llama-cpp` membaca file GGUF lokal dengan `--model`.
+
 ```yaml
-version: "3.9"
-
 services:
-  openclaw:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-}
-        INSTALL_OPENCODE: ${INSTALL_OPENCODE:-false}
-
-    image: native-openclaw:latest
-    container_name: native-openclaw
-
-    stdin_open: true
-    tty: true
-
-    env_file: .env
-
-    environment:
-      APP_ENV: production
-      NODE_ENV: production
-      APP_DATA_DIR: /data
-      SKILLS_DIR: /skills
-      WORKSPACE_DIR: /workspace
-      WORKFLOW_FILE: /workspace/WORKFLOW.md
-      TOOLS_DIR: /app/tools
-      MCP_CONFIG_PATH: /app/mcp_agent.config.yaml
-      MCP_AGENT_CONFIG_PATH: /app/mcp_agent.config.yaml
-      STORAGE_BACKEND: file
-      API_HOST: ${API_HOST:-0.0.0.0}
-      API_PORT: ${API_PORT:-18789}
-      LLAMACPP_ENABLED: ${LLAMACPP_ENABLED:-false}
-      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://llama-cpp:8091}
-      LLAMACPP_DEFAULT_MODEL: ${LLAMACPP_DEFAULT_MODEL:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
-      LLAMACPP_MODELS: ${LLAMACPP_MODELS:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
-      LLAMACPP_TIMEOUT_MS: ${LLAMACPP_TIMEOUT_MS:-120000}
-
+  llama-model-download:
+    profiles: ["llamacpp", "local-ai"]
+    image: curlimages/curl:latest
+    container_name: native-openclaw-llama-model-download
+    user: "0:0"
     volumes:
-      - ./data:/data
-      - ./skills:/skills
-      - ./workspace:/workspace
-      - ./data/opencode:/home/openclaw/.local/share/opencode
+      - ./models:/models:Z
+    environment:
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      http_proxy: ${HTTP_PROXY:-}
+      https_proxy: ${HTTPS_PROXY:-}
+      all_proxy: ${ALL_PROXY:-}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      LLAMACPP_MODEL_FILE: ${LLAMACPP_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_URL: ${LLAMACPP_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf}
+    entrypoint: ["/bin/sh", "-lc"]
+    command: |
+      set -eu
+      mkdir -p /models
+      FILE="/models/$${LLAMACPP_MODEL_FILE}"
+      URL="$${LLAMACPP_MODEL_URL}"
+      TMP="$${FILE}.tmp"
 
-    ports:
-      - "${API_PORT:-18789}:18789"
-      - "${WEB_UI_PORT:-18790}:18790"
+      if [ -s "$${FILE}" ]; then
+        echo "Model already exists:"
+        ls -lh "$${FILE}"
+        exit 0
+      fi
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-    restart: unless-stopped
+      echo "Model not found. Downloading:"
+      echo "$${URL}"
+      rm -f "$${TMP}"
+      curl -fL --retry 5 --retry-delay 5 --connect-timeout 60 --max-time 0 -o "$${TMP}" "$${URL}"
+      mv "$${TMP}" "$${FILE}"
+      chmod 644 "$${FILE}" || true
+      echo "Model downloaded successfully:"
+      ls -lh "$${FILE}"
 
   llama-cpp:
     profiles: ["llamacpp", "local-ai"]
     image: ghcr.io/ggml-org/llama.cpp:server
-    volumes:
-      - ./models:/models
-      - llama-cpp-cache:/root/.cache/llama.cpp
+    container_name: native-openclaw-llama-cpp
+    restart: unless-stopped
+    depends_on:
+      llama-model-download:
+        condition: service_completed_successfully
     ports:
       - "${LLAMACPP_PORT:-8091}:8091"
+    volumes:
+      - ./models:/models:Z
+      - llama-cpp-cache:/root/.cache/llama.cpp
+    environment:
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
     command:
-      - -hf
-      - ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      - --model
+      - ${LLAMACPP_MODEL_PATH:-/models/qwen2.5-0.5b-instruct-q4_k_m.gguf}
       - --host
       - 0.0.0.0
       - --port
@@ -1376,14 +1493,20 @@ volumes:
   llama-cpp-cache:
 ```
 
+> Penting: gunakan `$$` di dalam `command` untuk variabel shell (`$${FILE}`, `$${URL}`, `$${TMP}`). Jika hanya memakai `$FILE`, Docker Compose dapat menginterpolasi variabel itu sebelum masuk container.
+
 ### Docker Compose Operations
 
 ```bash
-docker compose up -d                              # Start
-docker compose down                               # Stop
-docker compose restart openclaw                   # Restart service
-docker compose build --no-cache && docker compose up -d   # Rebuild
-docker compose logs -f openclaw                   # Logs
+docker compose up -d --build                      # Start/rebuild core only
+docker compose --profile llamacpp up -d --build   # Start/rebuild core + llama.cpp + auto model download
+docker compose down                               # Stop core profile default
+docker compose --profile llamacpp down            # Stop core + llama.cpp profile
+docker compose restart openclaw                   # Restart service core
+docker compose --profile llamacpp restart llama-cpp # Restart llama.cpp only
+docker compose logs -f openclaw                   # Logs core
+docker compose logs -f llama-model-download       # Logs auto downloader
+docker compose logs -f llama-cpp                  # Logs llama.cpp server
 docker compose exec openclaw sh                   # Shell
 docker attach native-openclaw                     # Attach ke CLI
 ```
@@ -1530,8 +1653,8 @@ Container tidak bisa menulis ke bind-mounted folder.
 
 ```bash
 docker compose down
-sudo mkdir -p data skills workspace
-sudo chmod -R 775 data skills workspace
+sudo mkdir -p data skills workspace models
+sudo chmod -R 775 data skills workspace models
 docker compose run --rm --entrypoint id openclaw     # ambil UID/GID
 sudo chown -R 100:101 data skills workspace          # ganti 100:101 dengan UID:GID aktual
 docker compose up -d

@@ -88,9 +88,11 @@ services:
       LLAMACPP_TIMEOUT_MS: ${LLAMACPP_TIMEOUT_MS:-120000}
       LLAMACPP_REQUIRE_ON_STARTUP: ${LLAMACPP_REQUIRE_ON_STARTUP:-false}
       LLAMACPP_PORT: ${LLAMACPP_PORT:-8091}
-      LLAMACPP_MODEL_SOURCE: ${LLAMACPP_MODEL_SOURCE:-hf}
-      LLAMACPP_HF_MODEL: ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_SOURCE: ${LLAMACPP_MODEL_SOURCE:-local}
+      LLAMACPP_HF_MODEL: ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M}
       LLAMACPP_MODEL_PATH: ${LLAMACPP_MODEL_PATH:-/models/qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_FILE: ${LLAMACPP_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_URL: ${LLAMACPP_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf}
       LLAMACPP_CTX_SIZE: ${LLAMACPP_CTX_SIZE:-8192}
       LLAMACPP_THREADS: ${LLAMACPP_THREADS:-4}
 
@@ -215,20 +217,78 @@ services:
       - "host.docker.internal:host-gateway"
 
     restart: unless-stopped
+  llama-model-download:
+    profiles: ["llamacpp", "local-ai"]
+    image: curlimages/curl:latest
+    container_name: native-openclaw-llama-model-download
+    user: "0:0"
+    volumes:
+      - ./models:/models:Z
+    environment:
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      http_proxy: ${HTTP_PROXY:-}
+      https_proxy: ${HTTPS_PROXY:-}
+      all_proxy: ${ALL_PROXY:-}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      LLAMACPP_MODEL_FILE: ${LLAMACPP_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      LLAMACPP_MODEL_URL: ${LLAMACPP_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf}
+    entrypoint: ["/bin/sh", "-lc"]
+    command: |
+      set -eu
+
+      mkdir -p /models
+
+      FILE="/models/$${LLAMACPP_MODEL_FILE}"
+      URL="$${LLAMACPP_MODEL_URL}"
+      TMP="$${FILE}.tmp"
+
+      if [ -s "$${FILE}" ]; then
+        echo "Model already exists:"
+        ls -lh "$${FILE}"
+        exit 0
+      fi
+
+      echo "Model not found. Downloading:"
+      echo "$${URL}"
+
+      rm -f "$${TMP}"
+
+      curl -fL \
+        --retry 5 \
+        --retry-delay 5 \
+        --connect-timeout 60 \
+        --max-time 0 \
+        -o "$${TMP}" \
+        "$${URL}"
+
+      mv "$${TMP}" "$${FILE}"
+      chmod 644 "$${FILE}" || true
+
+      echo "Model downloaded successfully:"
+      ls -lh "$${FILE}"
 
   llama-cpp:
     profiles: ["llamacpp", "local-ai"]
     image: ghcr.io/ggml-org/llama.cpp:server
     container_name: native-openclaw-llama-cpp
     restart: unless-stopped
+    depends_on:
+      llama-model-download:
+        condition: service_completed_successfully
     ports:
       - "${LLAMACPP_PORT:-8091}:8091"
     volumes:
-      - ./models:/models
+      - ./models:/models:Z
       - llama-cpp-cache:/root/.cache/llama.cpp
+    environment:
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
+      no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal}
     command:
-      - -hf
-      - ${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}
+      - --model
+      - ${LLAMACPP_MODEL_PATH:-/models/qwen2.5-0.5b-instruct-q4_k_m.gguf}
       - --host
       - 0.0.0.0
       - --port
