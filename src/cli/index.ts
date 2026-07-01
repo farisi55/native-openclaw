@@ -351,6 +351,13 @@ export async function startCLI(opts: CLIRunnerOptions): Promise<void> {
         await settings.clearLastActiveSessionId();
       }
 
+      if (result.sessionRolledOver) {
+        output.write(c(
+          'yellow',
+          `\n  Session limit reached. Started new session ${result.sessionRolledOver.to}.\n`
+        ));
+      }
+
       printAssistantReply(
         result.assistantText,
         result.chatResponse?.model ?? activeModel,

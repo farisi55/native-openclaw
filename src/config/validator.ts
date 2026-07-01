@@ -17,6 +17,8 @@ export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
 const AgentConfigSchema = z.object({
   maxTurns: z.number().int().min(1).max(200),
+  autoNewSessionOnMaxTurns: z.boolean(),
+  sessionRolloverNotice: z.boolean(),
   temperature: z.number().min(0).max(2),
   maxTokens: z.number().int().min(1).max(128_000),
   systemPrompt: z.string().min(1),
@@ -282,6 +284,8 @@ function buildRawConfig(): unknown {
     },
     agent: {
       maxTurns: getEnvInt('AGENT_MAX_TURNS', 20),
+      autoNewSessionOnMaxTurns: parseBoolEnv('AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS', true),
+      sessionRolloverNotice: parseBoolEnv('AGENT_SESSION_ROLLOVER_NOTICE', true),
       temperature: getEnvFloat('AGENT_TEMPERATURE', 0.7),
       maxTokens: getEnvInt('AGENT_MAX_TOKENS', 4096),
       systemPrompt: getOptionalEnv('AGENT_SYSTEM_PROMPT', 'You are a helpful AI assistant.'),

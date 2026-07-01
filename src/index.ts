@@ -488,6 +488,8 @@ async function bootstrap(): Promise<void> {
     {
       baseSystemPrompt: config.agent.systemPrompt,
       maxTurns: config.agent.maxTurns,
+      autoNewSessionOnMaxTurns: config.agent.autoNewSessionOnMaxTurns,
+      sessionRolloverNotice: config.agent.sessionRolloverNotice,
       temperature: config.agent.temperature,
       maxTokens: config.agent.maxTokens,
       useReasoning: process.env['REASONING_ENABLED'] !== 'false',

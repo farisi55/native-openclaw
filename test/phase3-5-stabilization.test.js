@@ -287,12 +287,19 @@ test('Docker Compose default and profile service sets remain isolated', async ()
   assert.deepEqual(compose.services['llama-cpp'].profiles, ['llamacpp', 'local-ai']);
   assert.equal(compose.services['llama-cpp'].image, 'ghcr.io/ggml-org/llama.cpp:server');
   assert.ok(compose.services['llama-cpp'].ports.includes('${LLAMACPP_PORT:-8091}:8091'));
-  assert.ok(compose.services['llama-cpp'].volumes.includes('./models:/models'));
+  assert.ok(compose.services['llama-cpp'].volumes.some(
+    (volume) => volume === './models:/models' || volume.startsWith('./models:/models:')
+  ));
   assert.ok(compose.services['llama-cpp'].volumes.includes('llama-cpp-cache:/root/.cache/llama.cpp'));
-  assert.ok(compose.services['llama-cpp'].command.includes('-hf'));
-  assert.ok(compose.services['llama-cpp'].command.includes('${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}'));
-  assert.ok(compose.services['llama-cpp'].command.includes('--port'));
-  assert.ok(compose.services['llama-cpp'].command.includes('8091'));
+  const llamaCommand = compose.services['llama-cpp'].command;
+  assert.ok(llamaCommand.includes('-hf') || llamaCommand.includes('--model'));
+  if (llamaCommand.includes('-hf')) {
+    assert.ok(llamaCommand.includes('${LLAMACPP_HF_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf}'));
+  } else {
+    assert.ok(llamaCommand.includes('${LLAMACPP_MODEL_PATH:-/models/qwen2.5-0.5b-instruct-q4_k_m.gguf}'));
+  }
+  assert.ok(llamaCommand.includes('--port'));
+  assert.ok(llamaCommand.includes('8091'));
   assert.ok(Object.prototype.hasOwnProperty.call(compose.volumes, 'llama-cpp-cache'));
   assert.equal(Object.prototype.hasOwnProperty.call(compose.volumes, 'ollama-data'), false);
 

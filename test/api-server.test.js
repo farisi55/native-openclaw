@@ -7,7 +7,13 @@ const { join } = require('node:path');
 process.env.APP_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
 
-const { clearRateLimitMap, startApiServer, startApiServerIfEnabled } = require('../dist/api');
+const {
+  clearRateLimitMap,
+  createApiRuntimeState,
+  handleChatRoute,
+  startApiServer,
+  startApiServerIfEnabled,
+} = require('../dist/api');
 const { SessionManager } = require('../dist/storage/session-manager');
 const { SettingsManager } = require('../dist/storage/settings-manager');
 const { createMessage } = require('../dist/types/message');
@@ -117,6 +123,69 @@ test('API_ENABLED=false does not start server', async () => {
     if (previous === undefined) delete process.env.API_ENABLED;
     else process.env.API_ENABLED = previous;
   }
+});
+
+test('chat route returns and activates the rolled-over session', async () => {
+  await withDeps(async (deps) => {
+    const previous = (await deps.sessions.create({
+      providerId: 'fake',
+      model: 'fake-model',
+    })).value;
+    const next = (await deps.sessions.create({
+      providerId: 'fake',
+      model: 'fake-model',
+      metadata: {
+        rolledOverFrom: previous.id,
+        rolloverReason: 'maxTurns',
+      },
+    })).value;
+    const state = await createApiRuntimeState(deps);
+    state.activeSessionId = previous.id;
+
+    deps.orchestrator.turn = async () => ({
+      assistantText: 'continued in a new session',
+      session: next,
+      newSession: true,
+      wasAction: false,
+      flow: [
+        {
+          stage: 'session_rollover',
+          reason: 'maxTurns',
+          previousSessionId: previous.id,
+          newSessionId: next.id,
+          previousTurnCount: 1,
+          maxTurns: 1,
+        },
+        { stage: 'final' },
+      ],
+      toolsUsed: [],
+      toolSteps: 0,
+      usedFallback: false,
+      sessionRolledOver: {
+        from: previous.id,
+        to: next.id,
+        previousTurnCount: 1,
+        maxTurns: 1,
+      },
+    });
+
+    const response = await handleChatRoute(
+      { message: 'continue', sessionId: previous.id },
+      deps,
+      state
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.sessionId, next.id);
+    assert.equal(state.activeSessionId, next.id);
+    assert.deepEqual(response.body.error_detail, []);
+    assert.deepEqual(response.body.sessionRolledOver, {
+      from: previous.id,
+      to: next.id,
+      previousTurnCount: 1,
+      maxTurns: 1,
+    });
+  });
 });
 
 test('API server starts and chat response has expected shape', async () => {

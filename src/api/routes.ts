@@ -61,6 +61,7 @@ function makeResponse(fields: Partial<ChatApiResponse>): ChatApiResponse {
     ...(fields.preferredProvider !== undefined ? { preferredProvider: fields.preferredProvider } : {}),
     ...(fields.preferredModel !== undefined ? { preferredModel: fields.preferredModel } : {}),
     ...(fields.fallbackUsed !== undefined ? { fallbackUsed: fields.fallbackUsed } : {}),
+    ...(fields.sessionRolledOver ? { sessionRolledOver: fields.sessionRolledOver } : {}),
   };
 }
 
@@ -349,6 +350,7 @@ export async function handleChatRoute(
         tools: result.toolsUsed ?? [],
         flow: result.flow,
         sessionId: result.session.id,
+        ...(result.sessionRolledOver ? { sessionRolledOver: result.sessionRolledOver } : {}),
         ...(result.promptOptimization ? { promptOptimization: result.promptOptimization } : {}),
         ...(providerSelection.preferredProvider ? { preferredProvider: providerSelection.preferredProvider } : {}),
         ...(providerSelection.preferredModel ? { preferredModel: providerSelection.preferredModel } : {}),

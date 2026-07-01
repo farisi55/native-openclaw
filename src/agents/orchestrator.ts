@@ -307,6 +307,16 @@ export interface OrchestratorOptions {
   maxTurns?: number;
 
   /**
+   * Create a linked replacement session when maxTurns is reached.
+   */
+  autoNewSessionOnMaxTurns?: boolean;
+
+  /**
+   * Expose rollover metadata to callers without changing assistant text.
+   */
+  sessionRolloverNotice?: boolean;
+
+  /**
    * Maximum messages injected into the context window.
    */
   maxMessages?: number;
@@ -403,6 +413,14 @@ export interface TurnResult {
   usedFallback?: boolean;
   fallbackProvider?: string;
   promptOptimization?: PromptOptimizationApiMetadata;
+  sessionRolledOver?: SessionRolloverMetadata;
+}
+
+export interface SessionRolloverMetadata {
+  from: string;
+  to: string;
+  previousTurnCount: number;
+  maxTurns: number;
 }
 
 export class Orchestrator {
@@ -460,6 +478,12 @@ export class Orchestrator {
     this.opts = {
       baseSystemPrompt: opts.baseSystemPrompt ?? 'You are a helpful AI assistant.',
       maxTurns: opts.maxTurns ?? 20,
+      autoNewSessionOnMaxTurns:
+        opts.autoNewSessionOnMaxTurns
+        ?? getEnvBool('AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS', true),
+      sessionRolloverNotice:
+        opts.sessionRolloverNotice
+        ?? getEnvBool('AGENT_SESSION_ROLLOVER_NOTICE', true),
       maxMessages: opts.maxMessages ?? 40,
       temperature: opts.temperature ?? 0.7,
       maxTokens: opts.maxTokens ?? 4096,
@@ -522,6 +546,7 @@ export class Orchestrator {
     // ── 1. Session ────────────────────────────────────────────────────────────
     let session: Session;
     let newSession = false;
+    let sessionRolledOver: SessionRolloverMetadata | undefined;
     const flow: Array<Record<string, unknown>> = [];
 
     if (input.sessionId) {
@@ -540,9 +565,53 @@ export class Orchestrator {
       const userTurns = session.messages.filter((m) => m.role === 'user').length;
 
       if (userTurns >= this.opts.maxTurns) {
-        throw new Error(
-          `Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`
-        );
+        if (!this.opts.autoNewSessionOnMaxTurns) {
+          throw new Error(
+            `Session "${session.id}" reached the maximum of ${this.opts.maxTurns} turns.`
+          );
+        }
+
+        const previousSession = session;
+        const rolledOverAt = new Date().toISOString();
+        const createResult = await this.sessions.create({
+          providerId: input.provider.id,
+          model: input.model,
+          activeSkills:
+            input.skillIds
+            ?? previousSession.activeSkills
+            ?? this.skills.activeIds,
+          metadata: {
+            rolledOverFrom: previousSession.id,
+            rolloverReason: 'maxTurns',
+            previousTurnCount: userTurns,
+            maxTurns: this.opts.maxTurns,
+            rolledOverAt,
+          },
+        });
+
+        if (!createResult.ok) {
+          throw createResult.error;
+        }
+
+        session = createResult.value;
+        newSession = true;
+
+        if (this.opts.sessionRolloverNotice) {
+          sessionRolledOver = {
+            from: previousSession.id,
+            to: session.id,
+            previousTurnCount: userTurns,
+            maxTurns: this.opts.maxTurns,
+          };
+          flow.push({
+            stage: 'session_rollover',
+            reason: 'maxTurns',
+            previousSessionId: previousSession.id,
+            newSessionId: session.id,
+            previousTurnCount: userTurns,
+            maxTurns: this.opts.maxTurns,
+          });
+        }
       }
     } else {
       const createResult = await this.sessions.create({
@@ -655,6 +724,7 @@ export class Orchestrator {
           },
         ],
         toolsUsed: workflowResult.toolsUsed,
+        ...(sessionRolledOver ? { sessionRolledOver } : {}),
         ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
@@ -718,6 +788,7 @@ export class Orchestrator {
         newSession,
         wasAction: true,
         flow: [...flow, { stage: 'final', type: 'action' }],
+        ...(sessionRolledOver ? { sessionRolledOver } : {}),
         ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
@@ -738,6 +809,7 @@ export class Orchestrator {
         newSession,
         wasAction: true,
         flow: [...flow, { stage: 'final', type: 'capability_action' }],
+        ...(sessionRolledOver ? { sessionRolledOver } : {}),
         ...(promptOptimization ? { promptOptimization } : {}),
       };
     }
@@ -996,6 +1068,7 @@ export class Orchestrator {
       toolsUsed: loopResult.toolsUsed,
       ...(loopResult.toolResults ? { toolResults: loopResult.toolResults } : {}),
       usedFallback,
+      ...(sessionRolledOver ? { sessionRolledOver } : {}),
       ...(promptOptimization ? { promptOptimization } : {}),
     };
 

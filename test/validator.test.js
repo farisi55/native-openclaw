@@ -45,6 +45,8 @@ const PROVIDER_ENV_KEYS = [
   'PROVIDER_MODEL_DISCOVERY_CACHE_TTL_HOURS',
   'PROVIDER_MODEL_DISCOVERY_MAX_MODELS_PER_PROVIDER',
   'HUGGINGFACE_DISCOVERY_LIMIT_PER_PROVIDER',
+  'AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS',
+  'AGENT_SESSION_ROLLOVER_NOTICE',
 ];
 
 function withProviderEnv(overrides, fn) {
@@ -77,6 +79,24 @@ test('validateConfig throws when no provider keys are set', () => {
 test('validateConfig does NOT throw when OLLAMA_ENABLED=true', () => {
   withProviderEnv({ OLLAMA_ENABLED: 'true', OLLAMA_BASE_URL: 'http://localhost:11434' }, () => {
     assert.doesNotThrow(() => validateConfig());
+  });
+});
+
+test('session rollover flags default to enabled and accept explicit false', () => {
+  withProviderEnv({ OLLAMA_ENABLED: 'true' }, () => {
+    const config = validateConfig();
+    assert.equal(config.agent.autoNewSessionOnMaxTurns, true);
+    assert.equal(config.agent.sessionRolloverNotice, true);
+  });
+
+  withProviderEnv({
+    OLLAMA_ENABLED: 'true',
+    AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS: 'false',
+    AGENT_SESSION_ROLLOVER_NOTICE: 'false',
+  }, () => {
+    const config = validateConfig();
+    assert.equal(config.agent.autoNewSessionOnMaxTurns, false);
+    assert.equal(config.agent.sessionRolloverNotice, false);
   });
 });
 

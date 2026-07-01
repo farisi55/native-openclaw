@@ -67,6 +67,7 @@ async function withOrchestrator(
     orchestrator: any;
     memory: any;
     provider: any;
+    sessions: any;
   }) => Promise<void>,
   opts: Record<string, unknown> = {}
 ) {
@@ -78,10 +79,11 @@ async function withOrchestrator(
     const semantic = new SemanticMemory(dir);
     await semantic.load();
     const memory = new MemoryManager(dir);
+    const sessions = new SessionManager(dir);
     const workspace = new WorkspaceManager({ rootDir: join(dir, 'workspace') });
     const mockProvider = provider();
     const orchestrator = new Orchestrator(
-      new SessionManager(dir),
+      sessions,
       new SkillRegistry(),
       memory,
       toolRegistry(),
@@ -96,7 +98,7 @@ async function withOrchestrator(
       }
     );
 
-    await fn({ orchestrator, memory, provider: mockProvider });
+    await fn({ orchestrator, memory, provider: mockProvider, sessions });
   } finally {
     if (previousWorkspace === undefined) delete process.env.WORKSPACE_DIR;
     else process.env.WORKSPACE_DIR = previousWorkspace;
@@ -117,7 +119,46 @@ test('turn with mock provider returns non-empty assistant text', async () => {
   });
 });
 
-test('turn count maxTurns is enforced', async () => {
+test('turn auto-creates a new session when maxTurns is reached', async () => {
+  await withOrchestrator(async ({ orchestrator, provider: mockProvider, sessions }) => {
+    const first = await orchestrator.turn({
+      provider: mockProvider,
+      model: 'mock-model',
+      skillIds: ['rollover-skill'],
+      userInput: 'first',
+    });
+
+    const second = await orchestrator.turn({
+      provider: mockProvider,
+      model: 'mock-model',
+      sessionId: first.session.id,
+      userInput: 'second',
+    });
+
+    assert.equal(second.newSession, true);
+    assert.notEqual(second.session.id, first.session.id);
+    assert.equal(second.session.messages.filter((message: any) => message.role === 'user').length, 1);
+    assert.equal(second.session.messages.find((message: any) => message.role === 'user')?.content, 'second');
+    assert.deepEqual(second.session.activeSkills, ['rollover-skill']);
+    assert.equal(second.session.metadata.rolledOverFrom, first.session.id);
+    assert.equal(second.session.metadata.rolloverReason, 'maxTurns');
+    assert.equal(second.session.metadata.previousTurnCount, 1);
+    assert.equal(second.session.metadata.maxTurns, 1);
+    assert.deepEqual(second.sessionRolledOver, {
+      from: first.session.id,
+      to: second.session.id,
+      previousTurnCount: 1,
+      maxTurns: 1,
+    });
+
+    const oldSession = await sessions.get(first.session.id);
+    assert.equal(oldSession.ok, true);
+    assert.equal(oldSession.value.messages.filter((message: any) => message.role === 'user').length, 1);
+    assert.equal(oldSession.value.messages.some((message: any) => message.content === 'second'), false);
+  }, { maxTurns: 1, autoNewSessionOnMaxTurns: true });
+});
+
+test('turn count maxTurns is enforced when auto rollover is disabled', async () => {
   await withOrchestrator(async ({ orchestrator, provider: mockProvider }) => {
     const first = await orchestrator.turn({
       provider: mockProvider,
@@ -134,7 +175,7 @@ test('turn count maxTurns is enforced', async () => {
       }),
       /maximum|turns/i
     );
-  }, { maxTurns: 1 });
+  }, { maxTurns: 1, autoNewSessionOnMaxTurns: false });
 });
 
 test('unknown sessionId throws', async () => {

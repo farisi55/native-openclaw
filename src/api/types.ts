@@ -8,6 +8,7 @@ import type { McpManager } from '../mcp';
 import type { SchedulerActionContext } from '../scheduler';
 import type { SelfHealingActionContext } from '../self-healing';
 import type { PromptOptimizationApiMetadata } from '../prompt-optimizer';
+import type { SessionRolloverMetadata } from '../agents/orchestrator';
 
 export interface ApiConfig {
   enabled: boolean;
@@ -56,4 +57,5 @@ export interface ChatApiResponse {
   preferredProvider?: string | null;
   preferredModel?: string | null;
   fallbackUsed?: boolean;
+  sessionRolledOver?: SessionRolloverMetadata;
 }

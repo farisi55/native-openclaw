@@ -1,4 +1,5 @@
 import type { ApiDependencies } from '../api/types';
+import type { SessionRolloverMetadata } from '../agents/orchestrator';
 
 export interface WebUiConfig {
   enabled: boolean;
@@ -44,4 +45,5 @@ export interface WebUiChatResponse {
   preferredProvider?: string | null;
   preferredModel?: string | null;
   fallbackUsed?: boolean;
+  sessionRolledOver?: SessionRolloverMetadata;
 }

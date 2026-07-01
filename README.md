@@ -1514,6 +1514,8 @@ Salin `.env.example` ke `.env`. Referensi lengkap:
 | Variable | Default | Keterangan |
 |----------|---------|-----------|
 | `AGENT_MAX_TURNS` | `20` | Maks turns per session |
+| `AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS` | `true` | Otomatis membuat sesi baru saat batas turn tercapai |
+| `AGENT_SESSION_ROLLOVER_NOTICE` | `true` | Sertakan metadata/notifikasi rollover tanpa mengubah jawaban assistant |
 | `AGENT_TEMPERATURE` | `0.7` | Default temperature (0–2) |
 | `AGENT_MAX_TOKENS` | `4096` | Default max output tokens |
 | `AGENT_SYSTEM_PROMPT` | `You are a helpful AI assistant.` | Base system prompt |
@@ -1521,6 +1523,13 @@ Salin `.env.example` ke `.env`. Referensi lengkap:
 | `SEMANTIC_MEMORY` | `true` | Aktifkan semantic context compression |
 | `REACT_ENABLED` | `true` | Aktifkan ReAct loop |
 | `REACT_MAX_STEPS` | `4` | Maks steps per turn di ReAct |
+
+Saat `AGENT_AUTO_NEW_SESSION_ON_MAX_TURNS=true`, Native OpenClaw otomatis
+melanjutkan pesan berikutnya di sesi baru ketika sesi aktif mencapai
+`AGENT_MAX_TURNS`. Sesi lama tetap tersimpan, sedangkan metadata sesi baru
+menyimpan tautan `rolledOverFrom`, jumlah turn sebelumnya, dan alasan rollover.
+CLI, API, Web UI, serta Telegram menerima ID sesi baru sehingga percakapan tidak
+perlu dilanjutkan secara manual dengan `/session new`.
 
 ### Skills
 

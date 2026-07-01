@@ -282,6 +282,9 @@ async function handleChat(
     ...(result.body.preferredProvider ? { preferredProvider: result.body.preferredProvider } : {}),
     ...(result.body.preferredModel ? { preferredModel: result.body.preferredModel } : {}),
     ...(result.body.fallbackUsed !== undefined ? { fallbackUsed: result.body.fallbackUsed } : {}),
+    ...(result.body.sessionRolledOver
+      ? { sessionRolledOver: result.body.sessionRolledOver }
+      : {}),
   };
   sendJson(res, result.status, response);
 }
