@@ -41,6 +41,16 @@ const PROVIDER_ENV_KEYS = [
   'COHERE_ENABLED',
   'COHERE_API_KEY',
   'COHERE_TIMEOUT_MS',
+  'CEREBRAS_ENABLED',
+  'CEREBRAS_API_KEY',
+  'CEREBRAS_BASE_URL',
+  'CEREBRAS_DEFAULT_MODEL',
+  'CEREBRAS_TIMEOUT_MS',
+  'NVIDIA_ENABLED',
+  'NVIDIA_API_KEY',
+  'NVIDIA_BASE_URL',
+  'NVIDIA_DEFAULT_MODEL',
+  'NVIDIA_TIMEOUT_MS',
   'PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS',
   'PROVIDER_MODEL_DISCOVERY_CACHE_TTL_HOURS',
   'PROVIDER_MODEL_DISCOVERY_MAX_MODELS_PER_PROVIDER',
@@ -133,5 +143,30 @@ test('validateConfig does NOT throw when OPENAI_API_KEY is set', () => {
 test('validateConfig does NOT throw when PUTER_API_KEY is set', () => {
   withProviderEnv({ PUTER_API_KEY: 'test-puter-key' }, () => {
     assert.doesNotThrow(() => validateConfig());
+  });
+});
+
+test('validateConfig supports Cerebras and NVIDIA provider configs', () => {
+  withProviderEnv({
+    CEREBRAS_API_KEY: 'test-cerebras-key',
+    CEREBRAS_BASE_URL: 'https://api.cerebras.ai/v1',
+    CEREBRAS_DEFAULT_MODEL: 'gemma-4-31b',
+  }, () => {
+    const config = validateConfig();
+    assert.equal(config.providers.cerebras.apiKey, 'test-cerebras-key');
+    assert.equal(config.providers.cerebras.defaultModel, 'gemma-4-31b');
+  });
+
+  withProviderEnv({
+    NVIDIA_API_KEY: 'test-nvidia-key',
+    NVIDIA_BASE_URL: 'https://integrate.api.nvidia.com/v1',
+    NVIDIA_DEFAULT_MODEL: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+  }, () => {
+    const config = validateConfig();
+    assert.equal(config.providers.nvidia.apiKey, 'test-nvidia-key');
+    assert.equal(
+      config.providers.nvidia.defaultModel,
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
+    );
   });
 });

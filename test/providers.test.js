@@ -6,9 +6,11 @@ process.env.LOG_LEVEL = 'error';
 
 const {
   GeminiProvider,
+  CerebrasProvider,
   GroqProvider,
   LlamaCppProvider,
   MistralProvider,
+  NvidiaProvider,
   OllamaProvider,
   OpenRouterProvider,
   SambaNovaProvider,
@@ -50,6 +52,14 @@ const originalEnv = {
   PUTER_DISABLE_TEMPERATURE: process.env.PUTER_DISABLE_TEMPERATURE,
   PUTER_TEMPERATURE: process.env.PUTER_TEMPERATURE,
   PUTER_REASONING_MODELS_DISABLE_TEMPERATURE: process.env.PUTER_REASONING_MODELS_DISABLE_TEMPERATURE,
+  CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY,
+  CEREBRAS_BASE_URL: process.env.CEREBRAS_BASE_URL,
+  CEREBRAS_DEFAULT_MODEL: process.env.CEREBRAS_DEFAULT_MODEL,
+  CEREBRAS_MODELS: process.env.CEREBRAS_MODELS,
+  NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
+  NVIDIA_BASE_URL: process.env.NVIDIA_BASE_URL,
+  NVIDIA_DEFAULT_MODEL: process.env.NVIDIA_DEFAULT_MODEL,
+  NVIDIA_MODELS: process.env.NVIDIA_MODELS,
 };
 
 function restoreEnv() {
@@ -186,6 +196,22 @@ const openAiProviders = [
     keyEnv: 'PUTER_API_KEY',
     baseEnv: 'PUTER_BASE_URL',
     baseUrl: 'https://puter.example.test/v1',
+    auth: 'Authorization',
+  },
+  {
+    name: 'Cerebras',
+    Provider: CerebrasProvider,
+    keyEnv: 'CEREBRAS_API_KEY',
+    baseEnv: 'CEREBRAS_BASE_URL',
+    baseUrl: 'https://cerebras.example.test/v1',
+    auth: 'Authorization',
+  },
+  {
+    name: 'NVIDIA NIM',
+    Provider: NvidiaProvider,
+    keyEnv: 'NVIDIA_API_KEY',
+    baseEnv: 'NVIDIA_BASE_URL',
+    baseUrl: 'https://nvidia.example.test/v1',
     auth: 'Authorization',
   },
 ];

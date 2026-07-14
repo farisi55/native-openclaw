@@ -9,10 +9,12 @@ process.env.LOG_LEVEL = 'error';
 
 const {
   CloudflareProvider,
+  CerebrasProvider,
   CohereProvider,
   GitHubModelsProvider,
   HuggingFaceProvider,
   LlamaCppProvider,
+  NvidiaProvider,
   createProviderRegistry,
   providerDefaultModelFromEnv,
 } = require('../dist/providers');
@@ -54,6 +56,18 @@ const ENV_KEYS = [
   'COHERE_DEFAULT_MODEL',
   'COHERE_MODELS',
   'COHERE_TIMEOUT_MS',
+  'CEREBRAS_ENABLED',
+  'CEREBRAS_API_KEY',
+  'CEREBRAS_BASE_URL',
+  'CEREBRAS_DEFAULT_MODEL',
+  'CEREBRAS_MODELS',
+  'CEREBRAS_TIMEOUT_MS',
+  'NVIDIA_ENABLED',
+  'NVIDIA_API_KEY',
+  'NVIDIA_BASE_URL',
+  'NVIDIA_DEFAULT_MODEL',
+  'NVIDIA_MODELS',
+  'NVIDIA_TIMEOUT_MS',
   'PROVIDER_ORDER',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
@@ -138,6 +152,30 @@ function cohereEnv(overrides = {}) {
   }
 }
 
+function cerebrasEnv(overrides = {}) {
+  process.env.CEREBRAS_ENABLED = 'true';
+  process.env.CEREBRAS_API_KEY = 'cerebras-test-key';
+  process.env.CEREBRAS_DEFAULT_MODEL = 'gemma-4-31b';
+  process.env.CEREBRAS_MODELS = 'gemma-4-31b';
+  process.env.CEREBRAS_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
+function nvidiaEnv(overrides = {}) {
+  process.env.NVIDIA_ENABLED = 'true';
+  process.env.NVIDIA_API_KEY = 'nvidia-test-key';
+  process.env.NVIDIA_DEFAULT_MODEL = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
+  process.env.NVIDIA_MODELS = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
+  process.env.NVIDIA_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
 function llamaCppEnv(overrides = {}) {
   process.env.LLAMACPP_ENABLED = 'true';
   process.env.LLAMACPP_BASE_URL = 'http://llama-cpp:8091';
@@ -210,6 +248,8 @@ test('disabled providers are not registered', async () => {
   process.env.GITHUB_MODELS_ENABLED = 'false';
   process.env.HUGGINGFACE_ENABLED = 'false';
   process.env.COHERE_ENABLED = 'false';
+  process.env.CEREBRAS_ENABLED = 'false';
+  process.env.NVIDIA_ENABLED = 'false';
   process.env.OLLAMA_ENABLED = 'false';
   process.env.LLAMACPP_ENABLED = 'false';
 
@@ -219,6 +259,8 @@ test('disabled providers are not registered', async () => {
   assert.equal(registry.has('github-models'), false);
   assert.equal(registry.has('huggingface'), false);
   assert.equal(registry.has('cohere'), false);
+  assert.equal(registry.has('cerebras'), false);
+  assert.equal(registry.has('nvidia'), false);
   assert.equal(registry.has('ollama'), false);
   assert.equal(registry.has('llamacpp'), false);
 });
@@ -298,6 +340,22 @@ test('Cohere enabled config requires API key', () => {
   assert.doesNotThrow(() => validateConfig());
 });
 
+test('Cerebras and NVIDIA enabled config require API keys', () => {
+  clearProviderEnv();
+  process.env.CEREBRAS_ENABLED = 'true';
+  assert.throws(() => validateConfig(), /CEREBRAS_API_KEY/);
+
+  process.env.CEREBRAS_API_KEY = 'cerebras-test-key';
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  process.env.NVIDIA_ENABLED = 'true';
+  assert.throws(() => validateConfig(), /NVIDIA_API_KEY/);
+
+  process.env.NVIDIA_API_KEY = 'nvidia-test-key';
+  assert.doesNotThrow(() => validateConfig());
+});
+
 test('provider timeout config must be positive', () => {
   clearProviderEnv();
   cloudflareEnv({ CLOUDFLARE_TIMEOUT_MS: '0' });
@@ -312,11 +370,19 @@ test('provider timeout config must be positive', () => {
   assert.throws(() => validateConfig(), /COHERE_TIMEOUT_MS must be a positive integer/);
 
   clearProviderEnv();
+  cerebrasEnv({ CEREBRAS_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /CEREBRAS_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
+  nvidiaEnv({ NVIDIA_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /NVIDIA_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
   llamaCppEnv({ LLAMACPP_TIMEOUT_MS: '0' });
   assert.throws(() => validateConfig(), /LLAMACPP_TIMEOUT_MS must be a positive integer/);
 });
 
-test('Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp satisfy provider validation', () => {
+test('Cloudflare, GitHub Models, Hugging Face, Cohere, Cerebras, NVIDIA, and llama.cpp satisfy provider validation', () => {
   clearProviderEnv();
   cloudflareEnv();
   assert.doesNotThrow(() => validateConfig());
@@ -331,6 +397,14 @@ test('Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp satisfy pro
 
   clearProviderEnv();
   cohereEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  cerebrasEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  nvidiaEnv();
   assert.doesNotThrow(() => validateConfig());
 
   clearProviderEnv();
@@ -511,6 +585,76 @@ test('Cohere builds compatibility endpoint, headers, and OpenAI-compatible body'
   assert.equal(result.message.content, 'cohere ok');
 });
 
+test('Cerebras builds chat endpoint and maps maxTokens to max_completion_tokens', async () => {
+  clearProviderEnv();
+  cerebrasEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('cerebras ok');
+  });
+
+  const provider = new CerebrasProvider();
+  const result = await provider.chat({
+    ...options('gemma-4-31b'),
+    maxTokens: 1024,
+    extra: {
+      top_p: 1,
+      stream: true,
+      reasoning_effort: 'medium',
+    },
+  });
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'https://api.cerebras.ai/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, 'Bearer cerebras-test-key');
+  assert.equal(request.init.headers.Accept, 'application/json');
+  assert.equal(body.model, 'gemma-4-31b');
+  assert.equal(body.max_completion_tokens, 1024);
+  assert.equal(body.max_tokens, undefined);
+  assert.equal(body.top_p, 1);
+  assert.equal(body.reasoning_effort, 'medium');
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'cerebras ok');
+});
+
+test('NVIDIA NIM builds chat endpoint and maps reasoning options', async () => {
+  clearProviderEnv();
+  nvidiaEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('nvidia ok');
+  });
+
+  const provider = new NvidiaProvider();
+  const result = await provider.chat({
+    ...options('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'),
+    temperature: 0.6,
+    maxTokens: 65536,
+    extra: {
+      top_p: 0.95,
+      stream: true,
+      reasoning_budget: 16384,
+      enable_thinking: true,
+    },
+  });
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, 'Bearer nvidia-test-key');
+  assert.equal(request.init.headers.Accept, 'application/json');
+  assert.equal(body.model, 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning');
+  assert.equal(body.temperature, 0.6);
+  assert.equal(body.top_p, 0.95);
+  assert.equal(body.max_tokens, 65536);
+  assert.equal(body.reasoning_budget, 16384);
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true });
+  assert.equal(body.enable_thinking, undefined);
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'nvidia ok');
+});
+
 test('llama.cpp builds OpenAI-compatible endpoint without Authorization header', async () => {
   clearProviderEnv();
   llamaCppEnv();
@@ -564,7 +708,7 @@ test('llama.cpp listModels falls back to configured model when server is unreach
   assert.equal(models[0].id, 'qwen2.5-0.5b-instruct-q4_k_m.gguf');
 });
 
-test('Hugging Face and Cohere list configured models without a live /models request', async () => {
+test('Hugging Face, Cohere, Cerebras, and NVIDIA list configured models', async () => {
   clearProviderEnv();
   huggingfaceEnv({
     HUGGINGFACE_MODELS: 'openai/gpt-oss-120b:fastest,meta-llama/llama-test',
@@ -579,6 +723,26 @@ test('Hugging Face and Cohere list configured models without a live /models requ
   assert.deepEqual(
     (await new CohereProvider().listModels()).map((model) => model.id),
     ['command-a-plus-05-2026', 'command-r-plus']
+  );
+
+  clearProviderEnv();
+  cerebrasEnv({ CEREBRAS_MODELS: 'gemma-4-31b,custom-cerebras-model' });
+  mockFetch(() => {
+    throw new Error('models unavailable');
+  });
+  assert.deepEqual(
+    (await new CerebrasProvider().listModels()).map((model) => model.id),
+    ['gemma-4-31b', 'custom-cerebras-model']
+  );
+
+  clearProviderEnv();
+  nvidiaEnv({ NVIDIA_MODELS: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,custom-nvidia-model' });
+  mockFetch(() => {
+    throw new Error('models unavailable');
+  });
+  assert.deepEqual(
+    (await new NvidiaProvider().listModels()).map((model) => model.id),
+    ['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', 'custom-nvidia-model']
   );
 });
 
@@ -618,6 +782,24 @@ for (const spec of [
     timeoutKey: 'COHERE_TIMEOUT_MS',
     authMessage: /Cohere authentication failed/,
     rateMessage: /Cohere rate limit exceeded/,
+  },
+  {
+    name: 'Cerebras',
+    setup: () => cerebrasEnv(),
+    create: () => new CerebrasProvider(),
+    model: 'gemma-4-31b',
+    timeoutKey: 'CEREBRAS_TIMEOUT_MS',
+    authMessage: /Cerebras authentication failed/,
+    rateMessage: /Cerebras rate limit exceeded/,
+  },
+  {
+    name: 'NVIDIA NIM',
+    setup: () => nvidiaEnv(),
+    create: () => new NvidiaProvider(),
+    model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    timeoutKey: 'NVIDIA_TIMEOUT_MS',
+    authMessage: /NVIDIA NIM authentication failed/,
+    rateMessage: /NVIDIA NIM rate limit exceeded/,
   },
 ]) {
   test(`${spec.name} normalizes auth errors`, async () => {
@@ -709,12 +891,14 @@ for (const spec of [
   });
 }
 
-test('enabled Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp providers register', async () => {
+test('enabled Cloudflare, GitHub Models, Hugging Face, Cohere, Cerebras, NVIDIA, and llama.cpp providers register', async () => {
   clearProviderEnv();
   cloudflareEnv();
   githubEnv();
   huggingfaceEnv();
   cohereEnv();
+  cerebrasEnv();
+  nvidiaEnv();
   llamaCppEnv();
 
   const registry = await createProviderRegistry({});
@@ -723,7 +907,20 @@ test('enabled Cloudflare, GitHub Models, Hugging Face, Cohere, and llama.cpp pro
   assert.equal(registry.has('github-models'), true);
   assert.equal(registry.has('huggingface'), true);
   assert.equal(registry.has('cohere'), true);
+  assert.equal(registry.has('cerebras'), true);
+  assert.equal(registry.has('nvidia'), true);
   assert.equal(registry.has('llamacpp'), true);
+});
+
+test('Cerebras and NVIDIA auto-register when API keys are present and enabled flags are unset', async () => {
+  clearProviderEnv();
+  process.env.CEREBRAS_API_KEY = 'cerebras-test-key';
+  process.env.NVIDIA_API_KEY = 'nvidia-test-key';
+
+  const registry = await createProviderRegistry({});
+
+  assert.equal(registry.has('cerebras'), true);
+  assert.equal(registry.has('nvidia'), true);
 });
 
 test('hyphenated provider ID resolves GITHUB_MODELS_DEFAULT_MODEL', () => {
@@ -735,13 +932,17 @@ test('hyphenated provider ID resolves GITHUB_MODELS_DEFAULT_MODEL', () => {
   );
 });
 
-test('provider default model env resolves Hugging Face and Cohere', () => {
+test('provider default model env resolves Hugging Face, Cohere, Cerebras, and NVIDIA', () => {
   clearProviderEnv();
   process.env.HUGGINGFACE_DEFAULT_MODEL = 'hf/model';
   process.env.COHERE_DEFAULT_MODEL = 'cohere-model';
+  process.env.CEREBRAS_DEFAULT_MODEL = 'cerebras-model';
+  process.env.NVIDIA_DEFAULT_MODEL = 'nvidia-model';
 
   assert.equal(providerDefaultModelFromEnv('huggingface'), 'hf/model');
   assert.equal(providerDefaultModelFromEnv('cohere'), 'cohere-model');
+  assert.equal(providerDefaultModelFromEnv('cerebras'), 'cerebras-model');
+  assert.equal(providerDefaultModelFromEnv('nvidia'), 'nvidia-model');
 });
 
 test('provider default model env resolves llama.cpp', () => {

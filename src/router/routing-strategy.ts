@@ -21,12 +21,12 @@ export interface RoutingHint {
 
 // Provider preference tiers per task type
 const TASK_PREFERENCE: Record<TaskType, string[]> = {
-  fast_chat:  ['groq', 'sambanova', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'llamacpp', 'ollama'],
-  reasoning:  ['sambanova', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'llamacpp', 'ollama'],
+  fast_chat:  ['groq', 'sambanova', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'llamacpp', 'ollama'],
+  reasoning:  ['sambanova', 'cerebras', 'nvidia', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'llamacpp', 'ollama'],
   local:      ['llamacpp', 'ollama'],
   vision:     ['gemini', 'github-models', 'openrouter', 'huggingface', 'cohere', 'llamacpp', 'ollama'],
-  coding:     ['sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'llamacpp', 'ollama'],
-  general:    ['groq', 'sambanova', 'mistral', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'llamacpp', 'ollama'],
+  coding:     ['cerebras', 'nvidia', 'sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'llamacpp', 'ollama'],
+  general:    ['groq', 'sambanova', 'mistral', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'llamacpp', 'ollama'],
 };
 
 // Default fallback chain
@@ -34,6 +34,8 @@ const DEFAULT_FALLBACK_CHAIN = [
   'groq',
   'sambanova',
   'mistral',
+  'cerebras',
+  'nvidia',
   'huggingface',
   'cohere',
   'cloudflare',

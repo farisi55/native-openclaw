@@ -112,6 +112,8 @@ Set API key di `.env`. Beberapa provider bisa aktif bersamaan. Switch saat runti
 | Gemini | `GEMINI_API_KEY` | `gemini-2.0-flash` | Vision support |
 | Z.ai | `ZAI_API_KEY` | `glm-4.5` | `ZAI_BASE_URL` required |
 | SambaNova | `SAMBANOVA_API_KEY` | `DeepSeek-V3.1` | Reasoning-optimized |
+| Cerebras | `CEREBRAS_API_KEY` | `gemma-4-31b` | OpenAI-compatible chat completions; supports `reasoning_effort` pass-through |
+| NVIDIA NIM | `NVIDIA_API_KEY` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | OpenAI-compatible NIM endpoint; supports reasoning budget / thinking flags |
 | Puter | `PUTER_API_KEY` | `gpt-5.5` | Backend ProviderRouter only |
 | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` | `@cf/meta/llama-3.1-8b-instruct` | Requires account ID dan enable flag |
 | GitHub Models | `GITHUB_MODELS_API_KEY` | `openai/gpt-4.1` | Token needs Models read access |
@@ -137,6 +139,27 @@ GITHUB_MODELS_DEFAULT_MODEL=openai/gpt-4.1
 
 Switch manual: `/provider cloudflare` atau `/provider github-models`.  
 Diagnostik cepat: `/provider doctor cloudflare` atau `/provider doctor github-models`.
+
+### Konfigurasi Cerebras & NVIDIA NIM
+
+```env
+CEREBRAS_ENABLED=true
+CEREBRAS_API_KEY=your-cerebras-key
+CEREBRAS_BASE_URL=https://api.cerebras.ai/v1
+CEREBRAS_DEFAULT_MODEL=gemma-4-31b
+
+NVIDIA_ENABLED=true
+NVIDIA_API_KEY=your-nvidia-key
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+```
+
+Cerebras menggunakan endpoint `POST /chat/completions` dan memetakan `maxTokens` ke `max_completion_tokens`. Parameter tambahan seperti `top_p` dan `reasoning_effort` diteruskan melalui `ChatOptions.extra`.
+
+NVIDIA NIM menggunakan endpoint `POST /chat/completions`, `max_tokens`, serta pass-through `reasoning_budget`. Jika `enable_thinking` dikirim melalui `extra`, Native OpenClaw memetakannya ke `chat_template_kwargs.enable_thinking`.
+
+Switch manual: `/provider cerebras` atau `/provider nvidia`.  
+Diagnostik cepat: `/provider doctor cerebras` atau `/provider doctor nvidia`.
 
 ### Konfigurasi llama.cpp Docker Profile
 
@@ -170,9 +193,9 @@ Lalu jalankan `/provider ollama`, `/model qwen2.5:0.5b`, atau `/provider doctor 
 
 | Task Type | Priority Order |
 |-----------|----------------|
-| `fast_chat` | groq → sambanova → cloudflare → github-models → openrouter → mistral → llamacpp → ollama |
-| `reasoning` | sambanova → gemini → github-models → cloudflare → openrouter → groq → llamacpp → ollama |
-| `coding` | sambanova → groq → github-models → mistral → cloudflare → openrouter → llamacpp → ollama |
+| `fast_chat` | groq → sambanova → cerebras → nvidia → cloudflare → github-models → openrouter → mistral → llamacpp → ollama |
+| `reasoning` | sambanova → cerebras → nvidia → gemini → github-models → cloudflare → openrouter → groq → llamacpp → ollama |
+| `coding` | cerebras → nvidia → sambanova → groq → github-models → mistral → cloudflare → openrouter → llamacpp → ollama |
 | `vision` | gemini → github-models → openrouter → llamacpp → ollama |
 | `local` | llamacpp → ollama |
 
@@ -182,7 +205,7 @@ Router melacak health setiap provider (latency, error rate). Jika provider utama
 ROUTER_ENABLED=true    # aktifkan multi-provider router
 AUTO_FALLBACK=true     # auto-switch ke provider lain saat gagal
 AUTO_SWITCH=true       # proactive switching berdasarkan task type
-PROVIDER_ORDER=groq,mistral,cloudflare,github-models,gemini,openrouter,llamacpp,ollama
+PROVIDER_ORDER=groq,mistral,cerebras,nvidia,cloudflare,github-models,gemini,openrouter,llamacpp,ollama
 ```
 
 ---
@@ -215,6 +238,8 @@ Default-nya on-demand:
 /provider models refresh huggingface
 /provider models refresh cloudflare
 /provider models refresh cohere
+/provider models refresh cerebras
+/provider models refresh nvidia
 /provider models list huggingface
 /provider models add huggingface deepseek-ai/DeepSeek-V3:fireworks-ai
 /provider models test huggingface openai/gpt-oss-120b:fastest
@@ -232,6 +257,7 @@ PROVIDER_MODEL_DISCOVERY_CACHE_PATH=/app/data/provider-model-cache.json
 - **Cohere**: memakai List Models API `/v1/models` dengan pagination dan filter `endpoint=chat`.
 - **Hugging Face**: memakai Hub API `/api/models` dengan `inference_provider` dan `pipeline_tag`; format Router yang dipakai adalah `model-id:provider`.
 - **Cloudflare Workers AI**: tetap memakai configured + curated models secara default. Remote catalog discovery dimatikan kecuali `CLOUDFLARE_DISCOVERY_ENABLED=true`.
+- **Cerebras** dan **NVIDIA NIM**: memakai configured + curated models, lalu generic provider `listModels()` jika endpoint `/models` tersedia untuk akun/API key terkait.
 - API key tidak disimpan di cache dan tidak dicetak ke log.
 
 ---

@@ -129,7 +129,7 @@ async function resolveRequestProvider(
 
 export async function createApiRuntimeState(deps: ApiDependencies): Promise<ApiRuntimeState> {
   const savedProvider = await deps.settings.getDefaultProvider();
-  const priority = ['zai', 'groq', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'llamacpp', 'ollama'];
+  const priority = ['zai', 'groq', 'cerebras', 'nvidia', 'openrouter', 'mistral', 'anthropic', 'openai', 'gemini', 'llamacpp', 'ollama'];
   let activeProvider: IProvider | undefined;
 
   if (savedProvider && deps.providers.has(savedProvider)) {

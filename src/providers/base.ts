@@ -243,8 +243,6 @@ export abstract class BaseProvider implements IProvider {
     extraHeaders?: Record<string, string>,
     timeoutMs?: number
   ): Promise<ChatResponse> {
-    const startedAt = now();
-
     const body: WireChatRequest = {
       model: options.model,
       messages: this.toWireMessages(options.messages, options.systemPrompt),
@@ -254,9 +252,22 @@ export abstract class BaseProvider implements IProvider {
       ...(options.extra ?? {}),
     };
 
+    return this.openAiCompatChatWithBody(baseUrl, apiKey, options, body, extraHeaders, timeoutMs);
+  }
+
+  protected async openAiCompatChatWithBody(
+    baseUrl: string,
+    apiKey: string,
+    options: ChatOptions,
+    body: WireChatRequest,
+    extraHeaders?: Record<string, string>,
+    timeoutMs?: number
+  ): Promise<ChatResponse> {
+    const startedAt = now();
+
     this.logger.debug('chat request', {
       provider: this.id,
-      model: options.model,
+      model: body.model,
       messageCount: body.messages.length,
     });
 
@@ -281,11 +292,11 @@ export abstract class BaseProvider implements IProvider {
     const message = this.fromWireMessage(choice.message);
     const latencyMs = now() - startedAt;
 
-    this.logger.debug('chat response', { provider: this.id, model: data.model ?? options.model, latencyMs });
+    this.logger.debug('chat response', { provider: this.id, model: data.model ?? body.model, latencyMs });
 
     return this.buildChatResponse({
       message,
-      model: data.model ?? options.model,
+      model: data.model ?? body.model,
       latencyMs,
       usage: this.normaliseUsage(data.usage),
       raw: data as Record<string, unknown>,

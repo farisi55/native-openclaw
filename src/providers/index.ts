@@ -22,6 +22,8 @@ export { CloudflareProvider } from './cloudflare';
 export { GitHubModelsProvider } from './github-models';
 export { HuggingFaceProvider } from './huggingface';
 export { CohereProvider } from './cohere';
+export { CerebrasProvider } from './cerebras';
+export { NvidiaProvider } from './nvidia';
 export * from './discovery';
 export {
   parseProviderModels,
@@ -112,6 +114,20 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
     }, 'cohere');
   }
 
+  if (isProviderEnabled('CEREBRAS_ENABLED', 'CEREBRAS_API_KEY')) {
+    await tryRegister(registry, async () => {
+      const { CerebrasProvider } = await import('./cerebras.js');
+      return new CerebrasProvider();
+    }, 'cerebras');
+  }
+
+  if (isProviderEnabled('NVIDIA_ENABLED', 'NVIDIA_API_KEY')) {
+    await tryRegister(registry, async () => {
+      const { NvidiaProvider } = await import('./nvidia.js');
+      return new NvidiaProvider();
+    }, 'nvidia');
+  }
+
   if (isEnabled(process.env['GITHUB_MODELS_ENABLED'])) {
     await tryRegister(registry, async () => {
       const { GitHubModelsProvider } = await import('./github-models.js');
@@ -137,6 +153,16 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
 
 function isEnabled(value: string | undefined): boolean {
   return ['true', '1', 'yes'].includes((value ?? '').trim().toLowerCase());
+}
+
+function isExplicitlyDisabled(value: string | undefined): boolean {
+  return ['false', '0', 'no', 'off'].includes((value ?? '').trim().toLowerCase());
+}
+
+function isProviderEnabled(enabledKey: string, apiKey: string): boolean {
+  const enabled = process.env[enabledKey];
+  if (isExplicitlyDisabled(enabled)) return false;
+  return isEnabled(enabled) || Boolean(process.env[apiKey]?.trim());
 }
 
 async function tryRegister(

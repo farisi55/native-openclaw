@@ -33,6 +33,8 @@ const BUILTIN_DEFAULTS: Record<string, string> = {
   zai:          'glm-4.5',
   cloudflare:   '@cf/meta/llama-3.1-8b-instruct',
   'github-models': 'openai/gpt-4.1',
+  cerebras:    'gemma-4-31b',
+  nvidia:      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
   openai:      'gpt-4o-mini',
   anthropic:   'claude-opus-4-20250514',
 };

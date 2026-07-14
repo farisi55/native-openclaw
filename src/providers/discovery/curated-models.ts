@@ -59,6 +59,31 @@ export const CURATED_PROVIDER_MODELS: Record<string, ProviderModelInfo[]> = {
       outputModalities: ['text'],
     }),
   ],
+  cerebras: [
+    model({
+      id: 'gemma-4-31b',
+      providerId: 'cerebras',
+      contextWindow: 131_072,
+      supportsTools: true,
+      supportsVision: false,
+      supportsStreaming: false,
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+    }),
+  ],
+  nvidia: [
+    model({
+      id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      providerId: 'nvidia',
+      displayName: 'Nemotron 3 Nano Omni 30B A3B Reasoning',
+      contextWindow: 131_072,
+      supportsTools: true,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+    }),
+  ],
   cloudflare: [
     model({
       id: '@cf/moonshotai/kimi-k2.7-code',
@@ -105,4 +130,3 @@ export const CURATED_PROVIDER_MODELS: Record<string, ProviderModelInfo[]> = {
 export function curatedModelsFor(providerId: string): ProviderModelInfo[] {
   return [...(CURATED_PROVIDER_MODELS[providerId] ?? [])];
 }
-

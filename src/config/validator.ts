@@ -84,6 +84,8 @@ const AppConfigSchema = z.object({
     zai: ProviderConfigSchema.optional(),
     huggingface: ProviderConfigSchema.optional(),
     cohere: ProviderConfigSchema.optional(),
+    cerebras: ProviderConfigSchema.optional(),
+    nvidia: ProviderConfigSchema.optional(),
   }),
   agent: AgentConfigSchema,
   storage: StorageConfigSchema,
@@ -191,6 +193,24 @@ function validateProviderEnvironment(): void {
     defaultModel: 'command-a-plus-05-2026',
     timeoutKey: 'COHERE_TIMEOUT_MS',
   });
+  validateEnabledOpenAiCompatProvider({
+    enabledKey: 'CEREBRAS_ENABLED',
+    keyCandidates: ['CEREBRAS_API_KEY'],
+    baseUrlKey: 'CEREBRAS_BASE_URL',
+    defaultBaseUrl: 'https://api.cerebras.ai/v1',
+    defaultModelKey: 'CEREBRAS_DEFAULT_MODEL',
+    defaultModel: 'gemma-4-31b',
+    timeoutKey: 'CEREBRAS_TIMEOUT_MS',
+  });
+  validateEnabledOpenAiCompatProvider({
+    enabledKey: 'NVIDIA_ENABLED',
+    keyCandidates: ['NVIDIA_API_KEY'],
+    baseUrlKey: 'NVIDIA_BASE_URL',
+    defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultModelKey: 'NVIDIA_DEFAULT_MODEL',
+    defaultModel: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    timeoutKey: 'NVIDIA_TIMEOUT_MS',
+  });
 
   if (parseBoolEnv('CLOUDFLARE_AI_ENABLED', false)) {
     if (!getOptionalEnv('CLOUDFLARE_API_KEY')?.trim()) {
@@ -281,6 +301,8 @@ function buildRawConfig(): unknown {
       zai: buildProviderConfig('ZAI', 'https://api.z.ai/api/paas/v4', 'glm-4.5', 'ZAI_MODEL'),
       huggingface: buildProviderConfig('HUGGINGFACE', 'https://router.huggingface.co/v1', 'openai/gpt-oss-120b:fastest'),
       cohere: buildProviderConfig('COHERE', 'https://api.cohere.ai/compatibility/v1', 'command-a-plus-05-2026'),
+      cerebras: buildProviderConfig('CEREBRAS', 'https://api.cerebras.ai/v1', 'gemma-4-31b'),
+      nvidia: buildProviderConfig('NVIDIA', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'),
     },
     agent: {
       maxTurns: getEnvInt('AGENT_MAX_TURNS', 20),
@@ -374,6 +396,14 @@ export function validateConfig(): Readonly<AppConfig> {
     (
       parseBoolEnv('COHERE_ENABLED', false) &&
       Boolean(process.env['COHERE_API_KEY'])
+    ) ||
+    (
+      (parseBoolEnv('CEREBRAS_ENABLED', false) || Boolean(process.env['CEREBRAS_API_KEY'])) &&
+      Boolean(process.env['CEREBRAS_API_KEY'])
+    ) ||
+    (
+      (parseBoolEnv('NVIDIA_ENABLED', false) || Boolean(process.env['NVIDIA_API_KEY'])) &&
+      Boolean(process.env['NVIDIA_API_KEY'])
     );
   const hasOllama = parseBoolEnv('OLLAMA_ENABLED', false);
   const hasLlamaCpp = parseBoolEnv('LLAMACPP_ENABLED', false);
@@ -387,6 +417,8 @@ export function validateConfig(): Readonly<AppConfig> {
         '  GITHUB_MODELS_API_KEY with GITHUB_MODELS_ENABLED=true,\n' +
         '  HUGGINGFACE_API_KEY, HF_API_KEY, or HF_TOKEN with HUGGINGFACE_ENABLED=true,\n' +
         '  COHERE_API_KEY with COHERE_ENABLED=true,\n' +
+        '  CEREBRAS_API_KEY with CEREBRAS_ENABLED=true,\n' +
+        '  NVIDIA_API_KEY with NVIDIA_ENABLED=true,\n' +
         '  or OLLAMA_ENABLED=true / LLAMACPP_ENABLED=true'
     );
   }

@@ -670,6 +670,14 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
     if (process.env['COHERE_ENABLED'] !== 'true') return 'Cohere disabled.';
     if (!process.env['COHERE_API_KEY']?.trim()) return 'Missing COHERE_API_KEY.';
   }
+  if (providerId === 'cerebras') {
+    if (process.env['CEREBRAS_ENABLED'] === 'false') return 'Cerebras disabled.';
+    if (!process.env['CEREBRAS_API_KEY']?.trim()) return 'Missing CEREBRAS_API_KEY.';
+  }
+  if (providerId === 'nvidia') {
+    if (process.env['NVIDIA_ENABLED'] === 'false') return 'NVIDIA NIM disabled.';
+    if (!process.env['NVIDIA_API_KEY']?.trim()) return 'Missing NVIDIA_API_KEY.';
+  }
   return null;
 }
 
