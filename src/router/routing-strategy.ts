@@ -21,12 +21,12 @@ export interface RoutingHint {
 
 // Provider preference tiers per task type
 const TASK_PREFERENCE: Record<TaskType, string[]> = {
-  fast_chat:  ['groq', 'sambanova', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'mistral', 'llamacpp', 'ollama'],
-  reasoning:  ['sambanova', 'cerebras', 'nvidia', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'groq', 'llamacpp', 'ollama'],
+  fast_chat:  ['groq', 'sambanova', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'requesty', 'mistral', 'llamacpp', 'ollama'],
+  reasoning:  ['sambanova', 'cerebras', 'nvidia', 'gemini', 'cohere', 'github-models', 'huggingface', 'cloudflare', 'openrouter', 'requesty', 'groq', 'llamacpp', 'ollama'],
   local:      ['llamacpp', 'ollama'],
-  vision:     ['gemini', 'github-models', 'openrouter', 'huggingface', 'cohere', 'llamacpp', 'ollama'],
-  coding:     ['cerebras', 'nvidia', 'sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'llamacpp', 'ollama'],
-  general:    ['groq', 'sambanova', 'mistral', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'gemini', 'llamacpp', 'ollama'],
+  vision:     ['gemini', 'github-models', 'openrouter', 'requesty', 'huggingface', 'cohere', 'llamacpp', 'ollama'],
+  coding:     ['cerebras', 'nvidia', 'sambanova', 'groq', 'cohere', 'huggingface', 'github-models', 'mistral', 'cloudflare', 'openrouter', 'requesty', 'llamacpp', 'ollama'],
+  general:    ['groq', 'sambanova', 'mistral', 'cerebras', 'nvidia', 'huggingface', 'cohere', 'cloudflare', 'github-models', 'openrouter', 'requesty', 'gemini', 'llamacpp', 'ollama'],
 };
 
 // Default fallback chain
@@ -41,6 +41,7 @@ const DEFAULT_FALLBACK_CHAIN = [
   'cloudflare',
   'github-models',
   'openrouter',
+  'requesty',
   'gemini',
   'llamacpp',
   'ollama',

@@ -678,6 +678,10 @@ function providerDoctorConfigurationIssue(providerId: string): string | null {
     if (process.env['NVIDIA_ENABLED'] === 'false') return 'NVIDIA NIM disabled.';
     if (!process.env['NVIDIA_API_KEY']?.trim()) return 'Missing NVIDIA_API_KEY.';
   }
+  if (providerId === 'requesty') {
+    if (process.env['REQUESTY_ENABLED'] === 'false') return 'Requesty AI disabled.';
+    if (!process.env['REQUESTY_API_KEY']?.trim()) return 'Missing REQUESTY_API_KEY.';
+  }
   return null;
 }
 

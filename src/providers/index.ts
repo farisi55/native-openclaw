@@ -24,6 +24,7 @@ export { HuggingFaceProvider } from './huggingface';
 export { CohereProvider } from './cohere';
 export { CerebrasProvider } from './cerebras';
 export { NvidiaProvider } from './nvidia';
+export { RequestyProvider } from './requesty';
 export * from './discovery';
 export {
   parseProviderModels,
@@ -126,6 +127,13 @@ export async function createProviderRegistry(_config: AppConfig): Promise<Provid
       const { NvidiaProvider } = await import('./nvidia.js');
       return new NvidiaProvider();
     }, 'nvidia');
+  }
+
+  if (isProviderEnabled('REQUESTY_ENABLED', 'REQUESTY_API_KEY')) {
+    await tryRegister(registry, async () => {
+      const { RequestyProvider } = await import('./requesty.js');
+      return new RequestyProvider();
+    }, 'requesty');
   }
 
   if (isEnabled(process.env['GITHUB_MODELS_ENABLED'])) {

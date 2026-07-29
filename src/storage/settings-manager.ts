@@ -35,6 +35,7 @@ const BUILTIN_DEFAULTS: Record<string, string> = {
   'github-models': 'openai/gpt-4.1',
   cerebras:    'gemma-4-31b',
   nvidia:      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+  requesty:    'google/gemma-4-31b-it',
   openai:      'gpt-4o-mini',
   anthropic:   'claude-opus-4-20250514',
 };

@@ -15,6 +15,7 @@ const {
   HuggingFaceProvider,
   LlamaCppProvider,
   NvidiaProvider,
+  RequestyProvider,
   createProviderRegistry,
   providerDefaultModelFromEnv,
 } = require('../dist/providers');
@@ -68,6 +69,12 @@ const ENV_KEYS = [
   'NVIDIA_DEFAULT_MODEL',
   'NVIDIA_MODELS',
   'NVIDIA_TIMEOUT_MS',
+  'REQUESTY_ENABLED',
+  'REQUESTY_API_KEY',
+  'REQUESTY_BASE_URL',
+  'REQUESTY_DEFAULT_MODEL',
+  'REQUESTY_MODELS',
+  'REQUESTY_TIMEOUT_MS',
   'PROVIDER_ORDER',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
@@ -176,6 +183,18 @@ function nvidiaEnv(overrides = {}) {
   }
 }
 
+function requestyEnv(overrides = {}) {
+  process.env.REQUESTY_ENABLED = 'true';
+  process.env.REQUESTY_API_KEY = 'requesty-test-key';
+  process.env.REQUESTY_DEFAULT_MODEL = 'google/gemma-4-31b-it';
+  process.env.REQUESTY_MODELS = 'google/gemma-4-31b-it';
+  process.env.REQUESTY_TIMEOUT_MS = '120000';
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+}
+
 function llamaCppEnv(overrides = {}) {
   process.env.LLAMACPP_ENABLED = 'true';
   process.env.LLAMACPP_BASE_URL = 'http://llama-cpp:8091';
@@ -250,6 +269,7 @@ test('disabled providers are not registered', async () => {
   process.env.COHERE_ENABLED = 'false';
   process.env.CEREBRAS_ENABLED = 'false';
   process.env.NVIDIA_ENABLED = 'false';
+  process.env.REQUESTY_ENABLED = 'false';
   process.env.OLLAMA_ENABLED = 'false';
   process.env.LLAMACPP_ENABLED = 'false';
 
@@ -261,6 +281,7 @@ test('disabled providers are not registered', async () => {
   assert.equal(registry.has('cohere'), false);
   assert.equal(registry.has('cerebras'), false);
   assert.equal(registry.has('nvidia'), false);
+  assert.equal(registry.has('requesty'), false);
   assert.equal(registry.has('ollama'), false);
   assert.equal(registry.has('llamacpp'), false);
 });
@@ -356,6 +377,15 @@ test('Cerebras and NVIDIA enabled config require API keys', () => {
   assert.doesNotThrow(() => validateConfig());
 });
 
+test('Requesty AI enabled config requires API key', () => {
+  clearProviderEnv();
+  process.env.REQUESTY_ENABLED = 'true';
+  assert.throws(() => validateConfig(), /REQUESTY_API_KEY/);
+
+  process.env.REQUESTY_API_KEY = 'requesty-test-key';
+  assert.doesNotThrow(() => validateConfig());
+});
+
 test('provider timeout config must be positive', () => {
   clearProviderEnv();
   cloudflareEnv({ CLOUDFLARE_TIMEOUT_MS: '0' });
@@ -378,11 +408,15 @@ test('provider timeout config must be positive', () => {
   assert.throws(() => validateConfig(), /NVIDIA_TIMEOUT_MS must be a positive integer/);
 
   clearProviderEnv();
+  requestyEnv({ REQUESTY_TIMEOUT_MS: '0' });
+  assert.throws(() => validateConfig(), /REQUESTY_TIMEOUT_MS must be a positive integer/);
+
+  clearProviderEnv();
   llamaCppEnv({ LLAMACPP_TIMEOUT_MS: '0' });
   assert.throws(() => validateConfig(), /LLAMACPP_TIMEOUT_MS must be a positive integer/);
 });
 
-test('Cloudflare, GitHub Models, Hugging Face, Cohere, Cerebras, NVIDIA, and llama.cpp satisfy provider validation', () => {
+test('Cloudflare, GitHub Models, Hugging Face, Cohere, Cerebras, NVIDIA, Requesty, and llama.cpp satisfy provider validation', () => {
   clearProviderEnv();
   cloudflareEnv();
   assert.doesNotThrow(() => validateConfig());
@@ -405,6 +439,10 @@ test('Cloudflare, GitHub Models, Hugging Face, Cohere, Cerebras, NVIDIA, and lla
 
   clearProviderEnv();
   nvidiaEnv();
+  assert.doesNotThrow(() => validateConfig());
+
+  clearProviderEnv();
+  requestyEnv();
   assert.doesNotThrow(() => validateConfig());
 
   clearProviderEnv();
@@ -653,6 +691,48 @@ test('NVIDIA NIM builds chat endpoint and maps reasoning options', async () => {
   assert.equal(body.enable_thinking, undefined);
   assert.equal(body.stream, false);
   assert.equal(result.message.content, 'nvidia ok');
+});
+
+test('Requesty AI builds chat endpoint and passes OpenAI-compatible options', async () => {
+  clearProviderEnv();
+  requestyEnv();
+  let request;
+  mockFetch((url, init) => {
+    request = { url, init };
+    return chatResponse('requesty ok');
+  });
+
+  const provider = new RequestyProvider();
+  const result = await provider.chat({
+    ...options('google/gemma-4-31b-it'),
+    maxTokens: 256,
+    extra: {
+      top_p: 0.9,
+      presence_penalty: 0.1,
+      frequency_penalty: 0.2,
+      seed: 123,
+      stop: ['END'],
+      stream: true,
+    },
+  });
+  const body = JSON.parse(request.init.body);
+
+  assert.equal(request.url, 'https://router.requesty.ai/v1/chat/completions');
+  assert.equal(request.init.headers.Authorization, 'Bearer requesty-test-key');
+  assert.equal(request.init.headers.Accept, 'application/json');
+  assert.equal(request.init.headers['Content-Type'], 'application/json');
+  assert.equal(body.model, 'google/gemma-4-31b-it');
+  assert.equal(body.messages[0].role, 'system');
+  assert.equal(body.messages[1].content, 'Hello');
+  assert.equal(body.temperature, 0.2);
+  assert.equal(body.max_tokens, 256);
+  assert.equal(body.top_p, 0.9);
+  assert.equal(body.presence_penalty, 0.1);
+  assert.equal(body.frequency_penalty, 0.2);
+  assert.equal(body.seed, 123);
+  assert.deepEqual(body.stop, ['END']);
+  assert.equal(body.stream, false);
+  assert.equal(result.message.content, 'requesty ok');
 });
 
 test('llama.cpp builds OpenAI-compatible endpoint without Authorization header', async () => {

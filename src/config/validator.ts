@@ -86,6 +86,7 @@ const AppConfigSchema = z.object({
     cohere: ProviderConfigSchema.optional(),
     cerebras: ProviderConfigSchema.optional(),
     nvidia: ProviderConfigSchema.optional(),
+    requesty: ProviderConfigSchema.optional(),
   }),
   agent: AgentConfigSchema,
   storage: StorageConfigSchema,
@@ -211,6 +212,15 @@ function validateProviderEnvironment(): void {
     defaultModel: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     timeoutKey: 'NVIDIA_TIMEOUT_MS',
   });
+  validateEnabledOpenAiCompatProvider({
+    enabledKey: 'REQUESTY_ENABLED',
+    keyCandidates: ['REQUESTY_API_KEY'],
+    baseUrlKey: 'REQUESTY_BASE_URL',
+    defaultBaseUrl: 'https://router.requesty.ai/v1',
+    defaultModelKey: 'REQUESTY_DEFAULT_MODEL',
+    defaultModel: 'google/gemma-4-31b-it',
+    timeoutKey: 'REQUESTY_TIMEOUT_MS',
+  });
 
   if (parseBoolEnv('CLOUDFLARE_AI_ENABLED', false)) {
     if (!getOptionalEnv('CLOUDFLARE_API_KEY')?.trim()) {
@@ -303,6 +313,7 @@ function buildRawConfig(): unknown {
       cohere: buildProviderConfig('COHERE', 'https://api.cohere.ai/compatibility/v1', 'command-a-plus-05-2026'),
       cerebras: buildProviderConfig('CEREBRAS', 'https://api.cerebras.ai/v1', 'gemma-4-31b'),
       nvidia: buildProviderConfig('NVIDIA', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'),
+      requesty: buildProviderConfig('REQUESTY', 'https://router.requesty.ai/v1', 'google/gemma-4-31b-it'),
     },
     agent: {
       maxTurns: getEnvInt('AGENT_MAX_TURNS', 20),
@@ -404,6 +415,10 @@ export function validateConfig(): Readonly<AppConfig> {
     (
       (parseBoolEnv('NVIDIA_ENABLED', false) || Boolean(process.env['NVIDIA_API_KEY'])) &&
       Boolean(process.env['NVIDIA_API_KEY'])
+    ) ||
+    (
+      (parseBoolEnv('REQUESTY_ENABLED', false) || Boolean(process.env['REQUESTY_API_KEY'])) &&
+      Boolean(process.env['REQUESTY_API_KEY'])
     );
   const hasOllama = parseBoolEnv('OLLAMA_ENABLED', false);
   const hasLlamaCpp = parseBoolEnv('LLAMACPP_ENABLED', false);
@@ -419,6 +434,7 @@ export function validateConfig(): Readonly<AppConfig> {
         '  COHERE_API_KEY with COHERE_ENABLED=true,\n' +
         '  CEREBRAS_API_KEY with CEREBRAS_ENABLED=true,\n' +
         '  NVIDIA_API_KEY with NVIDIA_ENABLED=true,\n' +
+        '  REQUESTY_API_KEY with REQUESTY_ENABLED=true,\n' +
         '  or OLLAMA_ENABLED=true / LLAMACPP_ENABLED=true'
     );
   }
