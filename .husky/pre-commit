@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Reject staged secrets and AI-agent local state before a commit is created.
+node scripts/check-staged-files.mjs

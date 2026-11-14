@@ -96,6 +96,15 @@ npm run dev      # development, tanpa build step
 npm run build && npm start
 ```
 
+`npm install` juga menjalankan `husky` dan memasang hook `pre-commit`. Hook menolak commit
+yang menyertakan `.env*` (kecuali `.env.example`), private key/sertifikat, state agent lokal
+(`CLAUDE.local.md`, `.claude/settings.local.json`, `.claude/worktrees/`, `.aider*`) dan
+berkas `.scratch/`. Untuk memeriksa berkas yang sudah di-stage secara manual:
+
+```bash
+node scripts/check-staged-files.mjs
+```
+
 ---
 
 ## Providers
