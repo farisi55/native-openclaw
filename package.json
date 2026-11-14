@@ -28,7 +28,8 @@
     "lint:fix": "npx eslint \"src/**/*.ts\" --fix",
     "type-check": "npx tsc --noEmit",
     "clean": "npx rimraf dist",
-    "package": "bash package.sh"
+    "package": "bash package.sh",
+    "prepare": "husky"
   },
   "keywords": [
     "ai",
@@ -54,6 +55,7 @@
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
     "eslint": "^10.8.0",
+    "husky": "^9.1.7",
     "rimraf": "^6.1.3",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.3",

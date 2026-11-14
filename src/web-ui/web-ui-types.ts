@@ -13,7 +13,7 @@ export interface WebUiConfig {
   puter: WebUiPuterConfig;
 }
 
-export interface WebUiDependencies extends ApiDependencies {}
+export type WebUiDependencies = ApiDependencies;
 
 export interface WebUiPuterConfig {
   enabled: boolean;

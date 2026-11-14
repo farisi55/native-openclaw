@@ -1,13 +1,58 @@
+# ---------------------------------------------------------------------------
+# Secrets — never commit credentials, private keys or certificates
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+secrets/
+
+# ---------------------------------------------------------------------------
+# Node / TypeScript generated output
+# ---------------------------------------------------------------------------
 node_modules/
 dist/
-workspace/
-.data/
-.data-test*/
-data/
-tmp/
-data/skill-quality.json
-.env
-skills/auto-generated/
+coverage/
+*.tsbuildinfo
+.eslintcache
 *.js.map
 *.d.ts.map
 *.zip
+
+# ---------------------------------------------------------------------------
+# Logs and OS / editor noise
+# ---------------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+
+# ---------------------------------------------------------------------------
+# AI-agent local state
+# ---------------------------------------------------------------------------
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+.aider*
+.scratch/
+
+# ---------------------------------------------------------------------------
+# Local runtime data (root-anchored so src/ subfolders are never ignored)
+# ---------------------------------------------------------------------------
+/workspace/
+/data/
+/.data/
+/.data-test*/
+/tmp/
+data/skill-quality.json
+skills/auto-generated/
