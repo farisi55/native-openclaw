@@ -86,12 +86,13 @@ Interactive chat REPL dengan arsitektur reasoning-first yang mendukung 12 provid
 ```bash
 git clone https://github.com/your-org/native-openclaw.git
 cd native-openclaw
-npm install
+npm ci           # install dari package-lock.json (reproducible)
+# atau: npm install  — development, memperbarui lockfile bila perlu
 
 cp .env.example .env
 # Edit .env — tambahkan minimal satu API key provider
 
-npm run dev      # development, tanpa build step
+npm run dev      # development via tsx, tanpa build step
 # atau
 npm run build && npm start
 ```
@@ -1510,7 +1511,7 @@ docker attach native-openclaw                     # Attach ke CLI
 
 | Command | Keterangan |
 |---------|-----------|
-| `npm run dev` | Run dengan ts-node (tanpa build) |
+| `npm run dev` | Run dengan tsx (tanpa build step) |
 | `npm run build` | Compile TypeScript ke `dist/` |
 | `npm start` | Jalankan compiled output |
 | `npm run start:watch:win` | Watch mode (Windows PowerShell) |
@@ -1531,7 +1532,7 @@ docker attach native-openclaw                     # Attach ke CLI
 
 ## Environment Variables
 
-Salin `.env.example` ke `.env`. Referensi lengkap:
+Salin [`.env.example`](.env.example) ke `.env`. Referensi lengkap:
 
 ### App & Storage
 

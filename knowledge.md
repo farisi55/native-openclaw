@@ -15,6 +15,10 @@ high_scale_target: false
 # high_scale_target: false — PRD does not specify peak RPS/TPS or burst/high-concurrency requirements.
 ---
 
+## TDD Reference
+
+- This document cross-references **`TDD.md`** for task lifecycle states, execution traces, regression/coverage baselines, test isolation requirements, and test-isolation criteria. When reading `knowledge.md` automatically, the system should load `TDD.md` as the authoritative companion for task/trace management.
+
 ## 1. Project Identity
 
 - **Project name:** Native OpenClaw.
