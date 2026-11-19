@@ -849,6 +849,19 @@ NO_PROXY=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,
 no_proxy=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal
 ```
 
+Untuk build Docker, proxy **tanpa kredensial** dapat diteruskan sebagai build arg seperti biasa. Jangan menaruh kredensial di URL proxy build arg — `Dockerfile` menolaknya. Untuk proxy ber-kredensial, gunakan BuildKit secret `proxy_env` agar kredensial tidak tersimpan di metadata build:
+
+```bash
+# .env.proxy sudah cocok dengan pola .env.* di .gitignore
+cat > .env.proxy <<'EOF'
+export HTTP_PROXY=http://user:password@proxy:3128
+export HTTPS_PROXY=$HTTP_PROXY
+export NO_PROXY=localhost,127.0.0.1,::1,openclaw,llama-cpp,host.docker.internal,.local,.internal
+EOF
+
+docker build --secret id=proxy_env,src=.env.proxy -t native-openclaw:latest .
+```
+
 ### Deploy dengan Auto-Download Model
 
 ```bash
@@ -1519,6 +1532,8 @@ docker attach native-openclaw                     # Attach ke CLI
 | `npm run type-check` | Type-check tanpa emit |
 | `npm run lint` | Jalankan ESLint |
 | `npm run lint:fix` | Auto-fix lint issues |
+| `npm run security:sast` | Semgrep SAST untuk TypeScript/JavaScript dan secrets (butuh Semgrep CLI) |
+| `npm run security:audit` | `npm audit --audit-level=high` untuk SCA/CVE dependency |
 | `npm run clean` | Hapus `dist/` |
 | `npm test` | Jalankan full test suite |
 | `npm run test:workspace` | Test workspace saja |
@@ -1527,6 +1542,44 @@ docker attach native-openclaw                     # Attach ke CLI
 | `npm run qa:phase3.6` | Build, lint, MCP runtime hardening QA, lalu Phase 3.5 regression QA |
 | `npm run qa:docker-profiles` | Validasi service set Docker Compose per profile tanpa start container |
 | `npm run package` | Build + zip untuk distribusi |
+
+---
+
+## CI & Security Scans
+
+Workflow GitHub Actions ada di [`.github/workflows/ci.yml`](.github/workflows/ci.yml) dan berjalan pada setiap push dan pull request. Job dijalankan berurutan — job berikutnya hanya berjalan jika job sebelumnya lulus:
+
+| Job | Perintah | Fungsi |
+|-----|----------|--------|
+| `lint` | `npm run lint` | ESLint untuk `src/**/*.ts` |
+| `type-check` | `npm run type-check` | TypeScript tanpa emit |
+| `test` | `npm test` | Build + seluruh test suite |
+| `sast` | `npm run security:sast` | Semgrep seluruh file tracked (`p/typescript`, `p/javascript`, `p/secrets`) + kebijakan secret Dockerfile |
+| `sca` | `npm run security:audit` | `npm audit --audit-level=high` |
+
+Node.js yang dipakai di CI adalah `24.16.0`; dependency dipasang dengan `npm ci` dari `package-lock.json`. Semgrep memindai seluruh file tracked dan menghormati `.gitignore`, sehingga `dist/`, `node_modules/` dan artefak lokal tidak ikut dipindai.
+
+Jalankan pemeriksaan yang sama secara lokal:
+
+```bash
+npm run lint
+npm run type-check
+npm test
+
+python -m venv .semgrep-venv
+# Linux/macOS
+. .semgrep-venv/bin/activate
+# Windows (Git Bash)
+# source .semgrep-venv/Scripts/activate
+pip install "semgrep==1.186.0"
+npm run security:sast
+
+npm run security:audit
+```
+
+Pipeline saat ini tidak membutuhkan secret. Jika memakai Semgrep AppSec Platform, simpan `SEMGREP_APP_TOKEN` sebagai **Actions secret** (bukan repository variable); GitHub memask nilai secret di log. Jangan menaruh nilai secret di workflow, `.env`, atau dokumen.
+
+Branch `main` diproteksi: perubahan hanya masuk lewat pull request dan wajib lulus check `lint`, `type-check`, `test`, `sast`, dan `sca`.
 
 ---
 

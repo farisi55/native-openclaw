@@ -1,8 +1,8 @@
 ---
 project: Native OpenClaw
-version: 1.0.1
+version: 1.0.2
 source: prd
-last_updated: 2026-11-15
+last_updated: 2026-11-19
 project_shape: fullstack
 simple_mode: false
 external_assets: false
@@ -18,6 +18,15 @@ high_scale_target: false
 ## TDD Reference
 
 - This document cross-references **`TDD.md`** for task lifecycle states, execution traces, regression/coverage baselines, test isolation requirements, and test-isolation criteria. When reading `knowledge.md` automatically, the system should load `TDD.md` as the authoritative companion for task/trace management.
+
+## Graphify Reference
+
+- This repository has a persistent knowledge graph in **`graphify-out/`** (built from code, docs, and design artifacts). When reading `knowledge.md` automatically, the system should treat that graph as the primary map of the codebase before browsing files.
+- For codebase questions, first run `graphify query "<question>"` when `graphify-out/graph.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than raw grep output.
+- Use `graphify-out/GRAPH_REPORT.md` for broad architecture review (god nodes, community structure, surprising connections, suggested questions), and open `graphify-out/graph.html` in a browser for interactive exploration.
+- If `graphify-out/wiki/index.md` exists, use it for broad navigation instead of raw source browsing.
+- Dirty `graphify-out/` files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
 ## 1. Project Identity
 
@@ -44,6 +53,8 @@ high_scale_target: false
 - **Frameworks:** No mandatory application framework is specified in the PRD.
 - **Provider integrations:** Multiple LLM provider adapters behind a common provider abstraction and provider router. The PRD does not enumerate the full provider list in its stack section.
 - **Tool and integration protocols:** Model Context Protocol (MCP); normalized internal tool contract; optional external agent connectors.
+- **CI/CD and security scanning:** GitHub Actions workflow `.github/workflows/ci.yml` runs five serial jobs — `lint`, `type-check`, `test`, `sast`, `sca` — on every push and pull request. CI uses Node.js `24.16.0` and `npm ci` from the committed lockfile. SAST is Semgrep `1.186.0` (`p/typescript`, `p/javascript`, `p/secrets`) over tracked files; SCA is `npm audit --audit-level=high`. Third-party actions are pinned to full commit SHAs, workflow permissions default to `contents: read`, and the optional `SEMGREP_APP_TOKEN` is a GitHub Actions secret, never a repository variable.
+- **Default-branch protection:** `main` accepts changes only through pull requests that pass `lint`, `type-check`, `test`, `sast` and `sca`; admin enforcement is on, force-pushes and branch deletion are blocked. `dev` is the integration branch.
 - **Browser technologies under consideration:** Local Playwright, Chrome DevTools Protocol (CDP), remote browser service, or a hybrid. No final implementation choice is made in the PRD.
 - **Session storage:** Existing JSON-backed session store remains authoritative initially.
 - **Session search:** SQLite FTS5 search index; the SQLite driver is undecided and must pass the Termux ARM32/Bionic compatibility spike before adoption.
@@ -92,6 +103,7 @@ high_scale_target: false
   - `agents/browser-agent/` — current browser worker scaffold; a scaffold is not a working browser runtime.
   - `agents/research-agent/` — current research worker scaffold; a scaffold is not a working research backend.
   - `agents/spreadsheet-agent/` — current spreadsheet worker scaffold; a scaffold is not a working Sheets/MCP adapter.
+  - `.github/workflows/` — CI pipeline: lint, type-check, test, Semgrep SAST, npm audit SCA and Dockerfile secret policy. `.github/dependabot.yml` is reserved for dependency-update automation.
 - **Layer responsibilities:**
   - Interfaces — CLI/TUI, Web UI, HTTP API and messaging adapters accept user input and render task progress/results.
   - Gateway — normalizes inbound requests and routes them to the correct user/session/task.
@@ -102,6 +114,7 @@ high_scale_target: false
   - Execution adapters — MCP, browser, terminal, file operations, background processes and external agents.
   - Memory/session/skill services — persist and retrieve conversation state, durable knowledge and reusable procedures.
   - Workflow/scheduler — executes scheduled jobs and workflow definitions.
+  - CI/security — validates lint, type-check, tests, SAST and dependency SCA before merge; protects `main` with required status checks.
   - Cross-cutting services — security policy, credential access, audit, telemetry, configuration, local storage and lifecycle management.
 - **Design patterns and constraints:**
   - Adapter interfaces for providers, execution backends, browser backends and messaging channels.
@@ -284,7 +297,8 @@ high_scale_target: false
 - **Logging/observability:** Structured logs with task/session/provider/tool correlation IDs; redact secrets from logs, traces and support bundles.
 - **Metrics:** Provider/tool latency, token usage, error category, tool success/failure and execution status.
 - **Health/readiness:** Health checks must distinguish process health from capability readiness; exact endpoint shape is not specified.
-- **Build/deployment:** Core must build and run without Docker; Docker remains optional. Avoid native Node dependencies in core unless proven on all declared platforms.
+- **Build/deployment:** Core must build and run without Docker; Docker remains optional. Avoid native Node dependencies in core unless proven on all declared platforms. Docker proxy settings are build-time only: unauthenticated proxies may be build args, authenticated proxies must use the BuildKit `proxy_env` secret, and proxy credentials must never be persisted in `ENV`, `.npmrc` or image metadata.
+- **CI/security gates:** CI requires no repository secret. Semgrep telemetry is disabled; the optional `SEMGREP_APP_TOKEN` is a masked Actions secret. The Dockerfile secret-policy step rejects secret-bearing `ARG`/`ENV` and persistent npm proxy configuration.
 - **Local development/staging/production strategy:** Not specified in the PRD.
 - **Backup:** Back up user data before storage migrations; the PRD does not specify recurring backup frequency, retention, RTO or RPO.
 - **Update/rollback:** Preserve compatibility; migration procedures must include backup and rollback. Self-healing/self-upgrade must use snapshot, QA and rollback before promotion.
