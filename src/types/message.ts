@@ -23,7 +23,7 @@ export const ToolCallPartSchema = z.object({
   type: z.literal('tool_call'),
   toolCallId: z.string(),
   toolName: z.string(),
-  args: z.record(z.unknown()),
+  args: z.record(z.string(), z.unknown()),
 });
 export type ToolCallPart = z.infer<typeof ToolCallPartSchema>;
 
@@ -53,7 +53,7 @@ export const MessageSchema = z.object({
    */
   content: z.union([z.string(), z.array(ContentPartSchema)]),
   createdAt: z.string().datetime(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 
@@ -64,7 +64,7 @@ export const ConversationSchema = z.object({
   messages: z.array(MessageSchema),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type Conversation = z.infer<typeof ConversationSchema>;
 

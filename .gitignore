@@ -43,8 +43,15 @@ desktop.ini
 CLAUDE.local.md
 .claude/settings.local.json
 .claude/worktrees/
+.opencode/
 .aider*
 .scratch/
+.semgrep-venv/
+
+# ---------------------------------------------------------------------------
+# Generated knowledge graph (rebuild with `graphify update .`)
+# ---------------------------------------------------------------------------
+/graphify-out/
 
 # ---------------------------------------------------------------------------
 # Local runtime data (root-anchored so src/ subfolders are never ignored)

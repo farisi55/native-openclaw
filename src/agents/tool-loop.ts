@@ -399,6 +399,7 @@ function violatesToolChainIsolation(toolName: string, toolsUsed: string[]): bool
   return (isPrivileged && usedNetwork) || (isNetwork && usedPrivileged);
 }
 
+/** Validate tool input against the manifest schema; required fields are checked above. */
 function validateToolInput(tool: RegisteredTool, input: unknown): string | null {
   try {
     const schema = tool.manifest.inputSchema;
@@ -419,7 +420,7 @@ function validateToolInput(tool: RegisteredTool, input: unknown): string | null 
 
     const shape: Record<string, z.ZodType<unknown>> = {};
     for (const key of Object.keys(properties)) {
-      shape[key] = z.unknown();
+      shape[key] = z.unknown().optional();
     }
 
     if (Object.keys(shape).length === 0) return null;

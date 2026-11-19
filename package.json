@@ -26,6 +26,8 @@
     "qa:phase3.6": "npm run build && npm run lint && npm run qa:mcp && npm run qa:phase3.5",
     "lint": "npx eslint \"src/**/*.ts\"",
     "lint:fix": "npx eslint \"src/**/*.ts\" --fix",
+    "security:sast": "semgrep scan --config p/typescript --config p/javascript --config p/secrets --severity ERROR --error --metrics off .",
+    "security:audit": "npm audit --audit-level=high",
     "type-check": "npx tsc --noEmit",
     "clean": "npx rimraf dist",
     "package": "bash package.sh",
@@ -46,9 +48,9 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "undici": "^6.25.0",
+    "undici": "^6.29.1",
     "yaml": "^2.9.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

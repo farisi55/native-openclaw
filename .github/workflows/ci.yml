@@ -1,0 +1,124 @@
+name: CI
+
+# Runs on every push and pull request. Jobs are chained so a change must pass
+# lint -> type-check -> test -> SAST -> SCA in that order before it can merge.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24.16.0'
+  SEMGREP_VERSION: '1.186.0'
+  # Semgrep telemetry is opt-out; no source or finding data is sent.
+  SEMGREP_SEND_METRICS: 'off'
+  CI: 'true'
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+
+  type-check:
+    name: type-check
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run type-check
+
+  test:
+    name: test
+    needs: type-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+
+  sast:
+    name: sast
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Optional: set SEMGREP_APP_TOKEN as an Actions secret only when using the
+    # Semgrep AppSec Platform. GitHub masks secret values in logs; never store
+    # the token in a repository variable or commit it to the workflow.
+    env:
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Semgrep
+        run: |
+          python3 -m venv .semgrep-venv
+          .semgrep-venv/bin/pip install --disable-pip-version-check "semgrep==${SEMGREP_VERSION}"
+          echo "$PWD/.semgrep-venv/bin" >> "$GITHUB_PATH"
+      - name: Run Semgrep (SAST + secrets)
+        run: npm run security:sast
+      - name: Dockerfile secret policy
+        run: |
+          if grep -nEi '^(ARG|ENV)[[:space:]]+.*(SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL)' Dockerfile; then
+            echo "::error file=Dockerfile::Secret-bearing ARG/ENV is not allowed"
+            exit 1
+          fi
+          if grep -nEi 'npm config set (proxy|https-proxy)' Dockerfile; then
+            echo "::error file=Dockerfile::Proxy configuration must not be written to a persistent npm config"
+            exit 1
+          fi
+
+  sca:
+    name: sca
+    needs: sast
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit dependencies
+        run: npm run security:audit

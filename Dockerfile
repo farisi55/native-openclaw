@@ -9,21 +9,24 @@ ARG https_proxy
 ARG no_proxy
 ARG SELF_HEALING_RUNTIME=true
 
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${http_proxy} \
-    https_proxy=${https_proxy} \
-    no_proxy=${no_proxy}
-
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
 
-# Configure npm proxy only when env is provided.
-RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
- && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm ci --ignore-scripts
+# Proxy values are build-time only and are never written to ENV or .npmrc.
+# Unauthenticated proxies may be passed as build args. Authenticated proxies
+# must use the BuildKit secret `proxy_env`, whose file contains shell exports:
+#   docker build --secret id=proxy_env,src=.env.proxy .
+# Credentials in a build arg are rejected so they cannot enter image metadata.
+RUN --mount=type=secret,id=proxy_env,required=false \
+    for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do \
+      case "$proxy" in *@*) echo "ERROR: credentialed proxy in build arg; use --secret id=proxy_env,src=<file>" >&2; exit 1;; esac; \
+    done; \
+    if [ -f /run/secrets/proxy_env ]; then . /run/secrets/proxy_env; fi; \
+    if [ -n "${HTTP_PROXY:-}" ]; then export http_proxy="$HTTP_PROXY"; fi; \
+    if [ -n "${HTTPS_PROXY:-}" ]; then export https_proxy="$HTTPS_PROXY"; fi; \
+    if [ -n "${NO_PROXY:-}" ]; then export no_proxy="$NO_PROXY"; fi; \
+    npm ci --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src/ ./src/
@@ -56,10 +59,6 @@ RUN if [ "$SELF_HEALING_RUNTIME" != "true" ]; then \
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM node:24.16.0-alpine AS runtime
 
-# su-exec is used by entrypoint.sh to fix bind-mount ownership as root,
-# then drop privileges to the non-root openclaw user.
-RUN apk add --no-cache su-exec
-
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
@@ -73,12 +72,18 @@ ARG OPENCODE_DEFAULT_MODEL=opencode/deepseek-v4-flash-free
 ARG OPENCODE_DEFAULT_SMALL_MODEL=opencode/mimo-v2.5-free
 ARG MCP_SMOKE_SERVERS_INSTALL=false
 
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${http_proxy} \
-    https_proxy=${https_proxy} \
-    no_proxy=${no_proxy}
+# su-exec is used by entrypoint.sh to fix bind-mount ownership as root,
+# then drop privileges to the non-root openclaw user.
+# Proxy values follow the same build-time-only rules as the builder stage.
+RUN --mount=type=secret,id=proxy_env,required=false \
+    for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do \
+      case "$proxy" in *@*) echo "ERROR: credentialed proxy in build arg; use --secret id=proxy_env,src=<file>" >&2; exit 1;; esac; \
+    done; \
+    if [ -f /run/secrets/proxy_env ]; then . /run/secrets/proxy_env; fi; \
+    if [ -n "${HTTP_PROXY:-}" ]; then export http_proxy="$HTTP_PROXY"; fi; \
+    if [ -n "${HTTPS_PROXY:-}" ]; then export https_proxy="$HTTPS_PROXY"; fi; \
+    if [ -n "${NO_PROXY:-}" ]; then export no_proxy="$NO_PROXY"; fi; \
+    apk add --no-cache su-exec
 
 RUN addgroup -S openclaw && adduser -S openclaw -G openclaw
 
@@ -130,9 +135,15 @@ ENV NPM_CONFIG_CACHE=/home/openclaw/.npm
 # Optional OpenCode CLI install for Docker runtime.
 # Install as root before switching to non-root openclaw user.
 # @opencode-ai/plugin is preinstalled to avoid runtime background install through corporate proxy.
-RUN if [ "$OPENCODE_AUTO_INSTALL" = "true" ]; then \
-      if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
-      if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
+RUN --mount=type=secret,id=proxy_env,required=false \
+    for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do \
+      case "$proxy" in *@*) echo "ERROR: credentialed proxy in build arg; use --secret id=proxy_env,src=<file>" >&2; exit 1;; esac; \
+    done; \
+    if [ "$OPENCODE_AUTO_INSTALL" = "true" ]; then \
+      if [ -f /run/secrets/proxy_env ]; then . /run/secrets/proxy_env; fi; \
+      if [ -n "${HTTP_PROXY:-}" ]; then export npm_config_proxy="$HTTP_PROXY"; fi; \
+      if [ -n "${HTTPS_PROXY:-}" ]; then export npm_config_https_proxy="$HTTPS_PROXY"; fi; \
+      if [ -n "${NO_PROXY:-}" ]; then export npm_config_noproxy="$NO_PROXY"; fi; \
       npm install -g opencode-ai @opencode-ai/plugin; \
       npm cache clean --force; \
       opencode --version; \
@@ -141,7 +152,15 @@ RUN if [ "$OPENCODE_AUTO_INSTALL" = "true" ]; then \
     fi
 
 # Optional MCP smoke servers. Disabled by default to keep the runtime image small.
-RUN if [ "$MCP_SMOKE_SERVERS_INSTALL" = "true" ]; then \
+RUN --mount=type=secret,id=proxy_env,required=false \
+    for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do \
+      case "$proxy" in *@*) echo "ERROR: credentialed proxy in build arg; use --secret id=proxy_env,src=<file>" >&2; exit 1;; esac; \
+    done; \
+    if [ "$MCP_SMOKE_SERVERS_INSTALL" = "true" ]; then \
+      if [ -f /run/secrets/proxy_env ]; then . /run/secrets/proxy_env; fi; \
+      if [ -n "${HTTP_PROXY:-}" ]; then export npm_config_proxy="$HTTP_PROXY"; fi; \
+      if [ -n "${HTTPS_PROXY:-}" ]; then export npm_config_https_proxy="$HTTPS_PROXY"; fi; \
+      if [ -n "${NO_PROXY:-}" ]; then export npm_config_noproxy="$NO_PROXY"; fi; \
       npm install -g \
         @modelcontextprotocol/server-everything \
         @modelcontextprotocol/server-filesystem; \
